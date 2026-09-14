@@ -1,0 +1,145 @@
+/** 固定 US 键盘布局的 Set-1 扫描码。VM 不读取宿主键盘布局，保持客体映射稳定。 */
+const scanToVk = new Map<number, number>([
+  [0x01, 0x1b],
+  [0x0e, 0x08],
+  [0x0f, 0x09],
+  [0x1c, 0x0d],
+  [0x1d, 0xa2],
+  [0x2a, 0xa0],
+  [0x36, 0xa1],
+  [0x38, 0xa4],
+  [0x39, 0x20],
+  [0x3a, 0x14],
+  [0x45, 0x90],
+  [0x46, 0x91],
+  [0x0c, 0xbd],
+  [0x0d, 0xbb],
+  [0x1a, 0xdb],
+  [0x1b, 0xdd],
+  [0x27, 0xba],
+  [0x28, 0xde],
+  [0x29, 0xc0],
+  [0x2b, 0xdc],
+  [0x33, 0xbc],
+  [0x34, 0xbe],
+  [0x35, 0xbf],
+  [0x37, 0x6a],
+  [0x47, 0x67],
+  [0x48, 0x68],
+  [0x49, 0x69],
+  [0x4a, 0x6d],
+  [0x4b, 0x64],
+  [0x4c, 0x65],
+  [0x4d, 0x66],
+  [0x4e, 0x6b],
+  [0x4f, 0x61],
+  [0x50, 0x62],
+  [0x51, 0x63],
+  [0x52, 0x60],
+  [0x53, 0x6e],
+  [0xe01c, 0x0d],
+  [0xe01d, 0xa3],
+  [0xe038, 0xa5],
+  [0xe035, 0x6f],
+  [0xe047, 0x24],
+  [0xe048, 0x26],
+  [0xe049, 0x21],
+  [0xe04b, 0x25],
+  [0xe04d, 0x27],
+  [0xe04f, 0x23],
+  [0xe050, 0x28],
+  [0xe051, 0x22],
+  [0xe052, 0x2d],
+  [0xe053, 0x2e],
+  [0xe037, 0x2c],
+  [0xe05b, 0x5b],
+  [0xe05c, 0x5c],
+  [0xe05d, 0x5d],
+]);
+for (const [start, keys] of [
+  [0x02, '1234567890'],
+  [0x10, 'QWERTYUIOP'],
+  [0x1e, 'ASDFGHJKL'],
+  [0x2c, 'ZXCVBNM'],
+] as const) {
+  [...keys].forEach((key, index) => scanToVk.set(start + index, key.charCodeAt(0)));
+}
+for (let i = 0; i < 10; i++) scanToVk.set(0x3b + i, 0x70 + i);
+scanToVk.set(0x57, 0x7a);
+scanToVk.set(0x58, 0x7b);
+const vkToScan = new Map<number, number>();
+for (const [scan, vk] of scanToVk) if (!vkToScan.has(vk)) vkToScan.set(vk, scan);
+const punctuation: Readonly<Record<number, string>> = {
+  0xba: ';',
+  0xbb: '=',
+  0xbc: ',',
+  0xbd: '-',
+  0xbe: '.',
+  0xbf: '/',
+  0xc0: '`',
+  0xdb: '[',
+  0xdc: '\\',
+  0xdd: ']',
+  0xde: "'",
+  0x6a: '*',
+  0x6b: '+',
+  0x6d: '-',
+  0x6e: '.',
+  0x6f: '/',
+};
+
+/** MapVirtualKey 的方向不能混用：RA2 战场快捷键会调用它，未知键按 Win32 返回 0。
+ * 语义：https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-mapvirtualkeya */
+export function mapVirtualKey(code: number, type: number): number {
+  if (type === 0 || type === 4) {
+    const left = code === 0x10 ? 0xa0 : code === 0x11 ? 0xa2 : code === 0x12 ? 0xa4 : code;
+    const scan = vkToScan.get(left) ?? 0;
+    return type === 0 ? scan & 0xff : scan;
+  }
+  if (type === 1 || type === 3) {
+    const vk = scanToVk.get(code) ?? 0;
+    if (type === 3) return vk;
+    return vk === 0xa0 || vk === 0xa1
+      ? 0x10
+      : vk === 0xa2 || vk === 0xa3
+        ? 0x11
+        : vk === 0xa4 || vk === 0xa5
+          ? 0x12
+          : vk;
+  }
+  if (type === 2) {
+    if (
+      (code >= 0x30 && code <= 0x39) ||
+      (code >= 0x41 && code <= 0x5a) ||
+      [0x08, 0x09, 0x0d, 0x1b, 0x20].includes(code)
+    )
+      return code;
+    if (code >= 0x60 && code <= 0x69) return code - 0x60 + 0x30;
+    return punctuation[code]?.charCodeAt(0) ?? 0;
+  }
+  return 0;
+}
+
+/** ToAscii 的 US 布局子集：大小写取 Shift/CapsLock，Ctrl 生成控制字符。
+ * 不产生死键；无字符的功能键返回空结果，不能用虚拟键码冒充 ASCII。 */
+export function toAscii(code: number, scan: number, state: Uint8Array): number[] {
+  if (scan & 0x8000) return [];
+  const shift = ((state[0x10] ?? 0) & 0x80) !== 0;
+  const control = ((state[0x11] ?? 0) & 0x80) !== 0;
+  const caps = ((state[0x14] ?? 0) & 1) !== 0;
+  let char = mapVirtualKey(code, 2);
+  if (!char) return [];
+  if (control) {
+    if (code >= 0x41 && code <= 0x5a) return [code - 0x40];
+    if ([0xdb, 0xdc, 0xdd].includes(code)) return [char - 0x40];
+    return [];
+  }
+  if (code >= 0x41 && code <= 0x5a) char += shift !== caps ? 0 : 32;
+  else if (shift) {
+    const plain = "1234567890-=[]\\;'`,./";
+    const shifted = '!@#$%^&*()_+{}|:"~<>?';
+    const index = plain.indexOf(String.fromCharCode(char));
+    if (index >= 0 && !(code >= 0x60 && code <= 0x6f)) char = shifted.charCodeAt(index);
+  }
+  return [char];
+}

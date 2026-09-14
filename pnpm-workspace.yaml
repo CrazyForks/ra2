@@ -1,0 +1,12 @@
+packages:
+  - '.'
+  - 'packages/*'
+
+# 只允许运行已审查的安装脚本；新增依赖不能静默执行构建。
+strictDepBuilds: true
+engineStrict: false
+allowBuilds:
+  esbuild: true
+  # 当前使用纯 JS 路径，不运行可选本地扩展及 protobuf 安装脚本。
+  fsevents: false
+  protobufjs: false

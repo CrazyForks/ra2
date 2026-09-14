@@ -1,0 +1,45 @@
+import { expect } from 'vitest';
+import { createHash } from 'node:crypto';
+import { describeVmSmoke, type VmSmokeOptions } from '../helpers/runVmSmoke';
+import { installYrSkirmishStartup } from '../../../src/games/yr/startupPage';
+
+const options: VmSmokeOptions = {
+  executablePath: '.tmp-third-party/gamemd.exe',
+  gameId: 'yr',
+  memoryBytes: 768 * 1024 * 1024,
+  timeoutMs: 60000,
+  targetCalls: 4000,
+  waitMenuReady: false,
+  clicks: [[100, 100]],
+  hoverOnly: true,
+  clickPageTitles: ['skirmish'],
+  settleMessages: 200,
+  prepareGuest(memory, exe, reserve) {
+    installYrSkirmishStartup(memory, reserve, createHash('sha256').update(exe).digest('hex'));
+  },
+};
+describeVmSmoke('YR 启动直达遭遇战', {
+  ...options,
+  assertFinalState(shim) {
+    expect(shim.inspectShellPageTitle()).toContain('Skirmish');
+  },
+});
+describeVmSmoke('YR 直达后选图并返回单人菜单和主菜单', {
+  ...options,
+  hoverOnly: false,
+  finalHoverOnly: true,
+  clickGapMessages: 1000,
+  // YR 设置页固定 800×600；不能复用 RA2 测试目录 1440×900 的绝对坐标。
+  clicks: [
+    [722, 304],
+    [360, 215],
+    [720, 220],
+    [714, 556],
+    [714, 556],
+    [100, 100],
+  ],
+  clickPageTitles: ['skirmish', 'choosemap', 'choosemap', 'skirmish', 'singleplayer', 'mainmenu'],
+  assertFinalState(shim) {
+    expect(shim.inspectShellPageTitle()).toContain('MainMenu');
+  },
+});

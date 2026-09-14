@@ -1,0 +1,19 @@
+node_modules/
+.pnpm-store/
+dist/
+.vite/
+*.log
+.DS_Store
+/game/
+.claude/
+.worktrees/
+.vercel/
+.env*
+.tmp*
+.idea
+# 本地超分权重与 Python 缓存不随源码提交。
+*.onnx
+*.onnx.data
+*.pth
+*.safetensors
+__pycache__/

@@ -1,0 +1,523 @@
+import type { GamePerformanceSample } from '../games/performance';
+import { PortRelaySocket } from 'relay-package/client';
+import { createBrowserEmulator } from '../platform/browser/emulator';
+import { DirectoryGameFileProvider } from '../platform/browser/files/directory';
+import { gameVmConfiguration } from '../games/vmConfiguration';
+import { HttpGameFileProvider } from '../platform/browser/files/http';
+import { OverlayGameFileProvider } from '../resources/providers/overlay';
+import { discoverGameSources } from '../resources/discovery/discoverGameSources';
+import { type GameFileProvider } from '../resources/contracts';
+import { type GameSource } from '../games/source';
+import { SessionGameFileProvider } from '../platform/browser/files/sessionFiles';
+import { PortGameFileProvider } from './fileProviderPort';
+import { withMultiplayerNameOverride } from '../games/multiplayerName';
+import { mountCustomMapFiles, prepareDynamicMaps } from './customMapPackage';
+import { VmCore, type VmAudioSink, type VmCorePlatform } from './vmCore';
+import type { MainToWorkerMessage, VmInitConfig, WorkerToMainMessage } from './vmProtocol';
+import type { GuestMemRecordResult } from './memRecord';
+import type { VmPointerState } from './vmShell';
+import type { GameVmCallbacks } from '../app/session/runtimeEvents';
+import type { PcmPlayOptions, PcmWaveFormat } from '../vm86/audio';
+import type { VmFrame } from '../vm86/win32';
+import { withGameResolutionOverride } from '../games/resolution';
+import { SerialTaskQueue } from '../utils/serialTaskQueue';
+import { FrameBufferPool } from './frameBufferPool';
+
+export interface VmWorkerCore {
+  start(): Promise<void>;
+  stop(): Promise<void>;
+  flushFiles(): Promise<void>;
+  postMessage(message: number, wParam?: number, lParam?: number): void;
+  setKeyState(virtualKey: number, down: boolean): void;
+  setCursorPosition(x: number, y: number): void;
+  setGameClockRate(rate: number): number;
+  setMasterVolume(linear: number): void;
+  getPointerState(): VmPointerState | null;
+  getGamePerformance(): Promise<GamePerformanceSample | null>;
+  setGameSpeedFlag(value: number): number | null;
+  startMemRecord(): boolean;
+  stopMemRecord(): GuestMemRecordResult | null;
+  setFileProvider(files: GameFileProvider): void;
+}
+
+export interface VmWorkerControllerDependencies {
+  postMessage: (message: WorkerToMainMessage, transfer?: Transferable[]) => void;
+  createProvider?: (config: VmInitConfig) => GameFileProvider;
+  discoverSources?: (provider: GameFileProvider) => Promise<GameSource[]>;
+  applyResolution?: typeof withGameResolutionOverride;
+  createCore?: (callbacks: GameVmCallbacks, source: GameSource, platform: VmCorePlatform) => VmWorkerCore;
+  fetchBytes?: (url: string) => Promise<Uint8Array>;
+  audio?: VmAudioSink;
+}
+
+interface WorkerScope {
+  postMessage(message: WorkerToMainMessage, transfer?: Transferable[]): void;
+  onmessage: ((event: MessageEvent<MainToWorkerMessage>) => void) | null;
+}
+
+class ProxyAudioSink implements VmAudioSink {
+  constructor(private readonly post: VmWorkerControllerDependencies['postMessage']) {}
+
+  createBuffer(id: number, byteLength: number, format: PcmWaveFormat): void {
+    this.post({ type: 'audio', op: { op: 'createBuffer', id, byteLength, format } });
+  }
+
+  duplicateBuffer(sourceId: number, destinationId: number): boolean {
+    this.post({ type: 'audio', op: { op: 'duplicateBuffer', sourceId, destinationId } });
+    return true;
+  }
+
+  setFormat(id: number, format: PcmWaveFormat): boolean {
+    this.post({ type: 'audio', op: { op: 'setFormat', id, format } });
+    return true;
+  }
+
+  writeBuffer(id: number, offset: number, bytes: Uint8Array): number {
+    const snapshot = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : bytes.slice();
+    this.post({ type: 'audio', op: { op: 'writeBuffer', id, offset, bytes: snapshot } }, [snapshot.buffer]);
+    return snapshot.byteLength;
+  }
+
+  play(id: number, options: PcmPlayOptions = {}): boolean {
+    this.post({ type: 'audio', op: { op: 'play', id, options } });
+    return true;
+  }
+
+  stop(id: number): boolean {
+    this.post({ type: 'audio', op: { op: 'stop', id } });
+    return true;
+  }
+
+  setCurrentPosition(id: number, byteOffset: number): boolean {
+    this.post({ type: 'audio', op: { op: 'setCurrentPosition', id, byteOffset } });
+    return true;
+  }
+
+  setVolume(id: number, volume: number): boolean {
+    this.post({ type: 'audio', op: { op: 'setVolume', id, volume } });
+    return true;
+  }
+
+  setPan(id: number, pan: number): boolean {
+    this.post({ type: 'audio', op: { op: 'setPan', id, pan } });
+    return true;
+  }
+
+  setFrequency(id: number, frequency: number): boolean {
+    this.post({ type: 'audio', op: { op: 'setFrequency', id, frequency } });
+    return true;
+  }
+
+  getState(_id: number): { positionBytes: number; playing: boolean } | null {
+    return null;
+  }
+
+  releaseBuffer(id: number): boolean {
+    this.post({ type: 'audio', op: { op: 'releaseBuffer', id } });
+    return true;
+  }
+
+  setMasterVolume(linear: number): void {
+    this.post({ type: 'audio-control', action: 'master-volume', linear });
+  }
+
+  stopAll(): void {
+    this.post({ type: 'audio-control', action: 'stop-all' });
+  }
+
+  async destroy(): Promise<void> {
+    this.post({ type: 'audio-control', action: 'destroy' });
+  }
+}
+
+async function fetchBytes(url: string): Promise<Uint8Array> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${url}`);
+  return new Uint8Array(await response.arrayBuffer());
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function requestIdOf(message: MainToWorkerMessage): number | undefined {
+  switch (message.type) {
+    case 'init':
+    case 'state':
+    case 'guest-speed-flag':
+    case 'mem-record-start':
+    case 'mem-record-stop':
+    case 'flush':
+    case 'attach-maps':
+      return message.requestId;
+    case 'control':
+      return message.requestId;
+    default:
+      return undefined;
+  }
+}
+
+export class VmWorkerController {
+  private core: VmWorkerCore | null = null;
+  private sourceTemplate: GameFileProvider | null = null;
+  private started = false;
+  private initReady: Promise<void> = Promise.resolve();
+  private pendingClock: number | null = null;
+  private pendingVolume: number | null = null;
+  private callBatchOrdinal = 0;
+  private callBatchDelta = 0;
+  private callBatchLogicFrames = 0;
+  private callBatchHistogram = new Map<string, number>();
+  private callBatchSamples: Array<{ call: Parameters<NonNullable<GameVmCallbacks['onCall']>>[0]; ordinal: number }> =
+    [];
+  private callBatchTimer: ReturnType<typeof globalThis.setInterval> | null = null;
+  private callTracing = false;
+  private relayPort: MessagePort | undefined;
+  private portFiles: PortGameFileProvider | null = null;
+  private nextFrameId = 1;
+  private inFlightFrameId = 0;
+  private pendingFrameEmit: (() => void) | null = null;
+  private readonly frameBuffers = new FrameBufferPool();
+  private frameScheduleGeneration = 0;
+  private readonly dependencies: Required<
+    Pick<VmWorkerControllerDependencies, 'discoverSources' | 'applyResolution' | 'createCore' | 'fetchBytes'>
+  > &
+    Pick<VmWorkerControllerDependencies, 'createProvider' | 'audio'>;
+
+  constructor(
+    private readonly post: VmWorkerControllerDependencies['postMessage'],
+    dependencies: Omit<VmWorkerControllerDependencies, 'postMessage'> = {},
+  ) {
+    this.dependencies = {
+      discoverSources: dependencies.discoverSources ?? discoverGameSources,
+      applyResolution: dependencies.applyResolution ?? withGameResolutionOverride,
+      createCore: dependencies.createCore ?? ((callbacks, source, platform) => new VmCore(callbacks, source, platform)),
+      fetchBytes: dependencies.fetchBytes ?? fetchBytes,
+      createProvider: dependencies.createProvider,
+      audio: dependencies.audio,
+    };
+  }
+
+  async handleMessage(message: MainToWorkerMessage): Promise<void> {
+    try {
+      switch (message.type) {
+        case 'init':
+          this.initReady = this.handleInit(message.config);
+          await this.initReady;
+          this.post({ type: 'init-done', requestId: message.requestId });
+          break;
+        case 'control':
+          if (message.action === 'start') {
+            await this.initReady;
+            await this.handleStart();
+            this.post({ type: 'control-done', action: 'start', requestId: message.requestId });
+          } else {
+            this.frameScheduleGeneration++;
+            this.inFlightFrameId = 0;
+            this.pendingFrameEmit = null;
+            if (this.core) await this.core.stop();
+            this.started = false;
+            this.post({ type: 'control-done', action: 'stop', requestId: message.requestId });
+          }
+          break;
+        case 'wm':
+          this.core?.postMessage(message.m, message.w, message.l);
+          break;
+        case 'key':
+          this.core?.setKeyState(message.vk, message.down);
+          break;
+        case 'cursor':
+          this.core?.setCursorPosition(message.x, message.y);
+          break;
+        case 'clock':
+          this.pendingClock = message.rate;
+          this.core?.setGameClockRate(message.rate);
+          break;
+        case 'volume':
+          this.pendingVolume = message.linear;
+          this.core?.setMasterVolume(message.linear);
+          break;
+        case 'call-tracing':
+          this.callTracing = message.enabled;
+          break;
+        case 'game-performance':
+          this.post({
+            type: 'game-performance-reply',
+            requestId: message.requestId,
+            value: (await this.core?.getGamePerformance()) ?? null,
+          });
+          break;
+        case 'state':
+          this.post({
+            type: 'state-reply',
+            requestId: message.requestId,
+            kind: message.kind,
+            value: this.core?.getPointerState() ?? null,
+          });
+          break;
+        case 'guest-speed-flag':
+          this.post({
+            type: 'guest-speed-flag-reply',
+            requestId: message.requestId,
+            value: this.core?.setGameSpeedFlag(message.value) ?? null,
+          });
+          break;
+        case 'mem-record-start':
+          this.post({
+            type: 'mem-record-start-reply',
+            requestId: message.requestId,
+            ok: this.core?.startMemRecord() ?? false,
+          });
+          break;
+        case 'mem-record-stop':
+          this.post({
+            type: 'mem-record-stop-reply',
+            requestId: message.requestId,
+            result: this.core?.stopMemRecord() ?? null,
+          });
+          break;
+        case 'flush':
+          await this.core?.flushFiles();
+          this.post({ type: 'flush-done', requestId: message.requestId });
+          break;
+        case 'attach-maps': {
+          if (!this.core || !this.sourceTemplate) throw new Error('VM 尚未初始化');
+          const { provider, result } = await prepareDynamicMaps(
+            this.sourceTemplate,
+            new Map(message.files.map(({ path, bytes }) => [path, bytes])),
+          );
+          this.core.setFileProvider(provider);
+          this.sourceTemplate = provider;
+          this.post({ type: 'attach-maps-done', requestId: message.requestId, result });
+          break;
+        }
+        case 'frame-ack':
+          this.acknowledgeFrame(message.frameId);
+          break;
+        case 'recycle-frame':
+          this.frameBuffers.release(message.buffer);
+          break;
+      }
+    } catch (error) {
+      const requestId = requestIdOf(message);
+      this.post(
+        requestId === undefined
+          ? { type: 'error', message: errorMessage(error) }
+          : { type: 'error', requestId, message: errorMessage(error) },
+      );
+      if (message.type === 'init' || (message.type === 'control' && message.action === 'start')) {
+        this.post({ type: 'status', phase: 'error', detail: errorMessage(error) });
+      }
+    }
+  }
+
+  dispose(): void {
+    this.relayPort?.close();
+    this.relayPort = undefined;
+    this.frameBuffers.clear();
+    this.portFiles?.dispose();
+    this.portFiles = null;
+    if (this.callBatchTimer !== null) globalThis.clearInterval(this.callBatchTimer);
+    this.callBatchTimer = null;
+    this.frameScheduleGeneration++;
+    this.pendingFrameEmit = null;
+    this.inFlightFrameId = 0;
+  }
+
+  /** 按 init 消息重建文件后端：目录句柄（可带在线包叠加层）、会话包内存文件或 dev HTTP。 */
+  private buildProvider(config: VmInitConfig): GameFileProvider {
+    if (config.provider.kind === 'port') {
+      return (this.portFiles = new PortGameFileProvider(
+        config.provider.label,
+        config.provider.port,
+        config.provider.names,
+      ));
+    }
+    if (config.provider.kind === 'memory') {
+      // 会话包（在线 ZIP）文件随 init 消息 transfer 进 worker：直接重建内存
+      // provider（deepDiscovery），存档写回同源 IndexedDB（与页面侧同库）。
+      return new SessionGameFileProvider(
+        config.provider.label,
+        new Map(config.provider.files.map((entry) => [entry.path, entry.bytes])),
+      );
+    }
+    if (config.provider.kind === 'directory') {
+      const base = new DirectoryGameFileProvider(config.provider.handle);
+      const overlays = config.provider.overlays ?? [];
+      if (!overlays.length) return base;
+      // 在线包叠加层只补缺：已授权本地目录优先（中文资源等），写入仍落目录后端。
+      return new OverlayGameFileProvider(
+        base,
+        new Map(overlays.map((entry) => [entry.path, entry.bytes])),
+        '（在线覆盖）',
+        false,
+        false,
+        true,
+      );
+    }
+    return new HttpGameFileProvider();
+  }
+
+  private async handleInit(config: VmInitConfig): Promise<void> {
+    if (this.core) throw new Error('重复 init');
+    this.relayPort = config.relayPort;
+    this.pendingClock ??= config.clockRate;
+    this.pendingVolume ??= config.masterVolume;
+    this.callTracing = config.traceCalls;
+    let provider = this.dependencies.createProvider
+      ? this.dependencies.createProvider(config)
+      : this.buildProvider(config);
+    if (config.selectedExecutable) {
+      // 必须在 discover 前覆盖，而不是仅替换 executableBytes：发现、PE 装载和
+      // 客体以后读自己的 EXE 都需要一致。禁止 parent-first 退回旧版文件。
+      provider = new OverlayGameFileProvider(
+        provider,
+        new Map([[config.selectedExecutable.path, config.selectedExecutable.bytes]]),
+        '（启动 EXE）',
+        true,
+        false,
+        false,
+      );
+    }
+    const sources = await this.dependencies.discoverSources(provider);
+    const discoveredSource =
+      sources.find((item) => item.game.id === config.preferredGameId) ??
+      (sources.length === 1 ? sources[0] : undefined);
+    if (!discoveredSource) {
+      throw new Error(`未在游戏目录中找到 ${config.preferredGameId}（发现 ${sources.length} 款已支持游戏）`);
+    }
+    const mounted = config.additionalFiles?.length
+      ? mountCustomMapFiles(discoveredSource, new Map(config.additionalFiles.map(({ path, bytes }) => [path, bytes])))
+      : discoveredSource;
+    const source = await withMultiplayerNameOverride(
+      await this.dependencies.applyResolution(mounted, config.resolution),
+      config.playerName,
+    );
+    this.sourceTemplate = source.files;
+    const callbacks: GameVmCallbacks = {
+      onNetworkStatus: (status) => this.post({ type: 'network-status', status }),
+      onStatus: (status) => this.post({ type: 'status', phase: status.phase, detail: status.detail }),
+      onCall: (call, ordinal) => this.recordCall(call, ordinal),
+      onBlocked: (call) => this.post({ type: 'blocked', call }),
+      onFrame: (frame) => this.sendFrame(frame),
+      onLogicFrame: () => {
+        this.callBatchLogicFrames++;
+      },
+      onShellPage: (title) => this.post({ type: 'shell-page', title }),
+    };
+    const platform: VmCorePlatform = {
+      createEmulator: createBrowserEmulator,
+      ...gameVmConfiguration(
+        source.game,
+        callbacks.onNetworkStatus,
+        config.ra2Network,
+        config.relayPort ? (url) => new PortRelaySocket(config.relayPort!, url) : undefined,
+      ),
+      startupPage: config.startupPage,
+      fetchBytes: this.dependencies.fetchBytes,
+      scheduleFrame: (emit) => this.scheduleFrameWithBackpressure(emit),
+      deferFrameSnapshot: true,
+      packedRgb565Frames: true,
+      takeFrameBuffer: (size) => this.frameBuffers.take(size),
+      audio: this.dependencies.audio ?? new ProxyAudioSink(this.post),
+      fastFileRead: config.fastFileRead,
+    };
+    this.core = this.dependencies.createCore(callbacks, source, platform);
+    this.callBatchTimer ??= globalThis.setInterval(() => this.flushCallBatch(), 500);
+  }
+
+  private async handleStart(): Promise<void> {
+    if (!this.core) throw new Error('VM 尚未 init');
+    if (this.started) return;
+    this.started = true;
+    await this.core.start();
+    this.core.setGameClockRate(this.pendingClock ?? 1);
+    this.core.setMasterVolume(this.pendingVolume ?? 0.25);
+  }
+
+  private recordCall(call: Parameters<NonNullable<GameVmCallbacks['onCall']>>[0], ordinal: number): void {
+    this.callBatchOrdinal = ordinal;
+    this.callBatchDelta++;
+    if (!this.callTracing) return;
+    const key = call.imported.key;
+    this.callBatchHistogram.set(key, (this.callBatchHistogram.get(key) ?? 0) + 1);
+    if (ordinal <= 200 || ordinal % 256 === 0) this.callBatchSamples.push({ call, ordinal });
+  }
+
+  private flushCallBatch(): void {
+    if (!this.callBatchDelta && !this.callBatchLogicFrames) return;
+    this.post({
+      type: 'call-batch',
+      batch: {
+        ordinal: this.callBatchOrdinal,
+        delta: this.callBatchDelta,
+        logicFrames: this.callBatchLogicFrames,
+        histogram: [...this.callBatchHistogram],
+        samples: this.callBatchSamples,
+      },
+    });
+    this.callBatchDelta = 0;
+    this.callBatchLogicFrames = 0;
+    this.callBatchHistogram = new Map();
+    this.callBatchSamples = [];
+  }
+
+  private sendFrame(frame: VmFrame): void {
+    const frameId = this.nextFrameId++;
+    this.inFlightFrameId = frameId;
+    const transfers: Transferable[] = [frame.pixels.buffer, frame.palette.buffer];
+    if (frame.rgba) transfers.push(frame.rgba.buffer);
+    if (frame.rgb565) transfers.push(frame.rgb565.buffer);
+    if (frame.cursor) transfers.push(frame.cursor.rgba.buffer);
+    this.post({ type: 'frame', frameId, frame }, transfers);
+  }
+
+  private scheduleFrameWithBackpressure(emit: () => void): void {
+    if (this.inFlightFrameId) {
+      this.pendingFrameEmit = emit;
+      return;
+    }
+    const generation = this.frameScheduleGeneration;
+    queueMicrotask(() => {
+      if (generation !== this.frameScheduleGeneration || this.inFlightFrameId) return;
+      emit();
+    });
+  }
+
+  private acknowledgeFrame(frameId: number): void {
+    if (frameId !== this.inFlightFrameId) return;
+    this.inFlightFrameId = 0;
+    const next = this.pendingFrameEmit;
+    this.pendingFrameEmit = null;
+    if (next) {
+      const generation = ++this.frameScheduleGeneration;
+      queueMicrotask(() => {
+        if (generation !== this.frameScheduleGeneration || this.inFlightFrameId) return;
+        next();
+      });
+    }
+  }
+}
+
+export function createVmWorkerController(dependencies: VmWorkerControllerDependencies): VmWorkerController {
+  const { postMessage, ...rest } = dependencies;
+  return new VmWorkerController(postMessage, rest);
+}
+
+export function installVmWorker(
+  scope: WorkerScope,
+  dependencies: Omit<VmWorkerControllerDependencies, 'postMessage'> = {},
+): VmWorkerController {
+  const controller = createVmWorkerController({ postMessage: scope.postMessage.bind(scope), ...dependencies });
+  const queue = new SerialTaskQueue((error) => {
+    scope.postMessage({
+      type: 'error',
+      message: error instanceof Error ? error.message : String(error),
+    });
+  });
+  scope.postMessage({ type: 'probe', ready: true });
+  scope.onmessage = (event) => {
+    void queue.enqueue(() => controller.handleMessage(event.data));
+  };
+  return controller;
+}

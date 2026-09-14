@@ -1,0 +1,25 @@
+import type { GuestMemory } from '../../vm86/win32';
+
+/** 客体内存的定宽小端读写。调用方负责先确认地址范围可读，
+ *  越界会由 GuestMemory 自己抛出，这里不吞异常。 */
+export function readU32(memory: GuestMemory, address: number): number {
+  const bytes = memory.read_memory(address, 4);
+  return new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true);
+}
+
+export function writeU32(memory: GuestMemory, address: number, value: number): void {
+  const bytes = new Uint8Array(4);
+  new DataView(bytes.buffer).setUint32(0, value >>> 0, true);
+  memory.write_memory(bytes, address);
+}
+
+export function readF64(memory: GuestMemory, address: number): number {
+  const bytes = memory.read_memory(address, 8);
+  return new DataView(bytes.buffer, bytes.byteOffset, 8).getFloat64(0, true);
+}
+
+export function writeF64(memory: GuestMemory, address: number, value: number): void {
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setFloat64(0, value, true);
+  memory.write_memory(bytes, address);
+}

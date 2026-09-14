@@ -1,0 +1,3 @@
+# pnpm approve-builds 的持久配置，非交互安装仅批准 esbuild。
+allowBuilds:
+  esbuild: true

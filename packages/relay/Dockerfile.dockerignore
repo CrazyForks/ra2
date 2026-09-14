@@ -1,0 +1,11 @@
+# 本包即构建上下文，只发送构建所需文件。
+**
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!RELAY_PROTOCOL.md
+!LICENSE
+!src/
+!src/**
+!scripts/
+!scripts/**
