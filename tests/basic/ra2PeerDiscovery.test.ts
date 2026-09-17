@@ -48,7 +48,7 @@ it('默认浏览器 UUID 能通过真实中继握手、发现彼此并收发广�
       expect(second.onDatagram).toHaveBeenCalledWith(a.selfAddr, 5000, 5000, new Uint8Array([1, 2, 3])),
     );
     expect(first.onDatagram).not.toHaveBeenCalled();
-    // 发现靠广播，建房后的游戏消息还需要反向单播，不能只验证 hello 成功。
+    // Discovery uses broadcasts, but game messages after room creation also need reverse unicast; a successful hello alone is insufficient.
     expect(b.sendDatagram(a.selfAddr, 5000, 5000, new Uint8Array([4, 5]))).toBe(true);
     await vi.waitFor(() =>
       expect(first.onDatagram).toHaveBeenCalledWith(b.selfAddr, 5000, 5000, new Uint8Array([4, 5])),

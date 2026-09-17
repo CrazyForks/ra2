@@ -1,9 +1,7 @@
 /**
- * DirectPlay 会话/玩家消息的编解码，由 `dplayTransport` 承载。
+ * Codec for DirectPlay session/player messages carried by dplayTransport.
  *
- * 与 `packages/relay` 的虚拟局域网线协议是两套格式，不能合并或互为复用。
- * 控制字段放小型 JSON 头，玩家/会话字节留在二进制尾部，
- * 使常规游戏流量不会变成 JSON 数字数组。
+ * This differs from packages/relay's virtual-LAN wire format; do not merge or reuse one as the other. Put control fields in a small JSON header and player/session bytes in a binary tail so normal traffic does not become JSON number arrays.
  */
 
 export const DPLAY_WIRE_VERSION = 1;

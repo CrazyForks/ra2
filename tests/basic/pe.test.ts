@@ -1,6 +1,5 @@
 /**
- * PE 装载链路单元测试：以合成 fixture PE 喂给真实 loadPe，
- * 验证头解析、section 映射、IAT 打桩与桩代码生成。
+ * PE loading unit tests: feed a synthetic fixture PE to the real loadPe and verify header parsing, section mapping, IAT stubs, and stub code generation.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -45,7 +44,7 @@ describe('buildFixturePe + loadPe', () => {
     expect(image.entry).toBe(built.entry);
     expect(image.imageBase).toBe(0x0040_0000);
     expect(image.importList.length).toBe(Object.keys(FIXTURE_ABI).length);
-    // id 从 1 连续编号（0 专用为“无请求”）。
+    // IDs are consecutive from 1 (0 is reserved for no request).
     image.importList.forEach((imported, index) => {
       expect(imported.id).toBe(index + 1);
       expect(FIXTURE_ABI[imported.key]).toBe(imported.argBytes);
@@ -59,7 +58,7 @@ describe('buildFixturePe + loadPe', () => {
       expect(slotValue).toBe(imported.stub);
       expect(imported.stub).toBeGreaterThanOrEqual(STUB_BASE);
       expect(imported.stub).toBeLessThan(stubNext);
-      // 普通桩以 cli 进入共享页临界区，先发布 importActive，再发布调用栈。
+      // Normal stubs enter the shared-page critical section with cli, publishing importActive before the call stack.
       expect(staging[imported.stub]).toBe(0xfa);
       expect(staging[imported.stub + 1]).toBe(0xc7);
       expect(staging[imported.stub + 2]).toBe(0x05);
@@ -79,8 +78,8 @@ describe('buildFixturePe + loadPe', () => {
 
   it('rvaToOff：头部恒等映射，section 按原始偏移换算', () => {
     const { built } = buildFixturePe();
-    expect(rvaToOff(built.exe, 0x80)).toBe(0x80); // PE 头在 sizeOfHeaders 内
-    // .text RVA 0x1000 → 文件偏移 sizeOfHeaders(0x200)
+    expect(rvaToOff(built.exe, 0x80)).toBe(0x80); // PE headers fit within sizeOfHeaders
+    // .text RVA 0x1000 -> file offset sizeOfHeaders (0x200)
     expect(rvaToOff(built.exe, 0x1000)).toBe(0x200);
     expect(rvaToOff(built.exe, 0x1008)).toBe(0x208);
     expect(rvaToOff(built.exe, 0xf000_0000)).toBe(-1);
@@ -92,7 +91,7 @@ describe('buildFixturePe + loadPe', () => {
     const abi = () => 0;
     expect(() => loadPe(staging, new Uint8Array(256), alloc, abi)).toThrowError(/PE/);
     const { built } = buildFixturePe();
-    const truncated = built.exe.subarray(0, 0x220); // 截在 .text 中间
+    const truncated = built.exe.subarray(0, 0x220); // Truncate in the middle of .text
     expect(() => loadPe(staging, truncated, alloc, abi)).toThrowError(/越界/);
   });
 });
@@ -103,7 +102,7 @@ describe('makeImportStub 参数校验', () => {
     expect(() => makeImportStub(-1, 0)).toThrowError(/id 非法/);
     expect(() => makeImportStub(1, 3)).toThrowError(/参数字节数非法/);
     expect(() => makeImportStub(1, -4)).toThrowError(/参数字节数非法/);
-    // 桩含线程切换上下文帧，长度与参数字节数无关（add esp, n 内联 imm32）。
+    // Stubs include a thread-switch context frame; their length is independent of argument bytes (add esp, n uses inline imm32).
     expect(makeImportStub(1, 0).length).toBe(makeImportStub(1, 0x40).length);
   });
 

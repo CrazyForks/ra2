@@ -89,7 +89,7 @@ describe('主程序页面异步预加载', () => {
     vi.stubGlobal('fetch', fetcher);
     const { loadThirdPartyFiles } = await import('../../src/adapter/thirdPartyFiles');
     const game = await manifest();
-    // 先算完期望哈希，再创建会拒绝的请求；否则 await 期间还未挂上 rejects 处理器。
+    // Compute the expected hash before creating a rejecting request, or rejects will not be attached during the await.
     const actual = await sha256Hex(new Uint8Array([9]));
     await expect(loadThirdPartyFiles(game)).rejects.toThrow(
       `本地主程序缓存 game.exe SHA-256 校验失败（期望 ${game.thirdParty[0]!.sha256}，实际 ${actual}），请运行 pnpm run prepare:third-party 后重试`,

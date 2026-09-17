@@ -8,7 +8,7 @@ interface CpuScheduler {
   unregister_yield(): void;
 }
 
-/** v86 0.5.441 的内部调度接口；形状不匹配时保留上游实现。 */
+/** Internal scheduling interface of v86 0.5.441; preserve upstream behavior if its shape differs. */
 export function installWorkerCpuScheduler(candidate: unknown): boolean {
   if (!candidate || typeof candidate !== 'object' || typeof MessageChannel !== 'function') return false;
   const engine = candidate as CpuScheduler;
@@ -25,14 +25,14 @@ export function installWorkerCpuScheduler(candidate: unknown): boolean {
   const unregister = engine.unregister_yield.bind(engine);
   let closed = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  // 初始化尚未 run，没有需要迁移的 CPU tick。释放原来的嵌套计时 Worker。
+  // Initialization has not called run, so there are no CPU ticks to migrate. Release the original nested timer Worker.
   unregister();
   channel.port1.onmessage = (event: MessageEvent<{ delay: number; tick: number }>) => {
     if (closed) return;
     clearTimeout(timer);
     timer = undefined;
     const { delay, tick } = event.data;
-    // 保留上游正等待时长和 yield_callback 的过期 tick 检查。
+    // Preserve upstream positive waits and yield_callback's stale-tick checks.
     if (delay < 1) engine.yield_callback(tick);
     else
       timer = setTimeout(() => {
@@ -55,11 +55,11 @@ export function installWorkerCpuScheduler(candidate: unknown): boolean {
   return true;
 }
 
-/** 浏览器宿主拥有 CPU 调度端口；V86.destroy 沿原有所有权链释放它们。 */
+/** The browser host owns CPU scheduling ports; V86.destroy releases them through the existing ownership chain. */
 export function createBrowserEmulator(options: ConstructorParameters<typeof V86>[0]): V86 {
   const emulator = new V86(options);
-  // 只替换 Dedicated Worker 内的嵌套 Worker。Window 仍使用上游计时 Worker，
-  // 避免把它的正等待迁移到可能被后台标签页限速的 Window.setTimeout。
+  // Replace only nested Workers inside Dedicated Workers. Window retains the upstream timer Worker,
+  // avoiding migration of positive waits to Window.setTimeout, which may be throttled in background tabs.
   if (options.autostart !== false || typeof (globalThis as { importScripts?: unknown }).importScripts !== 'function')
     return emulator;
   let disposed = false;

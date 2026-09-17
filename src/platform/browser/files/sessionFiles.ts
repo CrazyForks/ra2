@@ -3,11 +3,11 @@ import { MemoryGameFileProvider } from '../../../resources/providers/memory';
 import { IndexedDbWriteCache } from './writeCache';
 
 /**
- * 会话级内存包 provider：解包产物免拷贝持有，读访问按需 slice；
- * 写档落到浏览器 IndexedDB（与开发后端同库），刷新页面后仍可恢复。
+ * Session memory-package provider: own extracted data without copying and slice on demand for reads.
+ * Persist saves to browser IndexedDB, shared with the development backend, so they survive page refreshes.
  */
 export class SessionGameFileProvider extends MemoryGameFileProvider {
-  /** 每款游戏包内目录结构不固定：发现流程递归枚举所有子目录。 */
+  /** Game packages have variable directory layouts; discovery recursively enumerates all subdirectories. */
   readonly deepDiscovery = true;
   private readonly writeCache = new IndexedDbWriteCache();
 
@@ -33,7 +33,7 @@ export class SessionGameFileProvider extends MemoryGameFileProvider {
   }
 
   override async readPrefix(path: string, maxBytes: number): Promise<{ bytes: Uint8Array; totalSize: number } | null> {
-    // 内存中的大包只复制所需区间；持久化回退与 read 使用同一优先级。
+    // Copy only the requested range from large in-memory packages; persistence fallback uses the same precedence as read.
     const bytes = this.files.get(normalizeGuestPath(path)) ?? (await this.writeCache.read(normalizeGuestPath(path)));
     return bytes ? { bytes: bytes.slice(0, maxBytes), totalSize: bytes.length } : null;
   }

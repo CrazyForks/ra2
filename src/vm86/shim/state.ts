@@ -59,10 +59,10 @@ import {
   type RegistryDefaultValue,
 } from './gameProfile';
 
-/** mixin 链用的泛型构造器：实例类型为 T。 */
+/** Generic constructor for the mixin chain, producing instance type T. */
 export type Constructor<T> = new (...args: any[]) => T;
 
-/** 每次确认消息队列为空后允许的客体内 PeekMessageA 快速返回次数。 */
+/** Guest PeekMessageA fast returns allowed after confirming an empty message queue. */
 const FAST_PEEK_EMPTY_BUDGET = 255;
 
 export interface LoadedGuestDll {
@@ -74,21 +74,21 @@ export interface LoadedGuestDll {
   exports: Map<string, number>;
 }
 
-/** 驱动器类型常量（Win32 GetDriveType 返回值）。 */
+/** Drive-type constants returned by Win32 GetDriveType. */
 export const DRIVE_NO_ROOT_DIR = 1;
 export const DRIVE_FIXED = 3;
 export const DRIVE_CDROM = 5;
 
-/** 每台 VM 只有一个客体进程；与窗口归属查询共享身份，不使用宿主进程号。 */
+/** Each VM has one guest process; share its identity with window-ownership queries instead of host process IDs. */
 export const GUEST_PROCESS_ID = 1;
 
-// 0x70000-0x70fff 是 FS/TEB；0x71000-0x72fff 是固件未使用的保留 RAM。
-// 静态/动态桩从 0x80000/0xc0000 开始，因此这里不会和 import/vtable 桩重叠。
+// 0x70000-0x70fff contains FS/TEB; 0x71000-0x72fff is reserved RAM unused by firmware.
+// Static/dynamic stubs start at 0x80000/0xc0000, so this cannot overlap import/vtable stubs.
 export const FAST_FILE_TABLE = 0x0007_1000;
 export const FAST_FILE_HANDLE_BASE = 0x4000;
 export const FAST_FILE_TABLE_ENTRIES = 512;
 export const FAST_FILE_ENTRY_BYTES = 16;
-/** 每线程 64 个 TLS 槽，位于快速文件表和调度状态表之后。 */
+/** 64 TLS slots per thread, after fast-file and scheduler-state tables. */
 export const FAST_TLS_TABLE = 0x0007_4000;
 export const FAST_TLS_ENTRIES = 64;
 export const FAST_TLS_THREAD_BYTES = FAST_TLS_ENTRIES * 4;
@@ -106,7 +106,7 @@ export interface GuestThreadState {
   wakeAt: number;
   wait?: GuestWaitState;
   criticalSection?: number;
-  /** 尚未保存统一上下文时完成的等待结果，由 host delay 返回路径取走。 */
+  /** Wait result completed before saving the shared context, consumed by the host-delay return path. */
   waitResult?: number;
 }
 
@@ -131,21 +131,18 @@ export interface GuestMutexObject {
   handles: Set<number>;
 }
 
-// 镜像的默认软上限：镜像从游戏堆分配、关闭即还，占用会随打开的文件数起伏；
-// 超限时该文件退回 hypercall 读。镜像绝不能挖走固定区间——原版反复读档后
-// 客体内存足迹会逼近 126MB 上限，固定 48MB 镜像区会让游戏提前耗尽地址空间。
+// Default soft mirror limit: allocate from the game heap and free on close, so usage follows open files;
+// over-limit files fall back to hypercall reads. Never carve out a fixed mirror region: repeated native save loads
+// approach the 126MB guest limit, and reserving 48MB would exhaust address space prematurely.
 export const FAST_FILE_MIRROR_LIMIT = 48 * 1024 * 1024;
 
-/** 诊断追踪开关：仅 Node 冒烟经 process.env 打开；浏览器/worker 无 process，恒为 false。 */
+/** Diagnostic tracing enabled only by Node smoke process.env; browsers/Workers lack process and always use false. */
 export function shimTraceEnabled(name: string): boolean {
   return typeof process !== 'undefined' && !!process.env?.[name];
 }
 
 /**
- * 通用 Win32 shim 的基础状态：堆/虚拟内存、线程、窗口、消息、输入、内存访问
- * 辅助与诊断快照。文件层、客体 DLL、同步对象、图形对象各自拆成 mixin
- * （stateFiles / stateGuestDll / stateSync / stateGraphics），由 win32.ts
- * 与各 Win32 分派模块按序组合。
+ * Base state for the generic Win32 shim: heap/virtual memory, threads, windows, messages, input, memory helpers, and diagnostic snapshots. File, guest-DLL, synchronization, and graphics state live in stateFiles/stateGuestDll/stateSync/stateGraphics mixins, composed in order by win32.ts and Win32 dispatch modules.
  */
 export class ShimState {
   protected get lastError(): number {
@@ -155,24 +152,25 @@ export class ShimState {
     this.writeU32(HYPERCALL_LAST_ERROR, value >>> 0);
   }
 
-  /** 最近打开失败的文件路径（最多 16 条，连续重复去重）；崩溃报告里定位缺失文件。 */
+  /** Up to 16 recent failed-open paths, deduplicating consecutive repeats, to identify missing files in crash reports. */
   readonly failedOpens: string[] = [];
-  /** dispatch 停在边界（返回 null）时，随 blocked 状态一起展示的详情；
-   *  vmCore 读取后清空。目前只有 CoCreateInstance 用它报 rclsid/riid。 */
+  /**
+   * Details shown with blocked status when dispatch returns null; vmCore clears them after reading. Currently CoCreateInstance uses this for rclsid/riid.
+   */
   unimplementedDetail: string | null = null;
-  // 堆从游戏栈上方开始；大映像游戏可通过 heapBase 后移。
+  // The heap starts above the game stack; large-image games may move it via heapBase.
   protected nextHeap: number;
   protected peakHeap: number;
   protected readonly heapBase: number;
   protected readonly allocations = new Map<number, number>();
   protected readonly freeBlocks: Array<{ ptr: number; size: number }> = [];
-  /** VirtualAlloc 保留区（wemu 模型）：与堆 arena 互斥，MEM_DECOMMIT 不清除保留。
-   *  原版 VC6 CRT 在启动时 VirtualAlloc(NULL, 1MB, MEM_RESERVE)，随后在保留区内
-   *  逐 32KB 块 COMMIT/DECOMMIT；这些地址绝不能进入堆空闲链表，否则文件镜像
-   *  等 HeapAlloc 会复用游戏正在使用的块（历史 CPU #6 @EIP=0x8f 崩溃的根源）。 */
+  /**
+   * VirtualAlloc reservations follow the wemu model and never overlap the heap arena; MEM_DECOMMIT retains reservations. VC6 CRT reserves 1MB at startup, then commits/decommits 32KB blocks. These addresses must never enter heap free lists, or HeapAlloc users such as file mirrors could reuse live game blocks, causing the historical CPU #6 @EIP=0x8f crash.
+   */
   protected readonly virtualRegions = new Map<number, { size: number }>();
-  /** MEM_RELEASE 归还的区域（wemu try_free 模型）：只供后续 VirtualAlloc 复用，
-   *  不进入堆空闲链表——保留区与堆是两个互斥 arena，HeapAlloc 拿不到这里。 */
+  /**
+   * Regions returned by MEM_RELEASE follow wemu try_free: reusable only by VirtualAlloc, never placed in heap free lists. Reservation and heap arenas are disjoint, so HeapAlloc cannot claim them.
+   */
   protected readonly virtualFreeBlocks: Array<{ ptr: number; size: number }> = [];
   protected readonly virtualTop: number;
   protected readonly virtualBase: number;
@@ -180,7 +178,7 @@ export class ShimState {
   protected readonly warnedVirtual = new Set<number>();
   protected readonly tls = new Map<number, number>();
   protected nextTls = 0;
-  /** 协作式客体线程 id/句柄计数器。 */
+  /** Cooperative guest-thread ID/handle counters. */
   protected nextThreadId = 1;
   protected nextThreadHandle = 0x0001_1000;
   protected readonly guestThreads = new Map<number, GuestThreadState>();
@@ -191,7 +189,7 @@ export class ShimState {
   protected readonly modulePath = 0x0006_1100;
   protected readonly environmentA = 0x0006_1200;
   protected readonly environmentW = 0x0006_1300;
-  /** 动态导入 id 与动态 stub 分配器；登记逻辑在 stateGuestDll mixin。 */
+  /** Dynamic import IDs and stub allocator; stateGuestDll owns registration. */
   protected nextDynamicId: number;
   protected nextDynamicStub = 0x000c_0000;
   protected readonly windowClasses = new Map<string, number>();
@@ -200,19 +198,19 @@ export class ShimState {
   protected readonly windowTexts = new Map<number, string>();
   protected readonly windowLongs = new Map<string, number>();
   protected readonly windowParents = new Map<number, number>();
-  /** 窗口客户区矩形；子窗口坐标相对父窗口，顶层窗口坐标相对桌面。 */
+  /** Window client rectangles: child coordinates are parent-relative; top-level coordinates are desktop-relative. */
   protected readonly windowRects = new Map<number, { x: number; y: number; width: number; height: number }>();
-  /** 有效区域尚未被 BeginPaint/ValidateRect 消耗的窗口。 */
+  /** Windows with update regions not yet consumed by BeginPaint/ValidateRect. */
   protected readonly invalidatedWindows = new Set<number>();
   protected readonly dialogChildren = new Map<string, number>();
   protected readonly controlIds = new Map<number, number>();
-  /** 系统控件默认过程的轻量状态；RA2 Skirmish 设置页依赖这些消息返回值。 */
+  /** Lightweight default system-control state; RA2 skirmish settings depend on these message results. */
   protected readonly trackbarStates = new Map<number, { min: number; max: number; pos: number }>();
   protected readonly buttonChecks = new Map<number, number>();
   protected readonly controlItems = new Map<number, Array<{ text: string; data: number }>>();
   protected readonly controlSelections = new Map<number, number>();
   protected readonly controlItemHeights = new Map<number, number>();
-  /** ListBox 滚动：顶部可见条目序号（LB_GETTOPINDEX/LB_SETTOPINDEX/WM_VSCROLL 同步）。 */
+  /** ListBox top visible item index, synchronized by LB_GETTOPINDEX/LB_SETTOPINDEX/WM_VSCROLL. */
   protected readonly listboxTopIndices = new Map<number, number>();
   protected readonly comboStates = new Map<
     number,
@@ -230,12 +228,12 @@ export class ShimState {
   protected nextMultimediaTimer = 1;
   protected readonly messages: MessageState[] = [];
   protected readonly pendingHostMessages: MessageState[] = [];
-  /** gamemd launcher 握手的共享内存内容；由 WM_BEEF 的 lParam 句柄映射。 */
+  /** Shared-memory contents for the gamemd launcher handshake, mapped by the handle in WM_BEEF lParam. */
   protected launcherProtectedDataPointer = 0;
   protected launcherResponseQueued = false;
-  /** RA2 shell 只 Peek 不 Dispatch；host 输入在下一 API 边界同步投递。 */
+  /** RA2 shell Peeks without Dispatch; synchronously deliver host input at the next API boundary. */
   protected readonly pendingHostDispatches: MessageState[] = [];
-  /** 最近一次宿主输入的命中与分派记录；用于区分坐标命中、队列和 WndProc 故障。 */
+  /** Latest host-input hit/dispatch record, distinguishing coordinate hit testing, queueing, and WndProc failures. */
   protected readonly hostInputTrace: Array<{
     phase: 'post' | 'dispatch';
     hwnd: number;
@@ -244,14 +242,14 @@ export class ShimState {
     className: string;
     lParam: number;
   }> = [];
-  /** 已同步进入 WM_DESTROY、等待客体回调退栈后再释放的窗口根。 */
+  /** Window roots that synchronously entered WM_DESTROY and await guest callback unwinding before release. */
   protected readonly pendingWindowDestroys = new Map<number, number>();
   protected hostInputDispatchCount = 0;
   protected readonly keyStates = new Map<number, boolean>();
   protected lastHostKeyMessage = 0;
   protected lastHostKeyVirtualKey = 0;
   protected campaignHoverDispatchCount = 0;
-  /** 合成 WM_TIMER 的分派次数；供跨线程探针判断客体是否还在泵消息。 */
+  /** Synthesized WM_TIMER dispatch count for cross-thread probes of continued guest message pumping. */
   protected wmTimerDispatchCount = 0;
 
   protected nextWindow = 0x2000;
@@ -260,61 +258,62 @@ export class ShimState {
   protected activeWindow = 0;
   protected foregroundWindow = 0;
   protected captureWindow = 0;
-  /** USER32 Button 的按下目标；捕获保证同一次点击的抬起不会落到新页面控件。 */
+  /** USER32 Button down target; capture prevents the matching up from landing on controls from a new page. */
   protected pressedButton = 0;
   protected inputReady = false;
   protected cursorX = 400;
   protected cursorY = 300;
-  /** 硬件光标图像缓存：HCURSOR → 解码后的 RGBA。RA2 用 Win32 LoadCursor/SetCursor
-   * 切换硬件光标、并不画进 DirectDraw 帧；宿主把这张小纹理独立叠在 framebuffer
-   * 上，Pointer Lock 下仍可见，又无需为每次移动复制整张 800×600 画面。 */
+  /**
+   * Hardware cursor cache: HCURSOR to decoded RGBA. RA2 switches cursors with Win32 LoadCursor/SetCursor without drawing into DirectDraw frames. The host overlays a small separate texture, retaining visibility under Pointer Lock without copying 800x600 frames per movement.
+   */
   protected readonly cursorImages = new Map<
     number,
     { width: number; height: number; hotspotX: number; hotspotY: number; rgba: Uint8Array }
   >();
-  /** module:id → HCURSOR，避免重复解码同一光标资源。 */
+  /** module:id to HCURSOR, avoiding repeated decoding of the same cursor resource. */
   protected readonly cursorHandleById = new Map<string, number>();
-  /** 当前 SetCursor 选中的 HCURSOR（0 = 无光标/未设置）。 */
+  /** HCURSOR currently selected by SetCursor; 0 means absent/unset. */
   protected currentCursorHandle = 0;
-  /** RegisterClassA 的类光标（hCursor）：RA2 菜单靠类光标显示，不调 SetCursor。 */
+  /** RegisterClassA hCursor; RA2 menus use class cursors without calling SetCursor. */
   protected classCursor = 0;
   protected cursorDebugCount = 0;
   protected nextCursorHandle = 0x9000;
   protected displayWidth = 800;
   protected displayHeight = 600;
   protected displayBpp = 8;
-  /** 最后一张真正交给前端的帧尺寸。输入必须跟随用户正在看的画面，而不是
-   * 当前 primary 句柄；RA2 转场可能在旧帧仍显示时先创建下一张 800×600 primary。 */
+  /**
+   * Dimensions of the last frame actually delivered to the frontend. Input follows the visible frame, not the current primary handle; RA2 transitions may create the next 800x600 primary while the old frame remains displayed.
+   */
   protected presentedWidth = 800;
   protected presentedHeight = 600;
-  /** 假 BINK 视频：句柄（客体堆里 BINK 结构指针）→ 是否已 Close。结构字段被游戏直读。 */
+  /** Synthetic BINK video: guest-heap BINK-structure handle to closed state. The game directly reads structure fields. */
   protected readonly binkVideos = new Set<number>();
-  /** 假 BINK 帧 pacing：句柄 → 下一帧到期的客体时钟毫秒。BinkWait 据此返回 0/1。 */
+  /** Synthetic BINK pacing: handle to next-frame deadline in guest milliseconds; BinkWait returns 0/1 accordingly. */
   protected readonly binkNextFrameAt = new Map<number, number>();
-  /** 原版 Bink 当前正在解码完整文件；其后续方法必须继续桥回同一个客体 DLL。 */
+  /** Native Bink is decoding a complete file; subsequent methods must return through the same guest DLL. */
   protected nativeBinkPlaybackActive = false;
   protected nativeBinkPlaybackOpens = 0;
-  /** Bink 1.0p 的 DirectSound 后端是 DLL 全局状态；重复初始化会破坏其回调。 */
+  /** Bink 1.0p's DirectSound backend uses DLL-global state; repeated initialization corrupts callbacks. */
   protected nativeBinkSoundSystemReady = false;
-  /** 原版 Bink 播放期间固定发起线程；避免 DLL 调用间的 PIT 切换污染旧版运行库状态。 */
+  /** Pin the initiating thread during native Bink playback to prevent inter-call PIT switches corrupting old runtime state. */
   protected nativeBinkPinnedThread: number | null = null;
-  /** BinkClose 重定向已建立，等客体关闭代码安全进入原子桥后再释放跨调用锁。 */
+  /** BinkClose redirection is installed; release the cross-call lock only once guest cleanup safely enters the atomic bridge. */
   protected nativeBinkThreadReleasePending = false;
   protected primarySurface = 0;
-  /** RA2 shell 当前活跃 800×600 surface：游戏把不同屏幕画到不同 surface
-   * （主菜单→primary，二级页面→OFFSCREENPLAIN 层，游戏内菜单→caps=0 层），
-   * 且呈现靠 primary 的 emitFrame 触发。最近 Unlock/Blt 目标即当前屏幕内容所在层。 */
+  /**
+   * Active 800x600 RA2 shell surface. The game draws main menus to primary, subpages to OFFSCREENPLAIN, and in-game menus to caps=0 surfaces, while primary emitFrame triggers presentation. The latest Unlock/Blt target holds current screen content.
+   */
   protected activeShellSurface = 0;
-  /** shell 软件表面的最近绘制顺序；不能依赖 Map 创建顺序选择合成层。 */
+  /** Most recent draw order of shell software surfaces; composition cannot rely on Map creation order. */
   protected shellSurfaceDrawSerial = 0;
-  /** 当前 RA2 对话框模板的标题资源键；用于区分纯 shell 菜单与内容页。 */
+  /** Title resource key of the current RA2 dialog template, distinguishing shell menus from content pages. */
   protected shellPageTitle = '';
   protected readonly clock: ScaledClock;
   protected frameScheduled = false;
   protected disposed = false;
   protected lastCallbackState: VmCallbackState | null = null;
   protected readonly driveTypes = new Map<string, number>();
-  /** 内存注册表：键名（小写）→ 值字节。 */
+  /** In-memory registry: lowercase key to value bytes. */
   protected readonly registryValues = new Map<string, Uint8Array>();
   protected readonly registrySessionDefaults = new Map<string, RegistryDefaultValue>();
   protected readonly registryHandles = new Map<number, string>();
@@ -354,20 +353,20 @@ export class ShimState {
     for (let id = 0; id < GUEST_THREAD_LIMIT; id++) {
       const context = GUEST_THREAD_FPU_CONTEXTS + id * GUEST_THREAD_FPU_CONTEXT_BYTES;
       this.zero(context, GUEST_THREAD_FPU_CONTEXT_BYTES);
-      this.writeU32(context, 0x037f); // x87 默认 control word
-      this.writeU32(context + 8, 0xffff); // 全部寄存器为空的 tag word
+      this.writeU32(context, 0x037f); // Default x87 control word.
+      this.writeU32(context + 8, 0xffff); // Tag word marking every register empty.
     }
     this.writeU32(HYPERCALL_ACTIVE_SHELL_SURFACE, 0);
     this.writeU32(HYPERCALL_PEEK_BUDGET, 0);
     this.writeU32(HYPERCALL_CURSOR_X, this.cursorX);
     this.writeU32(HYPERCALL_CURSOR_Y, this.cursorY);
-    // 缺省用中性占位名：通用层不假设客体主程序叫什么，RA2/YR 的 EXE 名
-    // 由各自游戏模块经 options.moduleName 传入。
+    // Default to a neutral placeholder module name; the generic layer does not assume executable names.
+    // RA2/YR supply their own through options.moduleName.
     this.moduleName = options.moduleName || 'app.exe';
     this.staticImports = options.staticImports ?? [];
     this.gameProfile = options.gameProfile ?? EMPTY_GAME_SHIM_PROFILE;
-    // 参数只进入命令行，不改变模块身份。保留 0x61000..0x610ff 的 NUL 边界，
-    // 超长/嵌入 NUL 的配置直接拒绝，不能截断参数或覆盖后面的模块路径。
+    // Arguments affect only the command line, not module identity. Preserve NUL bounds at 0x61000..0x610ff;
+    // reject excessive lengths or embedded NULs rather than truncating arguments or overwriting the following module path.
     const argumentsText = options.commandLineArguments?.trim() ?? '';
     const commandLine = this.moduleName + (argumentsText ? ` ${argumentsText}` : '');
     if (commandLine.includes('\0') || commandLine.length >= this.modulePath - this.commandLine) {
@@ -387,12 +386,12 @@ export class ShimState {
     return this.lastCallbackState;
   }
 
-  /** 当前 RA2 shell 页标题资源键；供状态驱动的输入测试等待真实菜单创建完成。 */
+  /** Current RA2 shell title resource key, letting state-driven input tests await actual menu creation. */
   inspectShellPageTitle(): string {
     return this.shellPageTitle;
   }
 
-  /** 窗口及其祖先均带 WS_VISIBLE 才实际可见。 */
+  /** A window is actually visible only if it and every ancestor have WS_VISIBLE. */
   protected isWindowTreeVisible(start: number): boolean {
     const seen = new Set<number>();
     let hwnd = start;
@@ -404,7 +403,7 @@ export class ShimState {
     return true;
   }
 
-  /** shell 菜单由游戏资源登记的页标题状态与可见 dialog 共同标识。 */
+  /** Identify shell menus using game-registered page-title state plus a visible dialog. */
   protected isShellVisible(): boolean {
     if (!this.gameProfile.shell?.compositeRgb565Layers) return false;
     const titleControlId = this.gameProfile.shell.titleControlId;
@@ -424,9 +423,7 @@ export class ShimState {
   }
 
   /**
-   * 当前壳页是游戏登记的 Campaign 页时返回其控件登记，否则 undefined。
-   * RGBA 合成、隐藏列表边框修补与徽标 hover 诊断共用这一处判断，
-   * 未登记能力的游戏不做任何 Campaign 页专属补偿。
+   * Return registered Campaign controls when the current shell page matches that game's Campaign page, otherwise undefined. Share this check across RGBA composition, hidden-list-border fixes, and logo-hover diagnostics. Games without registration receive no Campaign-specific compensation.
    */
   protected campaignMenu(): CampaignMenuCompatibility | undefined {
     const menu = this.gameProfile.shell?.campaignMenu;
@@ -435,7 +432,7 @@ export class ShimState {
     return menu.titleKeys.some((key) => title.includes(key)) ? menu : undefined;
   }
 
-  /** listbox/combobox 内容诊断快照（RA2 地图/下拉枚举验证）。 */
+  /** ListBox/ComboBox content snapshots for RA2 map/dropdown enumeration checks. */
   inspectControlItems(): Array<{ hwnd: number; className: string; selection: number; items: string[] }> {
     return [...this.controlItems.entries()].map(([hwnd, items]) => ({
       hwnd,
@@ -456,7 +453,7 @@ export class ShimState {
     return this.hostInputTrace.map((entry) => ({ ...entry }));
   }
 
-  /** User32 布局/命中诊断快照；只返回副本，避免测试修改窗口管理状态。 */
+  /** User32 layout/hit-test snapshots; return copies only so tests cannot modify window-manager state. */
   inspectWindowState(): Array<{
     hwnd: number;
     callback: number;
@@ -479,7 +476,7 @@ export class ShimState {
     }));
   }
 
-  /** 调试器使用的客体线程快照；避免暴露可变的内部调度状态。 */
+  /** Debugger guest-thread snapshots without exposing mutable internal scheduling state. */
   inspectGuestThreads(): Array<{
     id: number;
     handle: number;
@@ -519,20 +516,20 @@ export class ShimState {
     });
   }
 
-  /** 游戏 mixin 在共用 DLL 分派之前拦截的专属导入；默认无。 */
+  /** Game-specific imports intercepted by mixins before shared DLL dispatch; none by default. */
   protected dispatchExclusive(_call: Win32Call): Win32Result | null {
     return null;
   }
 
-  /** 游戏组合层可选接管 Winsock；纯共用 shim 默认停在未实现边界。 */
+  /** Game composition may handle Winsock; the generic shim stops at unimplemented boundaries by default. */
   protected dispatchGameWinsock(_key: string, _args: number[]): Win32Result | null {
     return null;
   }
 
-  /** 游戏组合层释放自己的网络资源；纯共用 shim 无操作。 */
+  /** Game composition releases its network resources; no-op in the generic shim. */
   protected disposeGameNetwork(): void {}
 
-  /** 在 host 生成阶段占槽；不同线程或未开始执行的桥也不能复用。 */
+  /** Reserve slots during host generation; other threads or not-yet-started bridges cannot reuse them. */
   protected reserveGuestCallback(): GuestCallbackFrame {
     for (let depth = 0; depth < GUEST_CALLBACK_SLOTS; depth++) {
       const ownerAddress = GUEST_CALLBACK_OWNERS + depth * 4;
@@ -552,36 +549,36 @@ export class ShimState {
       this.writeU32(address, 0);
       released++;
     }
-    // ExitThread 不会经过桥尾部。此时 import 握手仍屏蔽线程切换，
-    // 且该线程永不恢复，因此可以安全回收它的全部嵌套回调。
+    // ExitThread bypasses bridge tails. The import handshake still blocks switching,
+    // and the thread will never resume, so all its nested callback slots can safely be reclaimed.
     this.writeU32(HYPERCALL_CALLBACK_DEPTH, this.readU32(HYPERCALL_CALLBACK_DEPTH) - released);
   }
 
   protected appendGuestCallbackReturn(code: number[], frame: GuestCallbackFrame, originalReturn: number): void {
     const emit32 = (value: number) =>
       code.push(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, value >>> 24);
-    // 释放槽后到 RET 必须不可抢占，否则另一线程可能覆盖仍在执行的尾部。
+    // Keep slot release through RET non-preemptible, or another thread could overwrite the tail still executing.
     code.push(0xfa, 0xff, 0x0d);
     emit32(HYPERCALL_CALLBACK_DEPTH); // cli; dec [active]
     code.push(0xc7, 0x05);
     emit32(frame.ownerAddress);
     emit32(0);
     code.push(0x68);
-    emit32(originalReturn); // push return，保留回调 EAX
+    emit32(originalReturn); // push return, preserving callback EAX.
     code.push(0x8b, 0x0d);
     emit32(HYPERCALL_THREAD_CURRENT);
     code.push(0x83, 0x3c, 0x8d);
     emit32(GUEST_THREAD_CRITICAL_DEPTH);
     code.push(0);
-    code.push(0x75, 0x01, 0xfb, 0xc3); // jne ret; sti; ret（STI 的中断阴影覆盖 RET）
+    code.push(0x75, 0x01, 0xfb, 0xc3); // jne ret; sti; ret, with STI's interrupt shadow covering RET.
     if (code.length > GUEST_CALLBACK_STRIDE) throw new Error(`客体回调桥超出槽位: ${code.length}`);
   }
 
-  /** 在 host 侧生成动态桩代码；文件、DLL、同步与图形 mixin 共用。 */
+  /** Generate dynamic guest stubs on the host, shared by file, DLL, synchronization, and graphics mixins. */
   protected allocateDynamicCode(code: Uint8Array | number[]): number {
     const bytes = code instanceof Uint8Array ? code : new Uint8Array(code);
     let address = this.nextDynamicStub;
-    // 0xf0000..0xfffff 是正在运行的固件、GDT 和 IDT，绝不能写入动态桩。
+    // 0xf0000..0xfffff contains live firmware, GDT, and IDT; never write dynamic stubs there.
     if (address < 0x0010_0000 && address + bytes.length > 0x000f_0000) address = 0x0010_0000;
     const end = Math.ceil((address + bytes.length) / 16) * 16;
     if (end > 0x0020_0000) throw new Error('动态 stub 区不足');
@@ -594,7 +591,7 @@ export class ShimState {
     this.keyStates.set(virtualKey >>> 0, down);
   }
 
-  /** 当前实际呈现面的鼠标坐标与边界；供跨线程输入探针验证最终钳制结果。 */
+  /** Actual presented-surface mouse coordinates and bounds for cross-thread verification of final clamping. */
   inspectPointerState(): {
     x: number;
     y: number;
@@ -645,9 +642,9 @@ export class ShimState {
   }
 
   setCursorPosition(x: number, y: number): void {
-    // 转场时 DirectDraw 的“当前 primary”可能已经是下一页 800×600 surface，
-    // 而浏览器仍在显示上一张 1440×900 战场帧。按最后呈现帧钳制，RA2/YR
-    // 的前端坐标与 Worker 最终坐标才使用同一个边界。
+    // During transitions, DirectDraw's current primary may already be the next 800x600 surface
+    // while the browser still shows the previous 1440x900 battlefield. Clamp to the last presented frame
+    // so RA2/YR frontend and final Worker coordinates share the same bounds.
     const width = this.presentedWidth;
     const height = this.presentedHeight;
     this.cursorX = Math.max(0, Math.min(Math.max(0, width - 1), Math.round(x)));
@@ -655,18 +652,18 @@ export class ShimState {
     this.syncCursorPositionToGuest();
   }
 
-  /** host 输入与 SetCursorPos 共用的光标坐标镜像更新。 */
+  /** Cursor-coordinate mirror update shared by host input and SetCursorPos. */
   protected syncCursorPositionToGuest(): void {
     this.writeU32(HYPERCALL_CURSOR_X, this.cursorX >>> 0);
     this.writeU32(HYPERCALL_CURSOR_Y, this.cursorY >>> 0);
   }
 
-  /** 有新消息或定时器状态变化时，强制下一次 PeekMessageA 回 host。 */
+  /** Force the next PeekMessageA back to the host when messages or timer state change. */
   protected invalidateFastPeek(): void {
     this.writeU32(HYPERCALL_PEEK_BUDGET, 0);
   }
 
-  /** 仅在消息队列和两类 timer 都为空时开放有限次数的客体快速空轮询。 */
+  /** Allow bounded guest fast empty-polling only when the message queue and both timer classes are empty. */
   protected refreshFastPeekBudget(): void {
     const mustPollHost =
       this.messages.length > 0 ||
@@ -709,8 +706,9 @@ export class ShimState {
     return (b[0]! | (b[1]! << 8)) >>> 0;
   }
 
-  /** writeU32 专用 4 字节暂存：不再每次调用分配数组字面量
-   *  （Lock/SetColorKey 等热路径每秒上万次）。write_memory 同步复制，可安全复用。 */
+  /**
+   * Reusable four-byte writeU32 scratch buffer avoids array-literal allocation in high-frequency Lock/SetColorKey paths. write_memory copies synchronously, so reuse is safe.
+   */
   private readonly writeU32Scratch = new Uint8Array(4);
 
   protected writeU32(ptr: number, value: number): void {
@@ -722,11 +720,14 @@ export class ShimState {
     this.memory.write_memory(scratch, ptr);
   }
 
+  /** 顶层窗口的 x/y 已经是屏幕坐标；只有 WS_CHILD 才沿父窗口累加客户区偏移。 */
+  protected windowCoordinateParent(hwnd: number): number {
+    const style = this.windowLongs.get(`${hwnd}:-16`) ?? 0;
+    return (style & 0x4000_0000) !== 0 ? (this.windowParents.get(hwnd) ?? 0) : 0;
+  }
+
   /**
-   * 把 shim 里的窗口几何/属性镜像到客体表（GUEST_WINDOW_TABLE），供客体快速桩
-   * 直接读取。窗口状态的任何变更（创建/移动/SetWindowLong/销毁/对话框项）都必须
-   * 调一次，否则客体读到旧值。越界 hwnd 直接忽略（客体桩会回退完整 hypercall）。
-   * X/Y 存绝对屏幕坐标（沿父链累加相对偏移），客体桩无需再遍历父链。
+   * Mirror shim window geometry/properties into GUEST_WINDOW_TABLE for guest fast stubs. Synchronize after every state mutation: create, move, SetWindowLong, destroy, or dialog-item changes, otherwise guest reads become stale. Ignore out-of-range hwnd values because stubs fall back to full hypercalls. Store absolute X/Y by accumulating parent-relative offsets so stubs need no parent traversal.
    */
   protected syncWindowToGuest(hwnd: number): void {
     const index = hwnd - 0x2000;
@@ -744,7 +745,7 @@ export class ShimState {
           absX += r.x;
           absY += r.y;
         }
-        current = this.windowParents.get(current) ?? 0;
+        current = this.windowCoordinateParent(current);
       }
     }
     const rect = this.windowRects.get(hwnd);
@@ -766,8 +767,7 @@ export class ShimState {
   }
 
   /**
-   * 几何或父链变更会影响所有后代的绝对坐标，需级联同步整棵子树。
-   * 移动/改父很少发生（多在布局期），O(后代) 级联可接受。
+   * Geometry or parent-chain changes affect descendant absolute coordinates; synchronize the entire subtree. Moves/reparenting are rare, mostly during layout, so O(descendants) updates are acceptable.
    */
   protected syncWindowTreeToGuest(hwnd: number): void {
     const queue = [hwnd];
@@ -795,7 +795,7 @@ export class ShimState {
     return decodeGuestNarrow(bytes.subarray(0, end));
   }
 
-  /** NUL 前的原始字节数（Win32 lstrlenA 语义：GBK 双字节不合并）。 */
+  /** Raw byte count before NUL, matching Win32 lstrlenA without combining GBK byte pairs. */
   protected narrowStringLength(ptr: number, max = 0x1_0000): number {
     if (!ptr) return 0;
     const bytes = this.readBytes(ptr, max);
@@ -859,8 +859,8 @@ export class ShimState {
   }
 
   protected readRect(ptr: number): [number, number, number, number] {
-    // 一次 16 字节读代替 4 次 readU32（每次 readU32 各含 2 次 WASM 边界检查）：
-    // BltFast/Blt 每秒上万次，RECT 读是固定开销。
+    // Read 16 bytes once instead of four readU32 calls, each requiring two WASM boundary checks;
+    // RECT reads are fixed overhead in tens of thousands of BltFast/Blt calls per second.
     const b = this.memory.read_memory(ptr, 16);
     return [
       b[0]! | (b[1]! << 8) | (b[2]! << 16) | (b[3]! << 24) | 0,
@@ -876,8 +876,9 @@ export class ShimState {
     return c;
   }
 
-  /** 填充暂存区：小块填充（清屏/清表面/清结构）复用同一 buffer，
-   *  避免每次分配新 Uint8Array——CreateSurface 每秒上万次的分配热点。 */
+  /**
+   * Reusable fill scratch buffer for small screen/surface/structure clears, avoiding Uint8Array allocation in frequent CreateSurface paths.
+   */
   private fillScratch = new Uint8Array(64 * 1024);
 
   protected writeFilledRegion(ptr: number, size: number, index: number): void {

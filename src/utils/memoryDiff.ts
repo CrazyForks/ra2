@@ -1,11 +1,11 @@
-/** 按 4 字节粒度比较内存快照；不依赖 VM 或录制会话。 */
+/** Compare memory snapshots at 4-byte granularity without VM or recording-session dependencies. */
 export interface MemoryDiff {
-  /** 按地址升序的改动区段；to 为排他终点，4 字节对齐。 */
+  /** Changed regions in ascending address order; to is exclusive and 4-byte aligned. */
   ranges: Array<{ from: number; to: number }>;
   totalBytes: number;
 }
 
-/** 按 4 字节粒度对比两段等长内存，连续改动字合并为区段（升序）。 */
+/** Compare equal-length memory at 4-byte granularity, merging adjacent changed words into ascending regions. */
 export function diffMemory(base: Uint8Array, current: Uint8Array): MemoryDiff {
   const words = Math.min(base.length, current.length) >>> 2;
   const ranges: Array<{ from: number; to: number }> = [];
@@ -30,8 +30,10 @@ export function diffMemory(base: Uint8Array, current: Uint8Array): MemoryDiff {
   return { ranges, totalBytes };
 }
 
-/** 把 current 相对 prev 的改动字计数累加进 counts（键 = 地址，值 = 被采样到修改的次数）。
- *  新地址数达到 maxAddresses 后不再新增、只累加已有地址；返回是否发生截断。 */
+/**
+ * Accumulate changed-word counts from prev to current: keys are addresses, values are observed modification counts.
+ * After maxAddresses, add no new addresses and increment only existing ones; return whether truncation occurred.
+ */
 export function accumulateChangedWords(
   prev: Uint8Array,
   current: Uint8Array,

@@ -18,7 +18,7 @@ for (const root of Object.values(roots)) {
 }
 if (process.argv.slice(2).some((arg) => arg !== '--record')) throw new Error('仅支持 --record 或无参数校验');
 if (process.argv.includes('--record')) {
-  // 维护者显式建立基线；CI 绝不能自动刷新基线掩盖资源漂移。
+  // Maintainers establish baselines explicitly; CI must never refresh them automatically to conceal asset drift.
   const inventory = await inventoryResources(roots);
   assertGameResources(inventory, gameId);
   const bytes = `${JSON.stringify(inventory, null, 2)}\n`;

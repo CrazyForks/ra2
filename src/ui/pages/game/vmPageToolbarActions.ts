@@ -1,8 +1,7 @@
+import { t } from '../../shared/i18n/translate';
 import { createReShadePreset } from '../../../graphics/reshadePreset';
 /**
- * 工具栏动作回调对象（拆分自 page.ts 的 startVmPage）：
- * 快速开局、分辨率/音量/倍率、弱网、存档导入导出与地图包。
- * 会随会话重赋值的局部状态经 getter/setter 传入，避免捕获过期值。
+ * Toolbar action callbacks extracted from page.ts startVmPage: quick start, resolution/volume/multiplier, network faults, save import/export, and map packages. Pass session-reassigned state through getters/setters to avoid stale captures.
  */
 import type { GameSource } from '../../../games/source';
 import type { SupportedGameId } from '../../../games/catalog';
@@ -75,8 +74,8 @@ export function createVmPageToolbarActions(deps: VmPageToolbarActionDeps): Runti
     onLiveModel: import.meta.env.DEV ? (file, modelId) => effects.set(file, modelId) : undefined,
     async onQuickStart() {
       const vm = getVm();
-      if (!vm || getExitHandled() || getStatus().phase !== 'running') throw new Error('游戏尚未运行');
-      // 启动 hook 不是任意时刻可跳转的菜单函数；先正常释放 VM，再由下一次启动消费。
+      if (!vm || getExitHandled() || getStatus().phase !== 'running') throw new Error(t('游戏尚未运行'));
+      // Startup hooks are not menu functions callable at arbitrary times; release the VM normally, then consume them on the next startup.
       const url = new URL(window.location.href);
       url.searchParams.set('start-page', 'skirmish');
       window.history.replaceState(window.history.state, '', url);
@@ -84,7 +83,7 @@ export function createVmPageToolbarActions(deps: VmPageToolbarActionDeps): Runti
     },
     onCaptureProbe: import.meta.env.DEV
       ? (size) => {
-          if (!presenter.frame) throw new Error('尚无游戏画面，请启动游戏后再采样');
+          if (!presenter.frame) throw new Error(t('尚无游戏画面，请启动游戏后再采样'));
           return captureProbeImage(presenter.frame, size);
         }
       : undefined,
@@ -111,7 +110,7 @@ export function createVmPageToolbarActions(deps: VmPageToolbarActionDeps): Runti
       const gameId = getSelectedGameId();
       if (!gameId) return;
       const resolution = parseGameResolution(value);
-      if (value && !resolution) throw new Error(`不支持的分辨率：${value}`);
+      if (value && !resolution) throw new Error(t('不支持的分辨率：{0}', value));
       storeResolution(gameId, resolution);
       setRequestedResolution(resolution);
       await onRestartForResolution();
@@ -128,7 +127,7 @@ export function createVmPageToolbarActions(deps: VmPageToolbarActionDeps): Runti
     onSendCheatText(text) {
       const vm = getVm();
       if (!vm || getStatus().phase !== 'running') {
-        throw new Error('游戏尚未就绪，请等待游戏进入可操作画面。');
+        throw new Error(t('游戏尚未就绪，请等待游戏进入可操作画面。'));
       }
       const result = sendCheatSequence(vm, text);
       if (!result.ok) throw new Error(result.error);
@@ -136,7 +135,7 @@ export function createVmPageToolbarActions(deps: VmPageToolbarActionDeps): Runti
     onSendCheatKey(code) {
       const vm = getVm();
       if (!vm || getStatus().phase !== 'running') {
-        throw new Error('游戏尚未就绪，请等待游戏进入可操作画面。');
+        throw new Error(t('游戏尚未就绪，请等待游戏进入可操作画面。'));
       }
       sendCheatKey(vm, code);
     },
@@ -149,44 +148,44 @@ export function createVmPageToolbarActions(deps: VmPageToolbarActionDeps): Runti
       document.exitPointerLock?.();
       await editCustomMapPackages(gameId, async (files) => {
         const vm = getVm();
-        if (!vm || getExitHandled()) throw new Error('VM 已退出');
+        if (!vm || getExitHandled()) throw new Error(t('VM 已退出'));
         const result = await vm.attachMapFiles(files);
         return (
-          `已动态挂载 ${result.attached.length} 个地图文件` +
+          t('已动态挂载 {0} 个地图文件', result.attached.length) +
           `${result.attached.length ? `：${result.attached.join('、')}` : ''}。` +
-          `已有 ${result.existing.length} 个同名文件保持不变；CSF 未挂载。VM 未重启，请自行检查地图列表。`
+          t('已有 {0} 个同名文件保持不变；CSF 未挂载。VM 未重启，请自行检查地图列表。', result.existing.length)
         );
       });
     },
     async onDownloadSave() {
       const gameSource = getGameSource();
-      if (!gameSource) throw new Error('游戏目录尚未就绪');
+      if (!gameSource) throw new Error(t('游戏目录尚未就绪'));
       await getVm()?.flushFiles();
-      // 局内存档缺失时导出的包无法用于继续游戏：
-      // 接收端读档会因地图文件缺失触发原版除零崩溃。提前警示而不是导出残包。
+      // An exported package missing in-game saves cannot resume gameplay:
+      // the receiver hits the native divide-by-zero crash when map files are absent. Warn early instead of exporting an incomplete package.
       const paths = await listSavePaths(gameSource.files);
       if (!paths.some((path) => path.startsWith('save/'))) {
         window.alert(
-          '游戏目录中没有局内存档（Save 目录缺失或为空）：\n' +
-            '导出的内容只有进度表文件，无法在其他浏览器继续游戏。\n' +
-            '请先在本机游戏内保存一次存档，再导出。',
+          t('游戏目录中没有局内存档（Save 目录缺失或为空）：\n') +
+            t('导出的内容只有进度表文件，无法在其他浏览器继续游戏。\n') +
+            t('请先在本机游戏内保存一次存档，再导出。'),
         );
       }
       const blob = await createSavePackage(gameSource.files, gameSource.game.id);
-      // 下载前明示包内容：用户可直接核对实际游玩的槽位是否在列，
-      // 避免「导出包缺槽位 → 接收端读档除零崩溃」直到换浏览器才暴露。
+      // Show package contents before download so users can verify that the slot they played is included,
+      // rather than discovering a missing-slot divide-by-zero crash only after switching browsers.
       const summary = summarizeSavePaths(paths);
       if (
         !window.confirm(
-          `导出包内容（共 ${paths.length} 个文件）：\n\n${summary}\n\n` +
-            '请确认包含你实际游玩的槽位。若没有，说明当前浏览器/网址里不存在那些存档' +
-            '（存档在各浏览器自己的 IndexedDB 里），应换到实际玩的那个浏览器重新导出。\n\n是否下载？',
+          t('导出包内容（共 {0} 个文件）：\n\n{1}\n\n', paths.length, summary) +
+            t('请确认包含你实际游玩的槽位。若没有，说明当前浏览器/网址里不存在那些存档') +
+            t('（存档在各浏览器自己的 IndexedDB 里），应换到实际玩的那个浏览器重新导出。\n\n是否下载？'),
         )
       )
         return;
       const date = new Date().toISOString().replace(/[:.]/g, '-');
       const url = URL.createObjectURL(blob);
-      // 浏览器下载 API 的兼容适配：不插入页面，不用于构造或更新普通 UI。
+      // Browser download API adapter: do not attach it to the page or use it to construct/update ordinary UI.
       const link = document.createElement('a');
       link.href = url;
       link.download = `${gameSource.game.id}-save-${date}.ra2-save.json`;
@@ -195,18 +194,24 @@ export function createVmPageToolbarActions(deps: VmPageToolbarActionDeps): Runti
     },
     async onUploadSave(file) {
       const gameSource = getGameSource();
-      if (!gameSource) throw new Error('游戏目录尚未就绪');
+      if (!gameSource) throw new Error(t('游戏目录尚未就绪'));
       const archive = await readSavePackage(file, gameSource.game.id);
       const entryPaths = archive.files.map((entry) => entry.path);
       const summary = summarizeSavePaths(entryPaths);
       const warning = hasPlayerSlotSaves(entryPaths)
         ? ''
-        : '⚠ 此包没有任何槽位 1–9 的存档（只有默认槽位 0 / 进度表）。\n' +
-          '如果你玩过并存过档，这很可能是选错了导出文件（Downloads 里的旧包），' +
-          '或是从没有存档的浏览器导出的——建议取消，回到实际玩的浏览器重新导出。\n\n';
+        : t('⚠ 此包没有任何槽位 1–9 的存档（只有默认槽位 0 / 进度表）。\n') +
+          t('如果你玩过并存过档，这很可能是选错了导出文件（Downloads 里的旧包），') +
+          t('或是从没有存档的浏览器导出的——建议取消，回到实际玩的浏览器重新导出。\n\n');
       if (
         !window.confirm(
-          `${warning}将覆盖 ${archive.files.length} 个存档文件并重新启动游戏：\n\n${summary}\n\n完整清单：\n${entryPaths.join('\n')}\n\n是否继续？`,
+          t(
+            '{0}将覆盖 {1} 个存档文件并重新启动游戏：\n\n{2}\n\n完整清单：\n{3}\n\n是否继续？',
+            warning,
+            archive.files.length,
+            summary,
+            entryPaths.join('\n'),
+          ),
         )
       )
         return false;

@@ -40,7 +40,7 @@ async function serve(status = 200): Promise<string> {
 async function sync(env: Record<string, string> = {}) {
   directory = await mkdtemp(join(tmpdir(), 'ra2-sync-test-'));
   return new Promise<{ code: number | string; output: string }>((resolve) => {
-    // 真实 tsx 子进程覆盖 ESM 导出解析；工作目录隔离，不读写开发者的游戏文件。
+    // A real tsx subprocess covers ESM export resolution; isolate its working directory from the developer's game files.
     execFile(
       process.execPath,
       ['--import', tsx, script, 'ra2'],

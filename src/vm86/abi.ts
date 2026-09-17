@@ -1,10 +1,11 @@
-/** 公共 Win32 x86 ABI：stdcall 的 ret n 清理字节数；cdecl 为 0。
- * 游戏的额外导入由 games/<game>/abi.ts 登记，不能回填到通用门面。
+/**
+ * Common Win32 x86 ABI: stdcall ret n cleanup bytes; cdecl uses 0.
+ * Register game-specific imports in games/<game>/abi.ts, never in the generic facade.
  */
 export const COMMON_WIN32_ABI: Readonly<Record<string, number>> = {
-  // dplayx 序数按真实导出表：ord4 = DirectPlayLobbyCreateA(GUID*, IDirectPlayLobbyA**,
-  // IUnknown*, LPVOID, DWORD) = 5 参数 20 字节（Wine dplayx.spec）。之前按
-  // DirectPlayCreate 记成 12 字节，stub ret 12 会让客体栈错位 8 字节。
+  // dplayx ordinals follow the actual export table: ord4 = DirectPlayLobbyCreateA(GUID*, IDirectPlayLobbyA**,
+  // IUnknown*, LPVOID, DWORD), five arguments and 20 bytes per Wine dplayx.spec. Previously registered as
+  // DirectPlayCreate with 12 bytes, stub ret 12 misaligned the guest stack by 8 bytes.
   'DPLAYX.DLL!ord4': 20,
 
   'KERNEL32.DLL!GetDriveTypeA': 4,
@@ -185,6 +186,6 @@ export const COMMON_WIN32_ABI: Readonly<Record<string, number>> = {
   'WINMM.DLL!mmioAscend': 12,
   'WINMM.DLL!mciSendCommandA': 16,
   'DSOUND.DLL!ord1': 12,
-  // Video for Windows 的 MCIWndCreate 导出为 cdecl；调用点在 call 后自行 add esp, 16。
+  // Video for Windows MCIWndCreate exports use cdecl; call sites perform add esp, 16 themselves.
   'MSVFW32.DLL!MCIWndCreateA': 0,
 };

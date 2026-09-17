@@ -2,7 +2,7 @@ import { OverlayGameFileProvider } from '../resources/providers/overlay';
 import { type GameSource } from './source';
 import { gameResolutionIni } from './resolution';
 
-/** 原版 0 最快、6 最慢；只设置启动默认值，不改时钟，也不覆盖联机房主的速度。 */
+/** Original scale: 0 fastest, 6 slowest. Set only the startup default, without changing clocks or overriding the multiplayer host's speed. */
 export function patchGameSpeedIni(bytes: Uint8Array, speed: number): Uint8Array {
   if (!Number.isInteger(speed) || speed < 0 || speed > 6) throw new Error('游戏速度必须为 0–6 的整数');
   let text = '';
@@ -26,7 +26,7 @@ export function patchGameSpeedIni(bytes: Uint8Array, speed: number): Uint8Array 
       if (section) found.add(section);
     }
     if (section && /^\s*GameSpeed\s*=/i.test(line)) {
-      // 同一节的重复键一并清理，避免原生解析器读到旧默认值。
+      // Remove duplicate keys in the same section so the native parser cannot read old defaults.
       if (!written) result.push(`GameSpeed=${speed}`);
       written = true;
     } else result.push(line);
@@ -39,7 +39,7 @@ export function patchGameSpeedIni(bytes: Uint8Array, speed: number): Uint8Array 
   return Uint8Array.from(result.join(newline), (c) => c.charCodeAt(0));
 }
 
-/** Worker/主线程在创建客体前共用；与分辨率/名字一样仅覆盖本次启动，不修改导入包。 */
+/** Shared by Workers/main thread before guest creation; like resolution/name overrides, affects only this startup and never modifies imported packages. */
 export async function withGameSpeedDefault(source: GameSource): Promise<GameSource> {
   const speed = source.game.defaultGameSpeed;
   if (speed === undefined) return source;

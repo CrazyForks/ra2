@@ -1,44 +1,44 @@
-# React UI 维护边界
+# React UI maintenance boundaries
 
-网页 UI 使用 React + TypeScript；不把原版游戏 UI、VM 或逐帧渲染改写成 React。
+The web UI uses React and TypeScript. The original game UI, VM, and per-frame rendering remain outside React.
 
-## 文件职责
+## File responsibilities
 
-目录按页面划分，见 [UI 目录说明](../src/ui/README.md)。
+The directory is organized by page; see the [UI directory guide](../src/ui/README.md).
 
-- `index.html`：元数据与入口宿主。
-- `src/ui/pages/game/AppShell.tsx`：单一组件树、稳定的 canvas ref、VM 挂载/卸载入口。
-- `src/ui/pages/game/components/`：资源选择、统一 RA2/YR 下载弹窗、地图管理、交流群、工具栏、启动/错误/退出面板和调试面板。
-- `src/ui/pages/game/styles.css`：保留红警客户端外观与响应式规则。
-- `src/ui/pages/game/components/AppRegions.tsx`：各 UI 区域订阅自己的快照；弹窗通过 Portal 留在同一组件树。
-- `src/ui/pages/game/hooks/`：文件选择器与浏览器事件的 effect/ref 接口，卸载时清理监听器和异步请求。
-- `src/ui/pages/game/state/`：游戏页状态；通用 store 和 `useSyncExternalStore` 订阅 hook 在 `src/ui/shared/state/`。
-- `gameSourcePicker.ts`、`runtimeToolbar.ts`、`page.ts`：文件导入、性能采样与 VM 生命周期服务，不渲染组件或修改普通 UI 节点。
+- `index.html`: metadata and entry host.
+- `src/ui/pages/game/AppShell.tsx`: the single component tree, stable canvas ref, and VM mount/unmount entry point.
+- `src/ui/pages/game/components/`: resource selection, shared RA2/YR download dialog, map management, community group, toolbar, startup/error/exit panels, and debug panel.
+- `src/ui/pages/game/styles.css`: the Red Alert client appearance and responsive rules.
+- `src/ui/pages/game/components/AppRegions.tsx`: each UI region subscribes to its own snapshot; dialogs stay within the same component tree through portals.
+- `src/ui/pages/game/hooks/`: effect/ref interfaces for file pickers and browser events; unmount cleans up listeners and asynchronous requests.
+- `src/ui/pages/game/state/`: game-page state; generic stores and the `useSyncExternalStore` subscription hook live in `src/ui/shared/state/`.
+- `gameSourcePicker.ts`, `runtimeToolbar.ts`, and `page.ts`: file import, performance sampling, and VM lifecycle services. They neither render components nor mutate ordinary UI nodes.
+- `src/ui/shared/i18n/`: typed UI messages, browser-language selection, and presentation-boundary translation of existing metadata and diagnostics.
 
-## DOM 所有权与性能
+## Localization
 
-整个应用只有 `main.ts` 创建一个 React 根，不使用 `flushSync`、根注册表或动态 DOM 宿主。
-可见性由条件渲染决定，文字、选中值和折叠样式通过 props/state 输出。
-下载弹窗开关、音量、分辨率下拉、地图编辑草稿等交互状态保留在组件内部；
-跨组件请求与 VM 状态才进入可订阅服务。服务不保存 ReactNode，不接受 HTMLElement 来更新界面。
+The page resolves the first supported language in `navigator.languages` when it opens, falling back to `navigator.language` and then English. English variants use English; Chinese variants use Simplified Chinese. Unsupported entries are skipped when a later preferred language is supported. The document language and title follow this selection. Game-resource language is independent.
 
-组件挂载后从 effect 把 canvas ref 交给 VM 服务。卸载会取消未完成的资源选择请求、
-释放计时器/输入监听器/ResizeObserver，并让旧启动代次失效；迟到结果不能重新启动 VM。
-导入服务接收 File，React 的 onChange 负责交付。原生文件选择器 cancel 暂无 React input 类型支持，
-因此只有这条浏览器兼容监听保留在 hook，和 focus 的 200 ms 取消兜底一起清理。
+Use `t` with typed message keys and numbered interpolation slots for UI text, including accessible names and status messages. Chinese source keys provide the Chinese catalog; `messages.ts` supplies English translations. `localizeLabel` and `localizeText` translate existing game metadata and known runtime diagnostics at the presentation boundary, keeping UI imports out of game, VM, and resource layers. Unknown diagnostic details and filenames are preserved.
 
-外壳节点保持稳定。WebGL、音频、Worker 消息、鼠标合并、触控位移和输入锁仍走独立适配器；
-这些高频链路不经过 React state。工具栏每 500 ms 接收一次计数汇总；调试视图只在开启时更新，间隔至少 200 ms。
-超分 select 与提示也由 React 管理；连续帧相同状态不会触发订阅更新。
-只有 canvas/WebGL、输入锁提示、触控位移等浏览器/高频适配器保留必要的 DOM 操作，
-不要让组件同时控制这些适配器拥有的属性，也不要用 React 重建 canvas 来切换界面。
+The locale stays fixed during a page session. Experimental model Workers receive the owning page's locale in their load message before producing localized results; WorkerNavigator alone is insufficient. Localization introduces no React frame state, extra React roots, or production model loading.
 
-模态框共用原生 `dialog.showModal()`，由浏览器约束焦点和恢复焦点。
-Esc 关闭网页弹窗，不向游戏合成 Esc；导入忙碌时禁止提前关闭。
+## DOM ownership and performance
 
-## 回归入口
+Only `main.ts` creates a React root. Do not use `flushSync`, root registries, or dynamic DOM hosts. Conditional rendering controls visibility; props/state provide text, selected values, and collapsed styles. Interaction state such as download-dialog visibility, volume, resolution selection, and map-edit drafts stays inside components. Only cross-component requests and VM status enter subscribable services. Services neither retain ReactNode values nor accept HTMLElement objects to update the interface.
 
-启动独立开发服务后设置 `RA2_BROWSER_ORIGIN`：
+After mounting, an effect passes the canvas ref to the VM service. Unmount cancels pending resource requests, releases timers/input listeners/ResizeObserver, and invalidates the old startup generation; late results cannot restart the VM. The import service accepts File objects delivered by React's onChange. React input types do not yet support the native file-picker cancel event, so this browser compatibility listener remains in the hook and is cleaned up alongside the 200 ms focus-based cancellation fallback.
+
+Shell nodes remain stable. WebGL, audio, Worker messages, mouse coalescing, touch displacement, and input locks still use independent adapters. These frequent updates do not pass through React state. The toolbar receives aggregate counters every 500 ms; debug views update only while open, at intervals of at least 200 ms. React also owns the upscaling selector and hints; identical status across consecutive frames does not trigger subscriptions.
+
+Only browser or frequent-input adapters such as canvas/WebGL, input-lock hints, and touch displacement retain necessary DOM operations. Components must not also control adapter-owned attributes or recreate the canvas to switch views.
+
+Modals share native `dialog.showModal()`, letting the browser constrain and restore focus. Esc closes web dialogs without synthesizing Esc for the game. Busy imports cannot be dismissed early.
+
+## Regression entry points
+
+Start a separate development server and set `RA2_BROWSER_ORIGIN`:
 
 ```bash
 pnpm run check
@@ -48,18 +48,12 @@ pnpm run test:custom-maps
 pnpm run test:browser:archive-layers
 ```
 
-React 浏览器测试不依赖游戏素材，提交者应本地运行；dev/main PR、push 或手动触发时由 GitHub 工作流执行，覆盖桌面/窄屏下载弹窗、链接属性、Esc/按钮关闭、
-焦点恢复、canvas 稳定、状态切换、取消后迟到文件导入和页面服务销毁。地图导入与触屏由各自真实浏览器测试补充。
-`reactUiArchitecture.test.ts` 强制单根并禁止普通组件/服务重新拼 DOM；
-`uiState.test.ts` 覆盖通知去重、订阅释放、请求取消和过期弹窗回调。
-涉及控制器或生命周期的改动还应使用本地合法素材跑 RA2/YR 联机短局与 ZIP 缓存刷新；
-无素材测试不能替代真实游戏验收，短局不等于公网长局稳定性保证。
+The React browser test needs no game assets and should run locally before submission. GitHub workflows run it for dev/main PRs, pushes, and manual dispatch. It covers English and Chinese at desktop and narrow viewports, unsupported-language fallback, download dialogs, link attributes, Esc/button dismissal, focus restoration, canvas stability, state transitions, late file imports after cancellation, page-service destruction, and model Worker error language. Dedicated browser tests supplement map import and touch coverage.
 
-上述短局测试也不覆盖 4/8 人或公网弱网长局。
+`reactUiArchitecture.test.ts` enforces a single root and prevents ordinary components/services from assembling DOM again. `uiState.test.ts` covers notification deduplication, subscription disposal, request cancellation, and stale dialog callbacks. `i18n.test.ts` covers locale selection, interpolation, diagnostic translation, and catalog consistency.
 
-资源选择器先导入文件或目录，再按玩家侧必需清单检测 RA2/YR。只有一个完整版本时
-直接加载该版本的主程序并启动；两个版本均完整时才显示选择，选择前不加载 EXE。
-归档启动层按两个版本的实际存在文件准备，完整目录用于识别；后台提取不会覆盖
-待选版本的提示。重选或销毁时取消待选 provider。开发入口仅在 dev 显示一个「开发测试」按钮，不折叠；读取共用资源目录后同样识别版本。
+Controller or lifecycle changes also require RA2/YR multiplayer short matches and ZIP cache reload using legally available local assets. Asset-free tests do not replace real-game acceptance; short matches cannot establish public-network long-match stability or complete 4/8-player coverage.
 
-首页背景保持完整外框和原图比例；桌面内容限制在内屏区域并可滚动，窄屏改为背景在上、表单在下。
+The resource picker first imports files or a directory, then detects RA2/YR against player-side required manifests. With only one complete version, it loads that executable and starts directly. With both complete versions, it prompts before loading either executable. Archive startup layers use files actually present for both versions; detection uses the complete directory. Background extraction must not overwrite pending version-selection hints. Reselection or destruction cancels the pending provider. Development builds show one uncollapsed “Development test” button; shared-directory resources use the same detection.
+
+The homepage background retains its complete frame and original aspect ratio. Desktop content stays within the inner screen and can scroll; narrow screens place the background above the form.

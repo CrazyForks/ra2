@@ -1,14 +1,13 @@
 /**
- * 真实在线包端到端冒烟（不进入 CI）：下载显式指定的 RA2 联机安装包
- * （206MB NSIS solid LZMA），解包后用 SHA-256 校验主程序与关键资源。
+ * Real online-package end-to-end smoke test (outside CI): download an explicitly specified RA2 multiplayer installer (206 MB NSIS solid LZMA), extract it, and verify the executable and key assets with SHA-256.
  *
- * 用法：pnpm exec tsx tests/real-game/smoke/ra2NsisSmoke.mts
- * 耗时约 1-2 分钟（下载 + LZMA 解码），内存峰值 ~1.5GB。
+ * Usage: pnpm exec tsx tests/real-game/smoke/ra2NsisSmoke.mts
+ * Takes about 1-2 minutes for download and LZMA decoding, with roughly 1.5 GB peak memory.
  */
 import { loadRemoteGamePackage } from '../../../scripts/resources/gamePackageDownload';
 import { sha256Hex } from '../../../src/utils/sha256';
 
-// 本地预转 ZIP 验证：RA2_PACKAGE_URL=http://localhost:8000/ra2.zip pnpm run test:ra2-nsis
+// Validate a locally preconverted ZIP: RA2_PACKAGE_URL=http://localhost:8000/ra2.zip pnpm run test:ra2-nsis
 const url = process.env.RA2_PACKAGE_URL;
 if (!url) throw new Error('在线包地址已移除，请显式设置 RA2_PACKAGE_URL');
 
@@ -18,7 +17,7 @@ const provider = await loadRemoteGamePackage(url, {
   onStatus: (message) => console.info(`[冒烟] ${message}`),
 });
 
-/** 关键文件及其期望 SHA-256（7-Zip 解包基准；game.exe 为 2011 年中文 1.006 补丁版）。 */
+/** Key files and expected SHA-256 hashes (7-Zip extraction baseline; game.exe is the 2011 Chinese 1.006 patched version). */
 const EXPECTED: Readonly<Record<string, string>> = {
   'game.exe': '06f994965ebde56116d5d53b2e8ffb0c999124166ad99032566cc33d7f83ccdb',
   'ra2.exe': '06f994965ebde56116d5d53b2e8ffb0c999124166ad99032566cc33d7f83ccdb',

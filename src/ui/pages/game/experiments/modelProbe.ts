@@ -1,7 +1,8 @@
+import { t } from '../../../shared/i18n/translate';
 import type { VmFrame } from '../../../../vm86/win32';
 
 export const PROBE_PADDING = 16;
-/** 整帧仅开放已接线的模型，不能把任意探针模型自动升级成实时功能。 */
+/** Enable full-frame processing only for explicitly wired models; arbitrary probe models cannot automatically become live features. */
 export const LIVE_MODEL_IDS = ['ultra4x-fp16', 'nomos2x', 'nomos2x-fp16'] as const;
 export type LiveModelId = (typeof LIVE_MODEL_IDS)[number];
 export function isLiveModelId(id: string): id is LiveModelId {
@@ -11,18 +12,14 @@ export const ULTRASHARP_HASH = 'ba692ad6c7b59bdebbaa9951c9ef5295a6d69e7444f1c468
 export const ULTRASHARP_URL =
   'https://huggingface.co/Kim2091/UltraSharpV2/resolve/2d1db39ff692c111da92112d49f833e4ad7035ae/4x-UltraSharpV2_Lite_fp32_op17.onnx';
 /**
- * 固定发布版本与哈希；倍率属于模型架构，不能仅修改输出显示尺寸。
- * `/.tmp-models/` 两项是开发者本地导出的权重（步骤见 docs/AI_UPSCALING.md），
- * 不入库、不随发布分发：对应的加载与探针入口都由 `import.meta.env.DEV` 门控
- * （见 page.ts 与 RuntimeToolbarView.tsx），生产入口不会请求它们。
- * 仓库内要长期保留的模型必须换成带固定哈希的发布 URL。
+ * Pin releases and hashes; scale belongs to model architecture and cannot be changed by altering output display size alone. The two /.tmp-models/ entries are developer-exported local weights; see docs/AI_UPSCALING.md. They are neither committed nor distributed. Their loading/probe entry points are gated by import.meta.env.DEV in page.ts and RuntimeToolbarView.tsx; production never requests them. Models retained long term must use release URLs with fixed hashes.
  */
 export const PROBE_MODELS = [
   {
     id: 'nomos2x-fp16',
     name: 'NomosUni SPAN 2× FP16',
     scale: 2,
-    license: 'CC BY 4.0 · Phhofm / 本地半精度转换',
+    license: t('CC BY 4.0 · Phhofm / 本地半精度转换'),
     megabytes: '0.84',
     hash: '89dbec0fed7a06a0c70ace8b12a937b8f07d11b69aa996dd1ea20d6b9c90b92b',
     url: '/.tmp-models/nomosuni-span-2x-fp16.onnx',
@@ -31,7 +28,7 @@ export const PROBE_MODELS = [
     id: 'nomos2x',
     name: 'NomosUni SPAN 2×',
     scale: 2,
-    license: 'CC BY 4.0 · Phhofm / 本地 ONNX 导出',
+    license: t('CC BY 4.0 · Phhofm / 本地 ONNX 导出'),
     megabytes: '1.66',
     hash: 'bff599f3192122440c2b946a1a9d881ba4dc978e19a36b7dcc8fad73d70d25c0',
     url: '/.tmp-models/nomosuni-span-2x-fp32.onnx',
@@ -40,7 +37,7 @@ export const PROBE_MODELS = [
     id: 'animesharp2x-soft',
     name: 'AnimeSharpV2 RealPLKSR 2× Soft',
     scale: 2,
-    license: 'CC BY-NC-SA 4.0（非商业）· Kim2091',
+    license: t('CC BY-NC-SA 4.0（非商业）· Kim2091'),
     megabytes: '29.9',
     hash: 'a77ad08fff1f1216f7213f0a1296941806250ab9af9465d41aad96b2a862156f',
     url: 'https://github.com/Kim2091/Kim2091-Models/releases/download/2x-AnimeSharpV2_Set/2x-AnimeSharpV2_RPLKSR_Soft_fp32.onnx',
@@ -49,7 +46,7 @@ export const PROBE_MODELS = [
     id: 'animesharp2x-sharp',
     name: 'AnimeSharpV2 RealPLKSR 2× Sharp',
     scale: 2,
-    license: 'CC BY-NC-SA 4.0（非商业）· Kim2091',
+    license: t('CC BY-NC-SA 4.0（非商业）· Kim2091'),
     megabytes: '29.9',
     hash: '580cf6afc9231a07650ae0ce58ef67b99fc4571a31bd9a3bb9bc3dfcb1e9f322',
     url: 'https://github.com/Kim2091/Kim2091-Models/releases/download/2x-AnimeSharpV2_Set/2x-AnimeSharpV2_RPLKSR_Sharp_fp32.onnx',
@@ -58,14 +55,14 @@ export const PROBE_MODELS = [
     id: 'ultra4x-fp16',
     name: 'UltraSharpV2 Lite 4× FP16',
     scale: 4,
-    license: 'CC BY-NC-SA 4.0（非商业）· Kim2091',
+    license: t('CC BY-NC-SA 4.0（非商业）· Kim2091'),
     megabytes: '15.3',
     hash: 'b368dd0460421c3b3484a9a6855c07670f853abde3e0e5a6bfb72f2d5f8d9c50',
     url: 'https://huggingface.co/Kim2091/UltraSharpV2/resolve/2d1db39ff692c111da92112d49f833e4ad7035ae/4x-UltraSharpV2_Lite_fp16_op17.onnx',
   },
   {
     id: 'apisr2x',
-    name: 'APISR RRDB 原生 2×',
+    name: t('APISR RRDB 原生 2×'),
     scale: 2,
     license: 'GPL-3.0 · APISR / Xenova ONNX',
     megabytes: '18',
@@ -78,7 +75,7 @@ export const PROBE_MODELS = [
     scale: 4,
     hash: ULTRASHARP_HASH,
     url: ULTRASHARP_URL,
-    license: 'CC BY-NC-SA 4.0（非商业）· Kim2091',
+    license: t('CC BY-NC-SA 4.0（非商业）· Kim2091'),
     megabytes: '29.9',
   },
 ] as const;
@@ -88,9 +85,9 @@ export interface ProbeImage {
   height?: number;
 }
 
-/** 同步复制中心小块，绝不把会被 VM 回收的帧缓冲交给异步模型，也不读取 GL framebuffer。 */
+/** Copy a small central patch synchronously; never give recyclable VM frame buffers to async models or read the GL framebuffer. */
 export function captureProbeImage(frame: VmFrame, size: number): ProbeImage {
-  if (!Number.isInteger(size) || size < 32 || size > 256) throw new Error('实验采样边长必须为 32～256');
+  if (!Number.isInteger(size) || size < 32 || size > 256) throw new Error(t('实验采样边长必须为 32～256'));
   const padded = size + PROBE_PADDING * 2;
   const rgba = new Uint8ClampedArray(padded * padded * 4);
   const left = Math.floor((frame.width - padded) / 2),
@@ -121,7 +118,7 @@ export function captureProbeImage(frame: VmFrame, size: number): ProbeImage {
 
 export function probeTensor(image: ProbeImage): Float32Array {
   const count = image.size * (image.height ?? image.size);
-  if (image.rgba.length !== count * 4) throw new Error('采样像素长度错误');
+  if (image.rgba.length !== count * 4) throw new Error(t('采样像素长度错误'));
   const data = new Float32Array(count * 3);
   for (let i = 0; i < count; i++) for (let c = 0; c < 3; c++) data[c * count + i] = image.rgba[i * 4 + c]! / 255;
   return data;
@@ -153,13 +150,13 @@ export function probeFrameOutput(
     dims[3] !== size ||
     data.length !== count * 3
   ) {
-    throw new Error(`模型输出不是预期的 ${scale}× RGB：${dims.join('×')}`);
+    throw new Error(t('模型输出不是预期的 {0}× RGB：{1}', scale, dims.join('×')));
   }
   const rgba = new Uint8ClampedArray(count * 4);
   for (let i = 0; i < count; i++) {
     for (let c = 0; c < 3; c++) {
       const value = data[c * count + i]!;
-      if (!Number.isFinite(value)) throw new Error('模型输出包含 NaN/Infinity');
+      if (!Number.isFinite(value)) throw new Error(t('模型输出包含 NaN/Infinity'));
       rgba[i * 4 + c] = Math.round(Math.max(0, Math.min(1, value)) * 255);
     }
     rgba[i * 4 + 3] = 255;

@@ -22,14 +22,14 @@ const OWNER_DRAW_ACTIVE = 0x0006_0090;
 
 export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
   return class extends Base {
-    /** 自底向上的 HWND z-order；窗口创建、ShowWindow 与 SetWindowPos 共同维护。 */
+    /** Bottom-to-top HWND Z-order maintained by creation, ShowWindow, and SetWindowPos. */
     protected readonly windowZOrder: number[] = [];
-    /** 当前参与 shell 绘制和输入的全屏对话框页面。页面对象仍保留，便于返回时恢复。 */
+    /** Fullscreen dialog page currently receiving shell drawing/input; retain page objects for restoration on return. */
     protected activeShellPage = 0;
     protected readonly ownerDrawDcs = new Map<number, number>();
-    /** 客体 WM_PAINT 回调返回后再验证更新区。 */
+    /** Validate update regions only after guest WM_PAINT callbacks return. */
     protected readonly pendingPaintValidations = new Set<number>();
-    /** 区分更新区产生的绘制请求和程序主动投递的 WM_PAINT。 */
+    /** Distinguish update-region paint requests from explicitly posted WM_PAINT messages. */
     protected readonly generatedPaintMessages = new WeakSet<MessageState>();
     protected readonly dialogFonts = new Map<number, VmGdiFont>();
     protected readonly windowClassStyles = new Map<string, number>();
@@ -58,7 +58,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
         height: Math.max(0, call.args[7] | 0),
       });
       if ((style & 0x40000000) !== 0) {
-        // WS_CHILD：hMenu 参数是 control id
+        // For WS_CHILD, hMenu is the control ID.
         const id = call.args[9] ?? 0;
         this.controlIds.set(hwnd, id);
         this.windowLongs.set(`${hwnd}:-12`, id); // GWL_ID
@@ -79,9 +79,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
     }
 
     /**
-     * CreateWindowExA 在返回前同步投递 WM_CREATE。CREATESTRUCTA 放在
-     * 当前 callback slot 尾部，回调及其嵌套 API 期间保持有效，
-     * 又不会污染客体堆。
+     * CreateWindowExA synchronously sends WM_CREATE before returning. Store CREATESTRUCTA at the current callback-slot tail so it remains valid through nested APIs without consuming guest heap space.
      */
     protected beginCustomWindowCreation(call: Win32Call, hwnd: number, args: number[]): Win32Result {
       const frame = this.reserveGuestCallback();
@@ -111,16 +109,14 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       ); // WM_CREATE
     }
     protected createMciWindow(call: Win32Call): number {
-      // MCIWndCreateA 是 cdecl：IAT stub 不能弹参数，但四个参数仍紧跟在返回地址后。
+      // MCIWndCreateA uses cdecl: the IAT stub must not pop arguments, but all four still follow the return address.
       const parent = this.readU32(call.stack + 4) || this.primaryWindow;
       const hwnd = this.nextWindow++;
       this.mciWindows.set(hwnd, { parent, playing: false });
       return hwnd;
     }
     /**
-     * 真实 DestroyWindow 会同步向 WndProc 投递 WM_DESTROY，原版 WndProc 在
-     * 该分支调 PostQuitMessage 结束主消息泵——这是菜单「结束游戏」退出链的
-     * 关键一环。走与 SendMessageA 相同的跳板：WndProc 返回后窗口才移除。
+     * Real DestroyWindow synchronously sends WM_DESTROY to WndProc, whose PostQuitMessage ends the main pump. This is essential to native End Game exit. Use the SendMessageA trampoline and remove windows only after WndProc returns.
      */
     protected destroyWindow(call: Win32Call, hwnd: number): void {
       if (!this.windows.has(hwnd) || this.pendingWindowDestroys.has(hwnd)) return;
@@ -133,7 +129,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       this.finalizeWindowDestroy(hwnd);
     }
 
-    /** 等本次 WM_DESTROY 的回调槽释放即可回收，外层模态菜单可能一直不退出。 */
+    /** Reclaim after this WM_DESTROY callback slot is released; outer modal menus may remain active indefinitely. */
     protected flushDestroyedWindows(): void {
       for (const [hwnd, ownerAddress] of this.pendingWindowDestroys) {
         if (this.readU32(ownerAddress) !== 0) continue;
@@ -145,11 +141,11 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
     protected finalizeWindowDestroy(hwnd: number): void {
       if (!this.windows.has(hwnd)) return;
       const exposedParent = this.windowParents.get(hwnd) ?? 0;
-      // 窗口销毁后若它正是 primaryWindow（host 鼠标消息的默认目标），
-      // 必须清空，否则鼠标发到已销毁的窗口、游戏永远收不到。
-      // Win32 会先销毁全部 child。RA2 的页面切换只 DestroyWindow(dialog)，
-      // 不会逐个销毁模板控件；若留下子 HWND，旧菜单按钮/标题会继续被自绘，
-      // 与新 Skirmish 页面叠在一起。按后序收集整个子树并一次性清理。
+      // Clear primaryWindow when destroying its window, since it is the default host-mouse target;
+      // otherwise messages go to a destroyed HWND and never reach the game.
+      // Win32 destroys all children first. RA2 page changes call only DestroyWindow(dialog),
+      // not each template control; leftover child HWNDs keep drawing old buttons/titles
+      // over the new skirmish page. Collect the whole subtree in postorder and clean it together.
       const doomed = new Set<number>([hwnd]);
       let changed = true;
       while (changed) {
@@ -181,8 +177,8 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
         if (doomed.has(owner)) this.timers.delete(key);
       }
       if (shellPageAffected) this.synchronizeShellPage();
-      // 销毁子窗口会暴露父客户区；父 WndProc 必须得到 WM_PAINT 来清除旧页面
-      // 已经写进 DirectDraw 前台面的按钮/标题像素。
+      // Destroying children exposes the parent client area; send parent WM_PAINT to erase old-page
+      // button/title pixels already written into the DirectDraw front surface.
       if (exposedParent && !doomed.has(exposedParent)) this.invalidateWindow(exposedParent);
     }
 
@@ -208,7 +204,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       );
     }
 
-    /** 只让页面根和直接标题控件触发全量 shell 页同步；普通子控件的显隐/改字不应扫描整棵窗口树。 */
+    /** Only page roots and direct title controls trigger full shell-page synchronization; ordinary child visibility/text changes must not scan the entire window tree. */
     protected shellPageSyncTarget(hwnd: number): number {
       const titleControlId = this.gameProfile.shell?.titleControlId;
       if (titleControlId === undefined || !hwnd || !this.windows.has(hwnd)) return 0;
@@ -294,7 +290,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
         if ((this as unknown as User32MessageLoopBridge).isWindowInTree(this.pressedButton, previousPage))
           this.pressedButton = 0;
         if (previousPage) {
-          // 标题控件可能先被单独销毁，使旧页不再满足 isShellPage；这里不能只依赖下面的身份扫描。
+          // A title control may be destroyed first, invalidating isShellPage for the old page; do not rely only on the identity scan below.
           this.clearWindowTreeInvalidation(previousPage);
         }
         for (const candidate of this.windowZOrder) {
@@ -308,7 +304,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       if (nextPage && previousPage !== nextPage) this.invalidateWindowTree(nextPage);
     }
 
-    /** shell 页关闭后恢复下一层仍可见页面的标题，而不是把全局状态直接清空。 */
+    /** After closing a shell page, restore the next visible page's title instead of clearing global state outright. */
     protected restoreShellPageTitle(): void {
       const titleControlId = this.gameProfile.shell?.titleControlId;
       if (titleControlId === undefined || !this.activeShellPage) {
@@ -355,10 +351,10 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       for (const key of [...this.windowLongs.keys()]) {
         if (key.startsWith(`${hwnd}:`)) this.windowLongs.delete(key);
       }
-      this.syncWindowToGuest(hwnd); // 全部删除后同步，valid 标志清零
+      this.syncWindowToGuest(hwnd); // Synchronize after all removals, clearing valid flags.
     }
 
-    /** DLGTEMPLATE/DLGTEMPLATEEX 以 dialog units 保存几何；base units 来自模板字体。 */
+    /** DLGTEMPLATE/DLGTEMPLATEEX geometry uses dialog units derived from the template font's base units. */
     protected dialogUnitRect(template: number, item: number): { x: number; y: number; width: number; height: number } {
       const extended = this.readU16(template) === 1 && this.readU16(template + 2) === 0xffff;
       const offset = item ? item : template + (extended ? 18 : 10);
@@ -379,7 +375,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
     protected dialogBaseUnits(template: number): { x: number; y: number } {
       const extended = this.readU16(template) === 1 && this.readU16(template + 2) === 0xffff;
       const style = this.readU32(template + (extended ? 12 : 0));
-      if ((style & 0x40) === 0) return { x: 6, y: 13 }; // 系统对话框字体
+      if ((style & 0x40) === 0) return { x: 6, y: 13 }; // System dialog font.
       const skip = (address: number): number => {
         const first = this.readU16(address);
         if (!first) return address + 2;
@@ -393,9 +389,9 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       cursor = skip(cursor); // title
       const pointSize = this.readU16(cursor);
       const nominalHeight = Math.max(1, Math.round((pointSize * 96) / 72));
-      // MapDialogRect 使用未裁边的 TEXTMETRIC，而光栅器返回的是裁边后的实际字形。
-      // 用后者会让 dialog unit 随字体调谐/具体字符变化，导致菜单位置和尺寸漂移。
-      // Win9x 对话框字体的行高包含约 1/6 external leading，平均字宽约行高的 6/13。
+      // MapDialogRect uses uncropped TEXTMETRIC, while the rasterizer returns cropped actual glyphs.
+      // Using cropped metrics makes dialog units vary with font tuning/characters, shifting menu geometry.
+      // Win9x dialog line height includes about 1/6 external leading; average character width is about 6/13 of line height.
       const y = nominalHeight + Math.max(1, Math.round(nominalHeight / 6));
       return { x: Math.max(1, Math.round((y * 6) / 13)), y };
     }
@@ -414,7 +410,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       this.syncWindowToGuest(hwnd);
     }
 
-    /** CreateDialogIndirectParam 在 API 返回前同步调用 dialog proc(WM_INITDIALOG)。 */
+    /** CreateDialogIndirectParam synchronously invokes dialog proc(WM_INITDIALOG) before returning. */
     protected beginDialogInitialization(call: Win32Call, hwnd: number, callback: number, initParam: number): void {
       const originalReturn = this.readU32(call.stack);
       const frame = this.reserveGuestCallback();
@@ -445,13 +441,13 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       code.push(0xff, 0xd0); // call eax
       code.push(0x89, 0xec, 0x5d); // mov esp, ebp; pop ebp
       code.push(0xb8);
-      emit32(hwnd); // CreateDialogIndirectParamA 返回 HWND
+      emit32(hwnd); // CreateDialogIndirectParamA returns HWND.
       this.appendGuestCallbackReturn(code, frame, originalReturn);
       this.memory.write_memory(code, trampoline);
       this.writeU32(call.stack, trampoline);
     }
 
-    /** 从标准 DLGTEMPLATE 或 DLGTEMPLATEEX 建立原生子控件 HWND/ID 映射。 */
+    /** Build native child HWND/ID mappings from standard DLGTEMPLATE or DLGTEMPLATEEX. */
     protected createDialogChildren(template: number, parent: number): void {
       if (!template) return;
       const extended = this.readU16(template) === 1 && this.readU16(template + 2) === 0xffff;
@@ -567,7 +563,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
           x += rect.x;
           y += rect.y;
         }
-        hwnd = this.windowParents.get(hwnd) ?? 0;
+        hwnd = this.windowCoordinateParent(hwnd);
       }
       return { x, y };
     }
@@ -585,17 +581,14 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
     }
 
     /**
-     * 对 CBS_DROPDOWN/CBS_DROPDOWNLIST，创建参数里的 cy 是展开后的总高度；
-     * 实际 HWND 的常驻矩形只有选择框高度。系统把完整高度留给下拉列表，
-     * CB_GETDROPPEDCONTROLRECT 才返回它。把两者混成一个 121px 高窗口会让
-     * RA2 的自绘选中项沿整块列表错误定位，并覆盖下面数行 UI。
+     * For CBS_DROPDOWN/CBS_DROPDOWNLIST, creation cy is total expanded height, but the persistent HWND rectangle is only the selection box. Preserve full height for CB_GETDROPPEDCONTROLRECT. Treating both as one 121px window mispositions RA2 owner-drawn selections across the list and overwrites several UI rows below.
      */
     protected initializeComboState(hwnd: number) {
       const existing = this.comboStates.get(hwnd);
       if (existing) return existing;
       const rect = this.windowRects.get(hwnd) ?? { x: 0, y: 0, width: 0, height: 0 };
       const style = this.windowLongs.get(`${hwnd}:-16`) ?? 0;
-      const dropdown = (style & 0x3) !== 0x1; // CBS_SIMPLE 保持列表常显
+      const dropdown = (style & 0x3) !== 0x1; // CBS_SIMPLE keeps its list permanently visible.
       const fontHeight = Math.abs(this.dialogFontForWindow(hwnd)?.height ?? -11);
       const itemHeight = Math.max(1, fontHeight + 5);
       const closedHeight = itemHeight + 4;
@@ -615,11 +608,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
     }
 
     /**
-     * Dropdown ComboBox 同时有两个高度：闭合时的选择框与
-     * CB_GETDROPPEDCONTROLRECT 返回的展开区。布局器常先用完整高度
-     * 建立/移动控件，再用闭合高度对齐单行；后一次不能把已保存
-     * 的 drop extent 缩成一行，否则无显式 max-row 的 owner-draw 弹层
-     * 只能显示第一项。
+     * Dropdown ComboBoxes have separate closed selection-box height and expanded CB_GETDROPPEDCONTROLRECT extent. Layout often creates/moves at full height, then aligns using closed height. The latter must not shrink the saved dropdown extent to one row, or owner-drawn popups without explicit max-row show only the first item.
      */
     protected resizeComboHeight(hwnd: number, requestedHeight: number): number {
       if (this.windowClassNames.get(hwnd)?.toLowerCase() !== 'combobox') return requestedHeight;
@@ -632,8 +621,22 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       return closedHeight;
     }
 
-    /** 下拉列表画在 primary 的临时区域；收起时恢复为透明色，让静态 shell
-     * 背景重新显露。只重画闭合框会遗留选中行，表现为高亮反转。 */
+    /** RA2 的 owner-draw 下拉列表只把右侧三角作为展开按钮；文字区由 Gadget 保持静态。 */
+    protected isComboDropButtonHit(hwnd: number, lParam: number): boolean {
+      const shell = this.gameProfile.shell;
+      const style = this.windowLongs.get(`${hwnd}:-16`) ?? 0;
+      if (!shell?.initializeComboDropWindow || (style & 0x3) !== 0x3) return true;
+      const rect = this.windowRects.get(hwnd);
+      if (!rect || rect.width <= 0 || rect.height <= 0) return false;
+      const x = (lParam << 16) >> 16;
+      const y = lParam >> 16;
+      // 资源中的三角按钮宽度约为框宽的 1/6；限制在 16..24px，适配 800×600 UI。
+      const buttonWidth = Math.max(16, Math.min(24, Math.ceil(rect.width / 6)));
+      return x >= rect.width - buttonWidth && x < rect.width && y >= 0 && y < rect.height;
+    }
+
+    /** 下拉列表画在 primary 的临时区域；收起时从当前 shell 背景层恢复这块区域。
+     * RGB565 的 0 在当前最终帧路径里是实际黑色，不能再把它当作透明色写回 primary。 */
     protected setComboDropped(hwnd: number, dropped: boolean): void {
       const combo = this.initializeComboState(hwnd);
       if (combo.dropped === dropped) return;
@@ -644,16 +647,12 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
         const rect = this.windowRects.get(hwnd);
         if (surface?.bpp === 16 && rect && combo.droppedHeight > rect.height) {
           const origin = this.screenOrigin(hwnd);
-          this.fillShellRect(
-            surface,
-            [
-              origin.x,
-              origin.y + rect.height,
-              origin.x + Math.max(rect.width, combo.droppedWidth),
-              origin.y + combo.droppedHeight,
-            ],
-            0,
-          );
+          this.restoreShellRectFromBackground(surface, [
+            origin.x,
+            origin.y + rect.height,
+            origin.x + Math.max(rect.width, combo.droppedWidth),
+            origin.y + combo.droppedHeight,
+          ]);
           surface.dirty = true;
           this.emitPrimaryFrame();
         }
@@ -662,7 +661,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
     }
 
     protected invalidateWindow(hwnd: number): void {
-      // 隐藏窗口及其子树不产生系统绘制消息；显示时由 invalidateWindowTree 重绘。
+      // Hidden windows/subtrees generate no system paint messages; invalidateWindowTree repaints when shown.
       if (!this.isWindowVisible(hwnd)) return;
       // DirectDraw owner-draw procedures do not call BeginPaint. If they
       // invalidate themselves while the current WM_PAINT callback is still on
@@ -672,11 +671,12 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       const paintInProgress = this.pendingPaintValidations.delete(hwnd);
       if (this.invalidatedWindows.has(hwnd) && !paintInProgress) return;
       this.invalidatedWindows.add(hwnd);
-      (this as unknown as User32MessageLoopBridge).queueMessage(0x000f, 0, 0, hwnd, true); // WM_PAINT（同一 HWND 合并）
+      (this as unknown as User32MessageLoopBridge).queueMessage(0x000f, 0, 0, hwnd, true); // WM_PAINT coalesces per HWND.
     }
 
-    /** 同步绘制可能先于消息泵完成。验证更新区时取消尚未取出的系统绘制请求，
-     * 否则旧 WM_PAINT 会再次擦背景，但 GetUpdateRect 已为空，文字不会重画。 */
+    /**
+     * Synchronous painting may finish before message pumping. On update-region validation, cancel unconsumed system paint requests or stale WM_PAINT erases the background again while empty GetUpdateRect prevents text repainting.
+     */
     protected validateWindow(hwnd: number): void {
       this.invalidatedWindows.delete(hwnd);
       this.pendingPaintValidations.delete(hwnd);
@@ -686,8 +686,9 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       }
     }
 
-    /** SendMessage/DispatchMessage 通过客体跳板执行回调；host 返回时还未完成绘制。
-     * 保留更新区直到回调退出，供绘制期间的 GetUpdateRect 查询。 */
+    /**
+     * SendMessage/DispatchMessage execute callbacks through guest trampolines; painting is unfinished when the host returns. Retain update regions until callback exit for GetUpdateRect during painting.
+     */
     protected flushPendingPaintValidations(): void {
       if (!this.pendingPaintValidations.size || this.readU32(HYPERCALL_CALLBACK_DEPTH) !== 0) return;
       for (const hwnd of this.pendingPaintValidations) this.validateWindow(hwnd);
@@ -709,8 +710,8 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
         cleared.add(hwnd);
         this.invalidatedWindows.delete(hwnd);
       }
-      // 隐藏状态下排入的 WM_PAINT 已失去对应更新区。若只清 Set、不清消息，
-      // 页面重新显示后会先执行旧 paint，新的 invalidation 又可能被错误合并。
+      // WM_PAINT queued while hidden no longer has its update region. Clearing only the Set, not messages,
+      // runs stale paint after showing and may incorrectly coalesce new invalidations.
       for (let index = this.messages.length - 1; index >= 0; index--) {
         const message = this.messages[index]!;
         if (message.message === 0x000f && cleared.has(message.hwnd)) this.messages.splice(index, 1);
@@ -726,7 +727,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       if (redraw) this.invalidateWindow(this.windowParents.get(hwnd) ?? 0);
     }
 
-    /** 丢弃失活页残留的 WM_PAINT；队列中的旧消息也会在此统一兜底。 */
+    /** Discard WM_PAINT left from inactive pages; also handle stale queued messages here. */
     protected discardInactivePaint(hwnd: number): boolean {
       if (this.isActiveShellWindow(hwnd)) return false;
       this.invalidatedWindows.delete(hwnd);
@@ -753,8 +754,9 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       return written;
     }
 
-    /** 原版子类通过旧系统过程读取模板文字；系统 Button 松键时则向父
-     * dialog 产生 BN_CLICKED/WM_COMMAND。 */
+    /**
+     * Native subclasses read template text through old system procedures; system Buttons send BN_CLICKED/WM_COMMAND to parent dialogs on release.
+     */
     protected activateButton(hwnd: number): void {
       const style = this.windowLongs.get(`${hwnd}:-16`) ?? 0;
       const type = style & 0x0f;
@@ -830,9 +832,9 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
           if (primary) primary.dirty = true;
           this.emitPrimaryFrame();
         }
-        // 标准控件只维护 Win32 状态；RA2/YR shell 的可见外观由游戏自己的
-        // DirectDraw/owner-draw 路径决定。不能按对话框模板额外合成边框，模板
-        // 会常驻八套 Skirmish 槽位，而地图实际人数由游戏绘制逻辑裁剪。
+        // Standard controls maintain only Win32 state; the game's DirectDraw/owner-draw code determines
+        // visible RA2/YR shell appearance. Do not synthesize template borders: templates retain
+        // eight skirmish slots, while game drawing clips them to the map's actual player count.
         this.invalidatedWindows.delete(hwnd);
         return 0;
       }
@@ -874,11 +876,11 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
             clampPos();
             return 0;
           case 0x0414:
-            return 1; // TBM_SETLINESIZE（返回旧值）
+            return 1; // TBM_SETLINESIZE returns the old value.
           case 0x0415:
             return 1; // TBM_GETLINESIZE
           case 0x0416:
-            return 10; // TBM_SETPAGESIZE（返回旧值）
+            return 10; // TBM_SETPAGESIZE returns the old value.
           case 0x0417:
             return 10; // TBM_GETPAGESIZE
           case 0x041b:
@@ -901,7 +903,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
           case 0x00f3:
             return 0; // BM_SETSTATE
           case 0x00f5:
-            return 0; // BM_CLICK（客体页面通过 WM_COMMAND 处理真实点击）
+            return 0; // BM_CLICK: guest pages handle actual clicks through WM_COMMAND.
           default:
             break;
         }
@@ -989,7 +991,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
         const selectedText = () => items[selection()]?.text ?? '';
         switch (message) {
           case 0x000d: {
-            // WM_GETTEXT: dropdown-list 返回当前选中项文字
+            // WM_GETTEXT: dropdown lists return selected-item text.
             if (!lParam || wParam <= 0) return 0;
             const text = selectedText();
             const written = Math.min(text.length, wParam - 1);
@@ -1051,7 +1053,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
             items[wParam]!.data = lParam >>> 0;
             return 0;
           case 0x0152: {
-            // CB_GETDROPPEDCONTROLRECT（屏幕坐标，含展开列表）
+            // CB_GETDROPPEDCONTROLRECT uses screen coordinates and includes the expanded list.
             if (!lParam) return 0;
             const rect = this.screenRect(hwnd);
             const width = Math.max(rect.width, combo.droppedWidth);
@@ -1059,7 +1061,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
             return 1;
           }
           case 0x0153: {
-            // CB_SETITEMHEIGHT；-1 表示选择框高度
+            // CB_SETITEMHEIGHT: -1 denotes selection-box height.
             const height = lParam & 0xffff;
             if (height <= 0 || height > 0x7fff) return -1; // CB_ERR
             if ((wParam | 0) === -1) {
@@ -1086,7 +1088,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
           case 0x015f:
             return combo.droppedWidth; // CB_GETDROPPEDWIDTH
           case 0x0160: {
-            // CB_SETDROPPEDWIDTH（返回最终宽度）
+            // CB_SETDROPPEDWIDTH returns the final width.
             combo.droppedWidth = Math.max(this.windowRects.get(hwnd)?.width ?? 0, wParam | 0);
             return combo.droppedWidth;
           }
@@ -1103,7 +1105,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
         const selection = () => this.controlSelections.get(hwnd) ?? -1;
         switch (message) {
           case 0x000f:
-            return 0; // 可见外观由游戏的 owner-draw/DirectDraw 负责
+            return 0; // The game's owner-draw/DirectDraw path owns visible appearance.
           case 0x0180: // LB_ADDSTRING
             items.push({ text: lParam ? this.readCString(lParam) : '', data: 0 });
             this.invalidateWindow(hwnd);
@@ -1149,7 +1151,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
             if (!item || !lParam) return -1;
             const rect = this.windowRects.get(hwnd);
             const height = this.controlItemHeights.get(hwnd) ?? 16;
-            // 条目矩形随滚动偏移：可见行从客户区顶部开始，顶部序号之上为负。
+            // Item rectangles follow scroll offset: visible rows start at client top, with negative positions before the top index.
             const top = this.listboxTopIndices.get(hwnd) ?? 0;
             const y = (wParam - top) * height;
             this.writeRect(lParam, 0, y, rect?.width ?? 0, y + height);
@@ -1166,12 +1168,12 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
             return items[wParam]?.text.length ?? -1; // LB_GETTEXTLEN
           case 0x018b:
             return items.length; // LB_GETCOUNT
-          case 0x018e: // LB_GETTOPINDEX（条目删减后顶部序号收敛到有效范围）
+          case 0x018e: // LB_GETTOPINDEX clamps the top index after items are removed.
             return Math.min(this.listboxTopIndices.get(hwnd) ?? 0, Math.max(0, items.length - 1));
           case 0x0197: {
             // LB_SETTOPINDEX
             const index = wParam | 0;
-            // 允许顶部停在最后一项；超出返回 LB_ERR 而不改状态。
+            // Allow the last item at the top; return LB_ERR for out-of-range requests without changing state.
             if (index < 0 || index >= items.length) return -1;
             if ((this.listboxTopIndices.get(hwnd) ?? 0) !== index) {
               this.listboxTopIndices.set(hwnd, index);
@@ -1180,7 +1182,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
             return 0;
           }
           case 0x01a7: {
-            // LB_SETCOUNT（owner-draw 列表只声明条数，无字符串）
+            // LB_SETCOUNT: owner-drawn lists declare item counts without strings.
             if (wParam < 0) return -1;
             items.length = wParam;
             for (let i = 0; i < items.length; i++) items[i] ??= { text: '', data: 0 };
@@ -1250,8 +1252,8 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
         const owner = siblingOwner || parent;
         const notifyScroll = (code: number, pos = state.pos) => {
           if (siblingOwner && code !== 8) {
-            // Westwood 的列表在 WM_VSCROLL 中读取 SBM_GETPOS，再用该值更新
-            // LB_SETTOPINDEX/弹层顶部；先提交位置，否则通知虽到达却永远读到旧值。
+            // Westwood lists read SBM_GETPOS during WM_VSCROLL, then update
+            // LB_SETTOPINDEX/popup top. Commit position first or delivered notifications keep reading stale values.
             const ownerRect = this.windowRects.get(owner)!;
             const ownerClass = this.windowClassNames.get(owner)?.toLowerCase();
             const combo =
@@ -1352,9 +1354,9 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
         return { eax: 0 };
       }
 
-      // 原生 Edit/ComboBox/ListBox 鼠标按下都会取得键盘焦点。
-      // RA2 的 NewEdit 控件物理窗口类名就是 ListBox；若漏掉它，
-      // 后续 WM_CHAR 会被送回 dialog，玩家名看起来完全不可编辑。
+      // Native Edit/ComboBox/ListBox controls gain keyboard focus on mouse down.
+      // RA2 NewEdit uses physical class name ListBox; omitting it sends subsequent
+      // WM_CHAR back to the dialog, making player names appear uneditable.
       if (message === 0x0201 && (className === 'edit' || className === 'combobox' || className === 'listbox')) {
         this.focusWindow = hwnd;
       }
@@ -1391,15 +1393,15 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
             next = maxTop;
             break; // SB_BOTTOM
           default:
-            return { eax: 0 }; // SB_ENDSCROLL 等无需改状态
+            return { eax: 0 }; // SB_ENDSCROLL and similar notifications need no state change.
         }
         next = Math.max(0, Math.min(maxTop, next));
         if (next !== top) {
           this.listboxTopIndices.set(hwnd, next);
           this.invalidateWindow(hwnd);
         }
-        // 真实 USER32 会把 WM_VSCROLL 转发给父窗口（LBS_NOTIFY 列表）；
-        // 转发时 lParam 携带列表窗口句柄。
+        // Real USER32 forwards WM_VSCROLL to the parent for LBS_NOTIFY lists,
+        // with the list HWND in lParam.
         if (parent && ((this.windowLongs.get(`${hwnd}:-16`) ?? 0) & 1) !== 0) {
           return (this as unknown as User32MessageLoopBridge).sendMessage(call, [parent, 0x0115, wParam >>> 0, hwnd]);
         }
@@ -1410,14 +1412,14 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
         const items = this.controlItems.get(hwnd) ?? [];
         const maxTop = Math.max(0, items.length - 1);
         const top = this.listboxTopIndices.get(hwnd) ?? 0;
-        // 每格滚 3 行（WHEEL_DELTA=120）；负数向下滚。
+        // Scroll three rows per WHEEL_DELTA=120 notch; negative values scroll downward.
         const delta = Math.trunc((((wParam >> 16) << 16) >> 16) / 120) * 3;
         const next = Math.max(0, Math.min(maxTop, top - delta));
         if (next !== top) {
           this.listboxTopIndices.set(hwnd, next);
           this.invalidateWindow(hwnd);
         }
-        // USER32 对未消费的滚轮消息转发给父窗口。
+        // USER32 forwards unconsumed wheel messages to the parent.
         if (parent) {
           return (this as unknown as User32MessageLoopBridge).sendMessage(call, [
             parent,
@@ -1454,7 +1456,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
             this.invalidateWindow(hwnd);
             return notify(1); // CBN_SELCHANGE
           }
-        } else if (clientY < selectionTop) {
+        } else if (clientY < selectionTop && this.isComboDropButtonHit(hwnd, lParam)) {
           const dropped = !combo.dropped;
           this.setComboDropped(hwnd, dropped);
           this.focusWindow = hwnd;
@@ -1464,8 +1466,8 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
         this.invalidateWindow(hwnd);
         return { eax: 0 };
       }
-      // ListBox 在按下时选中；自定义过程可能已处理按下、只转发抬起。
-      // 在抬起时再改选择并通知父窗口，会重复进入列表重建流程。
+      // ListBox selects on down; custom procedures may handle down and forward only up.
+      // Changing selection and notifying again on up would reenter list reconstruction twice.
       if (className === 'listbox' && message === 0x0201) {
         const items = this.controlItems.get(hwnd) ?? [];
         const index = Math.floor((lParam >> 16) / (this.controlItemHeights.get(hwnd) ?? 16));
@@ -1519,7 +1521,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       return false;
     }
 
-    /** 内置 owner-draw 控件由默认过程向父窗口同步发送 WM_DRAWITEM。 */
+    /** Default procedures synchronously send WM_DRAWITEM to parents for built-in owner-drawn controls. */
     protected beginOwnerDraw(call: Win32Call, hwnd: number): boolean {
       if (this.readU32(OWNER_DRAW_ACTIVE) || !this.isActiveShellWindow(hwnd)) return false;
       const parent = this.windowParents.get(hwnd) ?? 0;
@@ -1576,7 +1578,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
         emit32(callback);
         code.push(0xff, 0xd0, 0x89, 0xec);
       });
-      code.push(0x31, 0xc0); // 默认过程返回 0
+      code.push(0x31, 0xc0); // Default procedure returns 0.
       code.push(0x89, 0xec, 0x5d);
       code.push(0xc7, 0x05);
       emit32(OWNER_DRAW_ACTIVE);
@@ -1585,8 +1587,8 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       if (trampoline + code.length > structs) {
         throw new Error(`WM_DRAWITEM 桥超出槽位: code=${code.length} entries=${entries.length}`);
       }
-      // 先验证代码和 DRAWITEMSTRUCT 总大小，再写客体内存；超大列表的
-      // structs 起点可能已落入前一个活动槽，不能写完后才检查边界。
+      // Validate combined code and DRAWITEMSTRUCT sizes before writing guest memory; huge lists
+      // may place structs inside a preceding active slot, so post-write bounds checks are too late.
       entries.forEach((entry, index) => {
         const pointer = structs + index * 48;
         this.writeU32(pointer, controlType);
@@ -1605,24 +1607,38 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       return true;
     }
 
-    protected fillShellRect(surface: SurfaceState, rect: [number, number, number, number], color: number): void {
+    /** 从当前 shell 的静态全屏 surface 恢复一个被临时下拉层覆盖的区域。 */
+    protected restoreShellRectFromBackground(surface: SurfaceState, rect: [number, number, number, number]): boolean {
       const left = Math.max(0, rect[0]);
       const top = Math.max(0, rect[1]);
       const right = Math.min(surface.width, rect[2]);
       const bottom = Math.min(surface.height, rect[3]);
-      if (surface.bpp !== 16 || right <= left || bottom <= top) return;
-      const row = new Uint8Array((right - left) * 2);
-      for (let offset = 0; offset < row.length; offset += 2) {
-        row[offset] = color & 0xff;
-        row[offset + 1] = color >>> 8;
-      }
+      if (surface.bpp !== 16 || right <= left || bottom <= top) return false;
+      const background = [...this.surfaces.values()]
+        .filter(
+          (candidate) =>
+            candidate.object !== surface.object &&
+            candidate.bpp === 16 &&
+            candidate.width === surface.width &&
+            candidate.height === surface.height &&
+            candidate.caps === 0,
+        )
+        .sort((leftSurface, rightSurface) => rightSurface.lastDrawSerial - leftSurface.lastDrawSerial)[0];
+      if (!background) return false;
+      const pixels = this.memory.read_memory(background.pixels, background.pitch * background.height);
+      const rowBytes = (right - left) * 2;
       for (let y = top; y < bottom; y++) {
-        this.memory.write_memory(row, surface.pixels + y * surface.pitch + left * 2);
+        const source = y * background.pitch + left * 2;
+        this.memory.write_memory(
+          pixels.subarray(source, source + rowBytes),
+          surface.pixels + y * surface.pitch + left * 2,
+        );
       }
+      return true;
     }
 
     protected requiresRgbaComposite(): boolean {
-      // 菜单继续使用现有合成，尤其不能因 GPU 直传而吞掉国家/地图滚动条。
+      // Menus retain existing composition; GPU direct upload must not discard country/map scrollbars.
       if (super.requiresRgbaComposite() || this.campaignMenu() !== undefined) return true;
       return this.windowZOrder.some(
         (hwnd) => this.windowClassNames.get(hwnd)?.toLowerCase() === 'scrollbar' && this.isWindowVisible(hwnd),
@@ -1639,7 +1655,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
         const length = vertical ? rect.height : rect.width;
         const breadth = vertical ? rect.width : rect.height;
         const g = scrollbarGeometry(state, length, breadth);
-        // 原生控件使用深色底、红色边框与亮色箭头，匹配客户区的配色。
+        // Native controls use dark backgrounds, red borders, and bright arrows matching client-area colors.
         const fill = (across: number, along: number, w: number, h: number, color: number[]) => {
           for (let a = along; a < along + h; a++)
             for (let b = across; b < across + w; b++) {
@@ -1699,10 +1715,9 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       );
     }
 
-    /** Campaign 模板的存档 ListBox 带 WS_VISIBLE 创建，初始化后再隐藏；原版
-     * owner-draw 会把黑底/1px 红框留在 primary。全屏 caps=0 surface 是当前页
-     * 的无控件底图：只用它填回残留的纯黑像素，侧栏已有的灰色内容保持不动；
-     * 四条红边则从框外相邻像素补齐。 */
+    /**
+     * Campaign save ListBoxes are created with WS_VISIBLE and hidden after initialization, leaving native owner-drawn black backgrounds/1px red borders in primary. The fullscreen caps=0 surface supplies the current page's control-free background: use it only for residual pure-black pixels, preserving existing gray sidebar content, and repair four red edges from adjacent outside pixels.
+     */
     protected repairHiddenCampaignListBorder(rgba: Uint8Array, width: number, height: number): void {
       const menu = this.campaignMenu();
       if (!menu) return;
@@ -1786,22 +1801,23 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       this.windowZOrder.splice(anchor < 0 ? this.windowZOrder.length : anchor + 1, 0, hwnd);
     }
 
-    /** UpdateWindow/带重绘的 MoveWindow 是同步绘制点。游戏的内层 PeekMessage
-     * 会主动清理系统消息，因此不能只排队，否则 owner-draw 按钮永远不执行。 */
+    /**
+     * UpdateWindow and repainting MoveWindow are synchronous paint boundaries. The game's inner PeekMessage actively removes system messages, so merely queueing them would leave owner-drawn buttons unexecuted forever.
+     */
     protected paintWindow(call: Win32Call, hwnd: number): Win32Result {
       this.invalidateWindow(hwnd);
-      // UpdateWindow/MoveWindow 不会为隐藏控件产生可见绘制。Options 模板包含
-      // 若干预留且默认隐藏的按钮；把 WM_PAINT 强送给它们会将未本地化的
-      // GUI:* 资源键写进屏幕，与相邻标签重叠，看起来像随机乱码。
+      // UpdateWindow/MoveWindow do not visibly paint hidden controls. Options templates contain
+      // reserved hidden buttons; forcing WM_PAINT onto them writes unlocalized
+      // GUI:* resource keys over nearby labels, appearing as random garbage.
       if (!this.isWindowVisible(hwnd)) {
         this.invalidatedWindows.delete(hwnd);
         return { eax: 1 };
       }
       if (this.discardInactivePaint(hwnd)) return { eax: 1 };
-      // RA2 的 owner-draw shell 控件在 WM_PAINT 中直接锁 DirectDraw surface，
-      // 不经过 BeginPaint。真实 USER32 在同步 UpdateWindow 返回后会完成该轮
-      // 验证；若这里一直保留 invalid 标记，随后的 MoveWindow/卷闸动画重绘
-      // 会被 invalidateWindow 当作重复请求吞掉，画面永远停在 640×480 初始坐标。
+      // RA2 owner-drawn shell controls lock DirectDraw directly during WM_PAINT,
+      // bypassing BeginPaint. Real USER32 validates after synchronous UpdateWindow returns.
+      // Retaining invalid forever makes invalidateWindow swallow later MoveWindow/shutter-animation redraws
+      // as duplicates, freezing presentation at initial 640x480 coordinates.
       if (this.windows.get(hwnd)) {
         return (this as unknown as User32MessageLoopBridge).sendMessage(call, [hwnd, 0x000f, 0, 0]);
       }
@@ -1810,7 +1826,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       return { eax: 1 };
     }
 
-    /** EnumChildWindows 用一段客体桥串行调用原版枚举过程。 */
+    /** EnumChildWindows serially invokes native enumeration callbacks through one guest bridge. */
     protected beginEnumChildWindows(call: Win32Call, parent: number, callback: number, param: number): boolean {
       if (!callback) return false;
       const children = [...this.windowParents]
@@ -1856,6 +1872,6 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
       return true;
     }
 
-    /** 单个 Win32 API 需要同步投递多条消息时共用一座客体桥（例如 EnableWindow）。 */
+    /** Share one guest bridge when a Win32 API synchronously sends multiple messages, such as EnableWindow. */
   };
 }

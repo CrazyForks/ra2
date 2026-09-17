@@ -1,4 +1,4 @@
-/** 真实 RA2/YR 主程序：验证 Worker / 主线程均直达设置页与 LAN 大厅，默认入口不变。需要本地游戏资源。 */
+/** Real RA2/YR executables: verify Worker and main-thread direct startup to settings and the LAN lobby, preserving the default entry. Requires local game assets. */
 import assert from 'node:assert/strict';
 import { chromium } from '@playwright/test';
 const origin = process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15174';
@@ -16,9 +16,13 @@ try {
     for (const mode of ['worker', 'main', 'default', 'lan-worker', 'lan-main'].filter(
       (mode) => !process.env.RA2_BROWSER_STARTUP_MODE || process.env.RA2_BROWSER_STARTUP_MODE === mode,
     )) {
-      const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1440, height: 1000 } });
+      const context = await browser.newContext({
+        locale: 'zh-CN',
+        ignoreHTTPSErrors: true,
+        viewport: { width: 1440, height: 1000 },
+      });
       await context.addInitScript(() => localStorage.setItem('vm-resolution-ra2', '800x600'));
-      // 不拦截/替换任何 EXE 响应：开发目录的不同版本必须被真实覆盖传递机制处理。
+      // Do not intercept or replace EXE responses; the actual override propagation mechanism must handle different versions in the development directory.
       const page = await context.newPage();
       const errors: string[] = [];
       page.on('pageerror', (e) => errors.push(e.message));
@@ -26,7 +30,7 @@ try {
       await page.goto(
         `${origin}/?debug=1${lan ? '&network=1&start-page=lan' + (relay ? '&relay=' + encodeURIComponent(relay) : '') : ''}${mode === 'lan-main' ? '&vm-worker=0' : ''}${mode === 'main' ? '&start-page=skirmish&vm-worker=0' : ''}`,
       );
-      // Worker 从运行侧边栏重启进入；主线程继续覆盖 URL 兼容路径。
+      // Restart into the page from the runtime sidebar for the Worker; retain URL compatibility coverage on the main thread.
       if (mode === 'worker') {
         await page.getByRole('button', { name: '开发测试', exact: true }).click();
         await page
@@ -47,7 +51,7 @@ try {
           page.waitForEvent('load'),
           dialog.getByRole('button', { name: '重启并进入遭遇战', exact: true }).click(),
         ]);
-        // 开发目录不属于持久化本地包，重载后仍需按原流程选择资源，不能偷偷注入文件。
+        // The development directory is not a persisted local package; reselect resources through the original flow after reload, without secretly injecting files.
       }
       await page.evaluate(() => {
         const canvas = document.querySelector('#screen')!;
@@ -80,7 +84,7 @@ try {
         );
       }
       if (mode !== 'default') assert.ok(titles.every((t) => !t.includes('MainMenu') && !t.includes('SinglePlayer')));
-      // 等下一批游戏帧，避免只截到创建控件但尚未合成的中间画面。
+      // Wait for the next batch of game frames to avoid capturing an intermediate state with created but uncomposited controls.
       const frame = await page.locator('#screen').getAttribute('data-vm-frame');
       await page.waitForFunction(
         (f) => Number((document.querySelector('#screen') as HTMLElement).dataset.vmFrame) > Number(f) + 120,

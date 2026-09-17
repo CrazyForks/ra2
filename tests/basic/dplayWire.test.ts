@@ -1,4 +1,4 @@
-/** shim/dplayWire.ts 单元测试：DirectPlay 中继帧编解码与协议校验。 */
+/** shim/dplayWire.ts unit tests: DirectPlay relay frame encoding/decoding and protocol validation. */
 import { describe, expect, it } from 'vitest';
 import {
   decodeDplayFrame,

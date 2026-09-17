@@ -1,4 +1,4 @@
-/** 无游戏素材端到端：独立浏览器上下文、主线程与真实 Worker、双向 relay 数据报。 */
+/** Asset-free end-to-end test: independent browser contexts, main thread and real Worker, and bidirectional relay datagrams. */
 import { chromium, firefox, expect } from '@playwright/test';
 const origin = process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15174';
 const relayUrl = process.env.RELAY_PROBE_URL ?? '127.0.0.1:15176';
@@ -14,7 +14,7 @@ const browser = await (engine === 'firefox' ? firefox : chromium).launch({
 try {
   const pages: import('@playwright/test').Page[] = [];
   for (const worker of [false, true]) {
-    const context = await browser.newContext({ ignoreHTTPSErrors: true });
+    const context = await browser.newContext({ locale: 'zh-CN', ignoreHTTPSErrors: true });
     await context.route('**/__ws_probe__', (route) =>
       route.fulfill({ contentType: 'text/html', body: '<!doctype html><title>WS relay probe</title>' }),
     );

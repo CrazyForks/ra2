@@ -1,4 +1,4 @@
-/** 用真实 boot.bin/v86 执行小段机器码；无需原版资源或 CI 汇编器。 */
+/** Execute small machine-code snippets with real boot.bin/v86; no original assets or CI assembler required. */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { V86 } from 'v86';

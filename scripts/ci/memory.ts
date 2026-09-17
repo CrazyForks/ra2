@@ -7,7 +7,7 @@ function read(path: string): string {
     return '';
   }
 }
-/** 分开记录宿主可用量、容器用量和 OOM 计数，不将虚拟地址空间当作 RSS。 */
+/** Record host availability, container usage, and OOM counts separately; do not treat virtual address space as RSS. */
 export function memorySnapshot() {
   const numeric = (path: string) => {
     const text = read(path).trim();

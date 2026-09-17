@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { GameScrollbar } from './GameScrollbar';
 import './GameSelect.css';
 
-/** 共用红警下拉：浮层脱离工具栏滚动容器，避免横屏时被裁掉。 */
+/** Shared RA2 dropdown: place the popup outside the toolbar's scrolling container to avoid landscape clipping. */
 export function GameSelect({
   id,
   nativeId = id,
@@ -67,7 +67,7 @@ export function GameSelect({
         setOpen(false);
     };
     const close = () => setOpen(false);
-    // 工具栏自身滚动时关闭浮层；选项内部滚动不关闭，也不滚动游戏画布。
+    // Close the popup when the toolbar scrolls; scrolling within options neither closes it nor scrolls the game canvas.
     const scroll = (event: Event) => {
       if (!popup.current?.contains(event.target as Node)) close();
     };

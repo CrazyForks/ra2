@@ -1,3 +1,4 @@
+import { t } from '../../../shared/i18n/translate';
 import type { ComponentProps } from 'react';
 import type { VmStatus } from '../../../../app/session/runtimeEvents';
 import type { GameSource } from '../../../../games/source';
@@ -29,7 +30,7 @@ export interface StatusState {
 export const resourceStatus = createStore<StatusState | null>(null);
 export const networkStatus = createStore<StatusState | null>(null);
 
-// 服务请求用户输入；组件由 App 声明式挂载，服务不创建独立根或宿主节点。
+// Services request input; App mounts components declaratively. Services create neither independent roots nor host nodes.
 let requestId = 0;
 export const sourceRequest = createStore<{ id: number; finish(source: GameSource): void; cancel(): void } | null>(null);
 export function cancelSourceRequest(): void {
@@ -48,7 +49,7 @@ export function selectGameFiles(): Promise<GameSource> {
       cancel() {
         if (sourceRequest.getSnapshot() !== request) return;
         sourceRequest.set(null);
-        reject(new DOMException('页面已关闭', 'AbortError'));
+        reject(new DOMException(t('页面已关闭'), 'AbortError'));
       },
     };
     sourceRequest.set(request);

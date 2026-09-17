@@ -1,4 +1,4 @@
-/** NSIS solid LZMA 流解码 Worker：输入转移整块 buffer，输出结果转移回主线程。 */
+/** NSIS solid LZMA decoding Worker: transfer the entire input buffer in and decoded output back to the main thread. */
 import { LZMA as lzma } from './vendor/lzma-worker.js';
 import { buildLzmaAloneInput, type LzmaDecodeWorkerMessage } from './lzmaDecode';
 
@@ -27,15 +27,15 @@ self.onmessage = (event: MessageEvent<LzmaDecodeRequest>) => {
           post({ ok: false, error: `LZMA 输出长度不足：${result.length} < ${outputSize}` });
           return;
         }
-        // SDK 的 decode() 对纯 ASCII 输出返回 String，个别路径返回普通数组：
-        // 统一归一化为 Uint8Array。
+        // SDK decode() returns String for pure ASCII and plain arrays on some paths;
+        // normalize all results to Uint8Array.
         const raw =
           result instanceof Uint8Array
             ? result
             : typeof result === 'string'
               ? new TextEncoder().encode(result)
               : Uint8Array.from(result);
-        // SDK 按块填充，达到长度目标时可能多出最后一小块（1-2 字节），截齐。
+        // SDK block filling may overshoot the target by a final 1-2 bytes; trim to length.
         const output = outputSize !== undefined ? raw.subarray(0, outputSize) : raw;
         post(
           {

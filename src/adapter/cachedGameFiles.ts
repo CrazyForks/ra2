@@ -1,9 +1,7 @@
 /**
- * 玩家导入游戏文件的浏览器持久化：清单集齐（必需文件齐全）后把会话级文件集
- * 写入 IndexedDB（ra2-vm-game-files），下次打开页面自动恢复、免重复选择。
+ * Browser persistence for imported game files: once all required manifest entries are present, write the session's file set to IndexedDB (ra2-vm-game-files), restoring it automatically next time without another selection.
  *
- * 主程序（game.exe / gamemd.exe）由 thirdPartyFiles.ts 单独持久化，这里只存
- * 玩家侧文件。配额不足时退化为只存必需文件（启动所需），可选包下次仍缺。
+ * thirdPartyFiles.ts persists executables (game.exe / gamemd.exe) separately; this stores only player-supplied files. If quota is insufficient, fall back to required startup files only; optional packages will still be missing next time.
  */
 
 import { SessionGameFileProvider } from '../platform/browser/files/sessionFiles';
@@ -25,7 +23,7 @@ function keyOf(gameId: string, name: string): string {
   return `${gameId}/${name.toLowerCase()}`;
 }
 
-/** 附加包独立保存，不因游戏本体重新导入而丢失；失败必须让前端显示，不能假称已保存。 */
+/** Persist add-on packages independently so reimporting the base game cannot erase them; surface failures instead of claiming a successful save. */
 export async function saveCustomMapFiles(gameId: string, files: ReadonlyMap<string, Uint8Array>): Promise<void> {
   await writeGameFiles(`custom-${gameId}`, files);
 }
@@ -46,16 +44,16 @@ async function writeGameFiles(gameId: string, files: ReadonlyMap<string, Uint8Ar
   try {
     const transaction = database.transaction(STORE, 'readwrite');
     const store = transaction.objectStore(STORE);
-    // 先清掉该游戏旧记录，再逐文件写入（新文件集整体替换旧集）。
+    // Clear this game's old records first, then write each file, replacing the old set as a whole.
     await new Promise<void>((resolve, reject) => {
       const clear = store.delete(IDBKeyRange.bound(`${gameId}/`, `${gameId}/￿`));
       clear.onsuccess = () => resolve();
       clear.onerror = () => reject(clear.error);
     });
     for (const [name, bytes] of files) {
-      // 空文件也属于资源集：RA2 轻量包用零字节 MIX 表示存在但无影片内容。
-      // 丢掉它会把文件探测从“存在”变成 ENOENT，刷新后可能 ExitProcess(0)。
-      // Blob 在 IndexedDB 中可按片读取，恢复影片包时不先把整包复制进 JS 堆。
+      // Empty files are part of the asset set: lightweight RA2 packages use zero-byte MIX files to indicate present but empty movie content.
+      // Dropping one changes probing from present to ENOENT and may cause ExitProcess(0) after a refresh.
+      // IndexedDB Blob records support partial reads; restoring movie packages must not copy the entire package into the JS heap first.
       store.put(new Blob([bytes as BlobPart]), keyOf(gameId, name));
     }
     await new Promise<void>((resolve, reject) => {
@@ -68,8 +66,7 @@ async function writeGameFiles(gameId: string, files: ReadonlyMap<string, Uint8Ar
 }
 
 /**
- * 保存导入的游戏文件集。配额不足且给了必需文件清单时，退化为只存必需文件
- * （控制台提示）；仍失败则放弃持久化，本次会话不受影响。
+ * Save imported game files. If quota is insufficient and required filenames were supplied, fall back to saving only those files with a console notice. If that also fails, abandon persistence without affecting the current session.
  */
 export async function saveCachedGameFiles(
   gameId: string,
@@ -105,7 +102,7 @@ export async function saveCachedGameFiles(
   }
 }
 
-/** 读取某游戏已持久化的文件集（键为小写文件名）；无记录返回 null。 */
+/** Read a game's persisted files keyed by lowercase filename; return null if no records exist. */
 export async function loadCachedGameFiles(gameId: string): Promise<Map<string, Uint8Array> | null> {
   const database = await openDatabase();
   try {
@@ -125,7 +122,7 @@ export async function loadCachedGameFiles(gameId: string): Promise<Map<string, U
         }
         const name = (cursor.key as string).slice(prefix.length);
         const bytes = cursor.value as Uint8Array | Blob;
-        // 与保存对称，不能用 length 的真值判断记录存在性。
+        // Match save semantics: a record's existence cannot be inferred from the truthiness of its length.
         if (bytes instanceof Uint8Array) files.set(name, bytes);
         if (bytes instanceof Blob)
           blobs.push(
@@ -144,7 +141,7 @@ export async function loadCachedGameFiles(gameId: string): Promise<Map<string, U
   }
 }
 
-/** 只恢复目录；正文首次读取才取得 Blob。旧 Uint8Array 记录按文件兼容，不要求重导入。 */
+/** Restore only the directory; fetch each Blob on its first content read. Support old Uint8Array records per file without requiring reimport. */
 export async function restoreCachedFileProvider(gameId: string): Promise<CachedGameFileProvider | null> {
   const database = await openDatabase();
   try {
@@ -200,7 +197,7 @@ export class CachedGameFileProvider extends SessionGameFileProvider {
         }
       })();
       this.blobs.set(name, pending);
-      // 只保留少量 Blob 句柄；失败可重试，不永久缓存拒绝的 Promise。
+      // Retain only a small number of Blob handles; allow retries and do not permanently cache rejected Promises.
       if (this.blobs.size > 8) this.blobs.delete(this.blobs.keys().next().value!);
       void pending.catch(() => {
         if (this.blobs.get(name) === pending) this.blobs.delete(name);
@@ -239,7 +236,7 @@ export class CachedGameFileProvider extends SessionGameFileProvider {
   }
 }
 
-/** 清空全部持久化文件集（换源时调用：回到选择面板而非自动恢复）。 */
+/** Clear all persisted file sets when switching sources so the picker appears instead of automatic restoration. */
 export async function clearCachedGameFiles(): Promise<void> {
   const database = await openDatabase();
   try {

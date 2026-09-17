@@ -1,7 +1,5 @@
 /**
- * Win32Shim 堆/虚拟内存单元测试（假客体内存，不起 v86）：
- * HeapAlloc 空闲链表复用与合并、HEAP_ZERO_MEMORY、VirtualAlloc 保留区
- * 与堆 arena 互斥、MEM_RELEASE 回收复用。
+ * Win32Shim heap/virtual-memory unit tests with fake guest memory, without v86: HeapAlloc free-list reuse/coalescing, HEAP_ZERO_MEMORY, exclusion between VirtualAlloc reservations and the heap arena, and MEM_RELEASE reuse.
  */
 import { describe, expect, it } from 'vitest';
 import { callShim, createGuestMemory, createTestShim } from '../helpers/guestMemory';
@@ -29,7 +27,7 @@ describe('HeapAlloc / HeapFree', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory);
     const a = heapAlloc(shim, 64);
-    const b = heapAlloc(shim, 1); // 对齐到 16
+    const b = heapAlloc(shim, 1); // Align to 16
     expect(a).toBe(HEAP_BASE);
     expect(b).toBe(a + 64);
     expect(a % 16).toBe(0);
@@ -44,7 +42,7 @@ describe('HeapAlloc / HeapFree', () => {
     const a = heapAlloc(shim, 32);
     memory.write_memory(new Uint8Array(32).fill(0xaa), a);
     expect(heapFree(shim, a)).toBe(1);
-    const b = heapAlloc(shim, 32); // 复用同一空闲块
+    const b = heapAlloc(shim, 32); // Reuse the same free block
     expect(b).toBe(a);
     expect(memory.read_memory(b, 4)).toEqual(new Uint8Array([0xaa, 0xaa, 0xaa, 0xaa]));
     expect(heapFree(shim, b)).toBe(1);
@@ -60,8 +58,8 @@ describe('HeapAlloc / HeapFree', () => {
     const b = heapAlloc(shim, 64);
     const c = heapAlloc(shim, 64);
     expect(heapFree(shim, a)).toBe(1);
-    expect(heapFree(shim, b)).toBe(1); // 与 a 合并成 128
-    const big = heapAlloc(shim, 100); // 对齐 112 ≤ 128
+    expect(heapFree(shim, b)).toBe(1); // Coalesce with a into 128 bytes
+    const big = heapAlloc(shim, 100); // Aligned 112 <= 128
     expect(big).toBe(a);
     expect(heapFree(shim, c)).toBe(1);
   });
@@ -92,7 +90,7 @@ describe('VirtualAlloc / VirtualFree', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory);
     const base = virtualAlloc(shim, 0, 0x1000);
-    expect(base).toBe(0x00c0_0000 - 0x1000); // virtualTop 向下
+    expect(base).toBe(0x00c0_0000 - 0x1000); // virtualTop moves downward
     expect(memory.read_memory(base, 16)).toEqual(new Uint8Array(16));
     const state = shim.inspectHeapState();
     expect(state.virtualRegions).toBe(1);
@@ -107,7 +105,7 @@ describe('VirtualAlloc / VirtualFree', () => {
     memory.write_memory([0xaa, 0xbb], base + 0x100);
     expect(virtualFree(shim, base + 0x100, 0x100, 0x4000)).toBe(1); // MEM_DECOMMIT
     expect(memory.read_memory(base + 0x100, 2)).toEqual(new Uint8Array(2));
-    expect(shim.inspectHeapState().virtualRegions).toBe(1); // 区域仍在
+    expect(shim.inspectHeapState().virtualRegions).toBe(1); // The region remains
   });
 
   it('与活动堆分配重叠的固定地址请求被拒绝（487）', () => {
@@ -121,11 +119,11 @@ describe('VirtualAlloc / VirtualFree', () => {
   it('堆 bump 指针跳过 VirtualAlloc 固定保留区（arena 互斥）', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory);
-    const heap = heapAlloc(shim, 64); // 占 [0x700000, 0x700040)
-    const reserved = virtualAlloc(shim, HEAP_BASE + 0x40, 0x2000); // 钉在 bump 指针前
+    const heap = heapAlloc(shim, 64); // Occupies [0x700000, 0x700040)
+    const reserved = virtualAlloc(shim, HEAP_BASE + 0x40, 0x2000); // Pin ahead of the bump pointer
     expect(reserved).toBe(HEAP_BASE + 0x40);
     const next = heapAlloc(shim, 64);
-    expect(next).toBe(HEAP_BASE + 0x40 + 0x2000); // 跳过保留区
+    expect(next).toBe(HEAP_BASE + 0x40 + 0x2000); // Skip the reservation
     expect(heap).toBe(HEAP_BASE);
   });
 
@@ -136,15 +134,15 @@ describe('VirtualAlloc / VirtualFree', () => {
     expect(virtualFree(shim, base, 0, 0x8000)).toBe(1);
     expect(shim.inspectHeapState().virtualRegions).toBe(0);
     expect(shim.inspectHeapState().virtualFreeBytes).toBe(0x1000);
-    expect(virtualAlloc(shim, 0, 0x1000)).toBe(base); // 复用同一区域
+    expect(virtualAlloc(shim, 0, 0x1000)).toBe(base); // Reuse the same region
   });
 
   it('MEM_RELEASE 非基址与未知区域失败', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory);
     const base = virtualAlloc(shim, 0, 0x1000);
-    expect(virtualFree(shim, base + 0x100, 0, 0x8000)).toBe(0); // 非基址
-    expect(virtualFree(shim, 0x0060_0000, 0, 0x8000)).toBe(0); // 不在任何保留区
+    expect(virtualFree(shim, base + 0x100, 0, 0x8000)).toBe(0); // Not the base address
+    expect(virtualFree(shim, 0x0060_0000, 0, 0x8000)).toBe(0); // Outside all reservations
     expect(shim.inspectHeapState().virtualRegions).toBe(1);
   });
 });

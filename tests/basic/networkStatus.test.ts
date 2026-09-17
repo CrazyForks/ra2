@@ -1,3 +1,4 @@
+import '../helpers/chineseLocale';
 import { expect, it } from 'vitest';
 import { formatNetworkStatus } from '../../src/ui/pages/game/networkStatus';
 import { guardVmCallbacks } from '../../src/app/session/vmSessionController';

@@ -1,6 +1,6 @@
 import type { GameFileProvider } from '../resources/contracts';
 
-/** 只预取一个后续页，最多 2 MiB；不把影片容器复制成整包，也不挂载迟到的页。 */
+/** Prefetch only one subsequent page, at most 2 MiB; never copy a whole movie container or mount late pages. */
 export class RangePrefetch {
   private generation = 0;
   private speculating = false;
@@ -28,11 +28,11 @@ export class RangePrefetch {
     const hit =
       pending?.provider === provider && pending.path === path && pending.offset === offset && pending.length === length;
     const bytes = (hit ? await pending.bytes : null) ?? (await provider.readRange!(path, offset, length));
-    // 预取失败不能提前使对局失败；真正读取时再走正常错误报告路径。
+    // A prefetch failure must not fail the game early; use normal error reporting if an actual read later fails.
     const nextOffset = offset + length;
     if (!this.speculating && generation === this.generation && bytes?.length === length && nextOffset < totalSize) {
       const nextLength = Math.min(2 * 1024 * 1024, totalSize - nextOffset);
-      // 跳读会弃用旧页，但底层 I/O 未必可取消；完成前不再启动其他投机读取。
+      // Seeking discards the old page, but underlying I/O may not be cancellable; start no more speculative reads until it completes.
       this.speculating = true;
       this.next = {
         provider,

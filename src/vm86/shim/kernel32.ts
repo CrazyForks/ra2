@@ -28,7 +28,7 @@ import {
 import { normalizeGuestPath } from '../paths';
 import { guestFileSearch, type GuestFileEntry } from './fileSearch';
 
-/** Kernel32 的 Win32 API case（原 Win32Shim.dispatch 主 switch 拆分）。 */
+/** Kernel32 Win32 API cases extracted from Win32Shim.dispatch's main switch. */
 export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base: TBase) {
   return class extends Base {
     private dllGetVersionStub = 0;
@@ -36,7 +36,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
     private readonly fileSearchHandles = new Map<number, { entries: GuestFileEntry[]; index: number }>();
     private nextFileSearchHandle = 0x6100_0000;
 
-    /** host 提供目录快照，不把元数据占位挂成空文件；每次搜索更新，避免漏掉新存档。 */
+    /** The host supplies directory snapshots without mounting metadata placeholders as empty files; refresh per search to include new saves. */
     setFileSearchResults(pattern: string, entries: readonly GuestFileEntry[]): void {
       this.fileSearchListings.set(
         normalizeGuestPath(pattern),
@@ -45,7 +45,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
     }
 
     private writeFindData(address: number, entry: GuestFileEntry): void {
-      this.zero(address, 320); // WIN32_FIND_DATAA，cFileName 从偏移 44 开始
+      this.zero(address, 320); // WIN32_FIND_DATAA: cFileName begins at offset 44.
       this.writeU32(address, entry.directory ? 0x10 : 0x20);
       const times = this.fileTimes.get(normalizeGuestPath(entry.path));
       for (const [offset, time] of [
@@ -59,7 +59,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       this.writeU32(address + 28, Math.floor(entry.size / 0x1_0000_0000));
       this.writeU32(address + 32, entry.size >>> 0);
       const name = entry.path.replace(/\\/g, '/').split('/').at(-1)!;
-      // 原生 A 接口保留单字节文件名；游戏扩展包及存档使用 ASCII 名称。
+      // Native A interfaces preserve single-byte filenames; game add-ons and saves use ASCII names.
       this.memory.write_memory(
         Uint8Array.from(name.slice(0, 259), (c) => c.charCodeAt(0) & 0xff),
         address + 44,
@@ -118,7 +118,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         case 'KERNEL32.DLL!VirtualFree':
           return { eax: this.virtualFree(a[0] ?? 0, a[1] ?? 0, a[2] ?? 0) ? 1 : 0 };
         case 'KERNEL32.DLL!GetVersion':
-          // Windows 98 4.10；高位为 1 表示 Win9x，与游戏的 2001 年运行环境一致。
+          // Windows 98 4.10; a set high bit denotes Win9x, matching the game's 2001 environment.
           return { eax: 0x8000_0a04 };
         case 'KERNEL32.DLL!GetVersionExA': {
           const info = a[0] ?? 0;
@@ -136,7 +136,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         case 'KERNEL32.DLL!GetTickCount':
           return { eax: this.clock.now() >>> 0 };
         case 'KERNEL32.DLL!QueryPerformanceFrequency':
-          // 与客体统一毫秒时钟同源，1 tick = 1ms。
+          // Share the unified guest millisecond clock: 1 tick = 1ms.
           if (a[0]) {
             this.writeU32(a[0], 1000);
             this.writeU32(a[0] + 4, 0);
@@ -166,8 +166,8 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         }
         case 'KERNEL32.DLL!GetDiskFreeSpaceA': {
           const cdrom = this.getDriveType(a[0] ?? 0) === DRIVE_CDROM;
-          // 只读 CD-ROM 没有可写簇。RA2 会据此继续查询卷标/序列号；
-          // 把光驱伪装成有空闲空间的硬盘会走入原版 AutoDet 防盗版路径。
+          // Read-only CD-ROMs have no writable clusters. RA2 then queries volume label/serial;
+          // pretending the CD drive is a hard disk with free space enters native AutoDet copy-protection handling.
           if (a[1]) this.writeU32(a[1], cdrom ? 1 : 8); // sectors / cluster
           if (a[2]) this.writeU32(a[2], cdrom ? 2048 : 512);
           if (a[3]) this.writeU32(a[3], cdrom ? 0 : 0x0010_0000);
@@ -215,8 +215,8 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
           this.writeSystemTime(a[0] ?? 0, false);
           return { eax: 0 };
         case 'KERNEL32.DLL!GetLocalTime':
-          // SYSTEMTIME 是 8 个连续 WORD。这里必须使用宿主本地时区；RA2 会在
-          // 首页初始化时直接调用该接口，不能用 UTC 的 GetSystemTime 语义代替。
+          // SYSTEMTIME contains eight consecutive WORDs. Use the host's local timezone: RA2 calls
+          // this during homepage initialization, so UTC GetSystemTime semantics are incorrect.
           this.writeSystemTime(a[0] ?? 0, true);
           return { eax: 0 };
         case 'KERNEL32.DLL!SystemTimeToFileTime':
@@ -227,9 +227,9 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
             this.lastError = 87; // ERROR_INVALID_PARAMETER
             return { eax: 0xffff_ffff }; // TIME_ZONE_ID_INVALID
           }
-          // TIME_ZONE_INFORMATION 共 172 字节。JavaScript 不提供 Windows 式的
-          // SYSTEMTIME 夏令时转换表，因此报告合法的 TIME_ZONE_ID_UNKNOWN，并
-          // 把当前宿主偏移写入 Bias。Bias 的符号与 getTimezoneOffset 一致：
+          // TIME_ZONE_INFORMATION is 172 bytes. JavaScript provides no Windows-style
+          // SYSTEMTIME daylight-saving transition table, so report valid TIME_ZONE_ID_UNKNOWN
+          // and write the current host offset into Bias, whose sign matches getTimezoneOffset:
           // UTC = local + Bias。
           this.zero(info, 172);
           this.writeU32(info, new Date(this.clock.wallNow()).getTimezoneOffset() | 0);
@@ -248,11 +248,11 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
           for (const entry of this.fileSearchListings.get(search.normalized) ?? []) {
             entries.set(normalizeGuestPath(entry.path), entry);
           }
-          // 大只读档案镜像到客体后会释放 JS 内容快照，但仍是可枚举的现存文件。
+          // After large read-only archives are mirrored into the guest, release their JS snapshots but retain enumerable file existence.
           for (const [path, mirror] of this.sharedFileMirrors) {
             entries.set(path, { path, size: mirror.size });
           }
-          // 同步层新建/修改的文件覆盖 provider 元数据，已开始的搜索保持独立快照。
+          // Files created/modified synchronously override provider metadata; searches already in progress keep independent snapshots.
           for (const [path, bytes] of this.files) {
             entries.set(path, { path, size: this.fileLogicalSizes.get(path) ?? bytes.length });
           }
@@ -477,10 +477,10 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
           return { eax: 0 };
         case 'KERNEL32.DLL!SetUnhandledExceptionFilter':
           return { eax: 0 };
-        // 默认过滤器：交给最近 __except（EXCEPTION_EXECUTE_HANDLER），与 Win32 默认行为一致。
+        // Default filter: delegate to the nearest __except with EXCEPTION_EXECUTE_HANDLER, matching Win32 defaults.
         case 'KERNEL32.DLL!UnhandledExceptionFilter':
           return { eax: 1 };
-        // 客体相对毫秒数，与多媒体定时器、消息时间戳共用同一时钟。
+        // Relative guest milliseconds sharing the clock used by multimedia timers and message timestamps.
         case 'KERNEL32.DLL!WideCharToMultiByte': {
           const source = this.readWideUnits(a[2] ?? 0, (a[3] ?? 0) | 0);
           const out = new Uint8Array(source.length);
@@ -641,8 +641,8 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         case 'KERNEL32.DLL!WriteFile':
           return { eax: this.writeFile(a[0] ?? 0, a[1] ?? 0, a[2] ?? 0, a[3] ?? 0) >= 0 ? 1 : 0 };
         case 'KERNEL32.DLL!lstrlenA':
-          // Win32 语义是字节数：GBK 双字节字符解码后字符数会变小，
-          // 直接数 NUL 前的原始字节。
+          // Win32 measures bytes; decoding GBK double-byte characters would reduce the character count,
+          // so count raw bytes before NUL directly.
           return { eax: this.narrowStringLength(a[0] ?? 0) };
         case 'KERNEL32.DLL!lstrlenW': {
           let length = 0;
@@ -672,7 +672,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       }
     }
 
-    /** 在已加载的 PE 映像内查找 type/name/lang 资源。HRSRC 用数据项地址表示。 */
+    /** Find type/name/lang resources in a loaded PE image; represent HRSRC by the data-entry address. */
     protected findPeResource(
       requestedModule: number,
       requestedName: number,
@@ -737,7 +737,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       return { handle, module, data, size };
     }
 
-    /** LoadCursorA：加载并解码光标资源为 RGBA，返回 HCURSOR 句柄（按 module:id 复用）。 */
+    /** LoadCursorA decodes cursor resources to RGBA and returns HCURSOR, reused by module:id. */
     protected loadCursorImage(module: number, cursorId: number): number {
       const key = `${module >>> 0}:${cursorId >>> 0}`;
       const existing = this.cursorHandleById.get(key);
@@ -753,7 +753,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       return handle;
     }
 
-    /** 解析 RT_GROUP_CURSOR(12) → RT_CURSOR(1)，把 .cur 的 XOR/AND 掩码解码为 RGBA。 */
+    /** Resolve RT_GROUP_CURSOR(12) to RT_CURSOR(1), decoding .cur XOR/AND masks into RGBA. */
     private decodeCursorResource(
       module: number,
       cursorId: number,
@@ -765,21 +765,21 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       const g = this.memory.read_memory(group.data, Math.min(group.size, 20));
       const count = g[4]! | (g[5]! << 8);
       if (!count) return null;
-      // 取第一张 CURSORDIRENTRY（14 字节，偏移 6）。
+      // Use the first CURSORDIRENTRY, 14 bytes at offset 6.
       const hotspotX = g[10]! | (g[11]! << 8);
       const hotspotY = g[12]! | (g[13]! << 8);
       const imageId = g[18]! | (g[19]! << 8);
       const image = this.findPeResource(module, imageId, 1); // RT_CURSOR
       if (!image) return null;
       const data = this.memory.read_memory(image.data, image.size);
-      // RT_CURSOR 应以 BITMAPINFOHEADER(biSize=40) 开头；RA2 的资源带 4 字节前导，探测真实偏移。
+      // RT_CURSOR should begin with BITMAPINFOHEADER biSize=40; RA2 resources have a four-byte prefix, so detect the actual offset.
       let hdr = 0;
       if (this.readI32From(data, 0) !== 40) {
         if (this.readI32From(data, 4) === 40) hdr = 4;
         else return null;
       }
       const width = this.readI32From(data, hdr + 4);
-      const height = this.readI32From(data, hdr + 8) >> 1; // biHeight 含 XOR+AND 两段
+      const height = this.readI32From(data, hdr + 8) >> 1; // biHeight includes both XOR and AND sections.
       const bitCount = data[hdr + 14]! | (data[hdr + 15]! << 8);
       if (shimTraceEnabled('VM_TRACE_CURSOR'))
         console.log(
@@ -793,7 +793,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       const xorStride = ((rowBits + 31) >> 5) << 2;
       const andStride = ((width + 31) >> 5) << 2;
       const andOffset = xorOffset + xorStride * height;
-      // 32-bit 光标可能不带 alpha（全 0），此时退回 AND 掩码判透明。
+      // 32-bit cursors may contain all-zero alpha; use the AND mask for transparency then.
       let hasAlpha = false;
       if (bitCount === 32) {
         for (let i = 0; i < width * height; i++)
@@ -803,7 +803,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
           }
       }
       for (let y = 0; y < height; y++) {
-        const row = height - 1 - y; // 位图自底向上
+        const row = height - 1 - y; // Bottom-up bitmap.
         for (let x = 0; x < width; x++) {
           const di = (y * width + x) * 4;
           let r = 0;
@@ -830,8 +830,8 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
               const byte = data[xorOffset + row * xorStride + (x >> 3)]!;
               index = (byte >> (7 - (x & 7))) & 1;
             }
-            // RT_CURSOR 可能在 BITMAPINFOHEADER 前带 4 字节热点前导；调色板
-            // 与 XOR 位图都相对真实 header，不能从资源起点固定偏移 40。
+            // RT_CURSOR may prefix BITMAPINFOHEADER with a four-byte hotspot; palette
+            // and XOR offsets are relative to the actual header, never a fixed 40 bytes from resource start.
             const ci = hdr + 40 + index * 4;
             b = data[ci]!;
             gg = data[ci + 1]!;
@@ -915,7 +915,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       const name = this.readCString(namePtr);
       const module = this.loadGuestDll(name);
       if (!module) {
-        // CRT 对系统 DLL 的可选探测仍沿用主模块哑句柄。
+        // CRT optional system-DLL probes retain the main-module dummy handle.
         return { eax: 0x0040_0000 };
       }
       if (!module.initialized && module.entry) {
@@ -935,7 +935,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         emit32(module.entry);
         code.push(0xff, 0xd0); // call DllMainCRTStartup
         code.push(0xb8);
-        emit32(module.base); // LoadLibraryA 返回 HMODULE
+        emit32(module.base); // LoadLibraryA returns HMODULE.
         code.push(0xb9);
         emit32(originalReturn);
         code.push(0xff, 0xe1); // jmp original return
@@ -948,8 +948,8 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       const module = this.guestDllByHandle(handle);
       const name = namePtr <= 0xffff ? `ord${namePtr}` : this.readCString(namePtr);
       if (!module) {
-        // comctl32 的版本检查由 host 提供一个正常 hypercall 入口；其他 CRT 可选
-        // 系统函数保持“不存在”，让调用方采用 Win9x 兼容路径。
+        // Provide a normal host hypercall for comctl32 version checks; keep other optional CRT
+        // system functions absent so callers take Win9x compatibility paths.
         if (name === 'DllGetVersion') {
           this.dllGetVersionStub ||= this.registerDynamicWin32Import('COMCTL32.DLL', name, 4);
           return this.dllGetVersionStub;
@@ -960,8 +960,8 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
     }
     protected openFile(args: number[]): number {
       const rawPath = this.readCString(args[0] ?? 0);
-      // 盘根路径（"C:\" / "C:" / "\"）是驱动器存在性探测：Win9x 下 CreateFileA 对
-      // 已存在驱动器的根目录会返回有效句柄；给探测请求一个可关闭的哑句柄。
+      // Drive-root paths, including C: with or without a trailing backslash and the root backslash alone, probe drive existence.
+      // Win9x CreateFileA returns a valid handle for existing drive roots; provide a closable dummy handle for these probes.
       if (/^[a-z]:[\\/]?$/i.test(rawPath) || rawPath === '\\' || rawPath === '/') {
         const handle = this.allocateFileHandle();
         this.fileHandles.set(handle, {
@@ -981,7 +981,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       const sharedMirror = this.sharedFileMirrors.get(path);
       const exists = bytes !== undefined || sharedMirror !== undefined;
 
-      // CREATE_NEW / CREATE_ALWAYS / OPEN_ALWAYS 可以创建；OPEN_EXISTING 必须已挂载。
+      // CREATE_NEW / CREATE_ALWAYS / OPEN_ALWAYS may create files; OPEN_EXISTING requires an existing mount.
       if (disposition === 1 && exists) {
         this.lastError = 80; // ERROR_FILE_EXISTS
         return 0xffff_ffff;
@@ -1024,10 +1024,10 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
     }
     protected openLegacyFile(pathPtr: number, create: boolean, openFlags = 0): number {
       const path = normalizeGuestPath(this.readCString(pathPtr));
-      // _lopen 的 oflag：OF_WRITE(1)/OF_READWRITE(2) 打开可写句柄（原版存档流程用它
-      // 原地重写 label.sav/record.sav，写失败会静默丢存档列表/记录更新）。
+      // _lopen oflag OF_WRITE(1)/OF_READWRITE(2) opens writable handles; native saves use them
+      // to rewrite label.sav/record.sav in place, silently losing list/record updates if writes fail.
       const writable = create || (openFlags & 3) !== 0;
-      // 真机上对目录名 _lcreat 会失败（访问被拒）；对虚拟目录创建文件同样返回失败。
+      // Real _lcreat fails with access denied on directories; reject creating files over virtual directories too.
       if (create && this.isVirtualDirectory(path)) {
         this.lastError = 5; // ERROR_ACCESS_DENIED
         return 0xffff_ffff;
@@ -1057,7 +1057,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       this.lastError = 0;
       return handle;
     }
-    /** 成功返回实际字节数，失败返回 -1。 */
+    /** Return actual byte count on success, -1 on failure. */
     protected readFile(handle: number, buffer: number, requested: number, bytesReadPtr: number): number {
       const file = this.fileHandles.get(handle);
       if (!file) {
@@ -1095,11 +1095,11 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       this.lastError = 0;
       return count;
     }
-    /** 成功返回实际字节数，失败返回 -1。 */
+    /** Return actual byte count on success, -1 on failure. */
     protected writeFile(handle: number, buffer: number, requested: number, bytesWrittenPtr: number): number {
       const file = this.fileHandles.get(handle);
       if (!file) {
-        // CRT 的 stdout/stderr 无需真正输出到客体设备。
+        // CRT stdout/stderr need no actual guest-device output.
         if (handle >= 0x10010 && handle <= 0x10013) {
           if (bytesWrittenPtr) this.writeU32(bytesWrittenPtr, requested >>> 0);
           return requested >>> 0;
@@ -1188,13 +1188,14 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
     protected notifyFileWrite(path: string, bytes: Uint8Array): void {
       this.options.onFileWrite?.(path, bytes.slice());
     }
-    /** 打开时建立镜像：可写句柄同样镜像（原版常以读写模式打开、实际只读），
-     *  客体首次写入时由 demoteFileMirror 降级回 canonical 路径。 */
+    /**
+     * Mirror on open, including writable handles because native code often opens read/write but only reads. On first guest write, demoteFileMirror restores the canonical path.
+     */
     protected mirrorFile(handle: number, file: FileState): void {
       if (!this.options.enableFastFileMirror) return;
-      // Bink 1.x 以极小块读取已从 MIX 解出的 .bik；不镜像时 YR 主菜单实测会产生
-      // 约 7700 次 ReadFile/500ms。档案 allowlist 仍限制巨型 MIX，但视频叶文件
-      // 一律允许进入同一客体快速表，避免每个解码块跨 Worker/COM1 往返。
+      // Bink 1.x reads tiny blocks from .bik files extracted from MIX; without mirrors, the YR main menu measured
+      // about 7700 ReadFile calls/500ms. Keep the archive allowlist for huge MIX files, but permit video leaf files
+      // in the same guest fast table to avoid Worker/COM1 round trips for each decoded block.
       if (this.fastFileMirrorFiles && !this.fastFileMirrorFiles.has(file.path) && !file.path.endsWith('.bik')) return;
       const entry = this.fastFileEntry(handle);
       if (entry === null) return;
@@ -1217,10 +1218,10 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         }
         return;
       }
-      // RA2.MIX 单文件约 269MiB。若每个句柄都重新复制进普通游戏堆，不但越过
-      // Blowfish.dll 的固定 0x11000000 映射，还会在反复开关 MIX 时重复搬运几百
-      // MiB。独立高地址区按规范化路径永久缓存，只读句柄共享内容、各用自己的
-      // FAST_FILE_ENTRY 保存 position。
+      // RA2.MIX alone is about 269MiB. Copying it into the ordinary heap per handle both crosses
+      // Blowfish.dll's fixed 0x11000000 mapping and repeatedly moves hundreds of MiB
+      // on MIX reopen. Cache permanently by normalized path in a separate high-address region; read-only handles share content
+      // but each stores position in its own FAST_FILE_ENTRY.
       if (!file.writable && this.fastFileMirrorBase && this.fastFileMirrorTop > this.fastFileMirrorBase) {
         const aligned = (Math.max(1, file.size) + 15) & ~15;
         const mirror = (this.nextFastFileMirror + 15) & ~15;
@@ -1230,8 +1231,8 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
           this.sharedFileMirrors.set(file.path, { ptr: mirror, size: file.size });
           file.mirror = mirror;
           file.sharedMirror = true;
-          // 客体镜像成为只读档案的 canonical 快照；释放 provider 返回的宿主大数组，
-          // 否则 RA2.MIX 等文件会同时占用 guest RAM 与 JS heap，打开战役影片包时 OOM。
+          // The guest mirror becomes the canonical read-only archive snapshot; release the large host array returned by the provider,
+          // or files such as RA2.MIX occupy both guest RAM and JS heap and can cause OOM when opening campaign movies.
           this.files.delete(file.path);
           file.bytes = new Uint8Array();
           this.fileMirrorBytes += file.size;
@@ -1250,8 +1251,8 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         }
         return;
       }
-      // 镜像从游戏堆分配：关闭句柄即归还，不永久占用地址空间；
-      // alloc 失败（地址空间紧张）时该文件退回 hypercall 读。
+      // Allocate mirrors from the game heap and return them on handle close instead of reserving address space permanently;
+      // allocation failure under address pressure falls back to hypercall reads for that file.
       const mirror = this.alloc(Math.max(1, file.size), false);
       if (!mirror) {
         const warningKey = `heap:${file.path}`;
@@ -1271,8 +1272,9 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         );
       }
     }
-    /** 镜像句柄被客体写入时降级：先取回客体内最新位置，再归还镜像并清表项，
-     *  后续读写走 canonical bytes 的 hypercall 路径。 */
+    /**
+     * Demote mirrored handles on guest writes: recover the latest guest position, free the mirror, and clear the table entry; subsequent access uses canonical-byte hypercalls.
+     */
     protected demoteFileMirror(handle: number, file: FileState): void {
       if (!file.mirror) return;
       if (file.size > 1024 * 1024) {
@@ -1330,8 +1332,8 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         block.size -= aligned;
         if (!block.size) this.freeBlocks.splice(freeIndex, 1);
       } else {
-        // 堆自 0x500000 向上增长；VirtualAlloc 保留区是屏障，必须跳过。
-        // 直接遍历 Map，不 spread 成数组（GlobalAlloc 每秒上万次的分配热路径）。
+        // The heap grows upward from 0x500000; skip VirtualAlloc reservations as barriers.
+        // Iterate Map directly without spreading into arrays; GlobalAlloc runs tens of thousands of times per second.
         ptr = this.nextHeap;
         for (let guard = 0; guard < 128; guard++) {
           let blocked = false;
@@ -1344,9 +1346,9 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
           }
           if (!blocked) break;
         }
-        // MEM_RELEASE 归还的区域位于独立虚拟释放链表、可能高于 nextHeap；前进
-        // 路径驶入时堆自取该范围，必须同步剔除，否则会被后续 VirtualAlloc 再次
-        // 发出（wemu 靠独立 virtual arena 与堆互斥规避，我们在这里补齐等价物）。
+        // MEM_RELEASE regions live in a separate virtual free list and may lie above nextHeap. When heap growth
+        // claims such a range, remove it from that list or later VirtualAlloc could allocate it again.
+        // wemu avoids this through separate mutually exclusive arenas; enforce the equivalent here.
         this.trimVirtualFreeBlocks(ptr, ptr + aligned);
         this.trimFreeBlocks(ptr, ptr + aligned);
         this.nextHeap = ptr + aligned;
@@ -1389,8 +1391,8 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
     }
     protected addBlock(blocks: Array<{ ptr: number; size: number }>, ptr: number, size: number): void {
       if (size <= 0) return;
-      // 块表按地址有序（不变式）：二分定位插入位、只合并相邻块，不再每次 free
-      // 全量 sort + 全表扫描——GlobalAlloc/GlobalFree 每秒上万次的路径上这是热点。
+      // Keep free blocks address-sorted: binary-search insertion and merge only neighbors, avoiding a full sort
+      // and scan on every free in the heavy GlobalAlloc/GlobalFree path.
       let low = 0;
       let high = blocks.length;
       while (low < high) {
@@ -1417,31 +1419,26 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       this.addBlock(this.virtualFreeBlocks, ptr, size);
     }
     /**
-     * VirtualAlloc：独立的虚拟保留区表（wemu 模型，参见 virtualRegions 字段注释）。
-     * 原版 VC6 CRT 的 1MB RESERVE + 逐 32KB 块 COMMIT/DECOMMIT 全部落在这里，
-     * 与 HeapAlloc/GlobalAlloc/文件镜像共用的堆 arena 严格互斥。
-     * 与 wemu hle_base.rs virtual_alloc 同构：忽略 RESERVE/COMMIT 区分——
-     * 已在保留区内→零填充后原样返回请求地址；保留区外→在 arena 界内按请求
-     * 基址新建区域（retrotick 的 allocVirtual 同样不区分类型），界外或重叠才失败。
+     * VirtualAlloc uses an independent reservation table, following wemu; see virtualRegions. VC6 CRT's 1MB RESERVE and incremental 32KB COMMIT/DECOMMIT operations remain disjoint from the arena shared by HeapAlloc/GlobalAlloc/file mirrors. Match wemu hle_base.rs virtual_alloc by treating RESERVE/COMMIT alike: within a reservation, zero-fill and return the requested address; outside, create a region at the requested in-arena base. retrotick allocVirtual likewise ignores type distinctions. Fail only for out-of-bounds or overlapping regions.
      */
     protected virtualAlloc(requested: number, size: number): number {
       const aligned = Math.ceil(Math.max(1, size) / 16) * 16;
       if (requested) {
         const end = requested + aligned;
-        // 已在保留区内的提交：零填充后原样返回请求地址。
+        // Commit within an existing reservation: zero-fill and return the requested address unchanged.
         for (const [base, region] of this.virtualRegions) {
           if (requested >= base && end <= base + region.size) {
             this.zero(requested, aligned);
             return requested;
           }
         }
-        // 保留区外的固定地址：界内新建区域（wemu alloc_at），界外失败。
+        // Fixed addresses outside reservations create in-arena regions, as in wemu alloc_at; reject out-of-bounds requests.
         if (requested < this.virtualBase || end > this.heapTop) {
           this.warnVirtual(requested, '固定地址超出堆 arena 界，VirtualAlloc 已拒绝');
           this.lastError = 487; // ERROR_INVALID_ADDRESS
           return 0;
         }
-        // 与活动堆分配或已有保留区重叠即拒绝，而不是静默别名。
+        // Reject overlap with live heap allocations or existing reservations instead of silently aliasing them.
         for (const [ptr, liveSize] of this.allocations) {
           if (requested < ptr + liveSize && ptr < end) {
             this.warnVirtual(requested, '与活动堆分配重叠，VirtualAlloc 已拒绝');
@@ -1467,15 +1464,15 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         this.lastError = 8; // ERROR_NOT_ENOUGH_MEMORY
         return 0;
       }
-      // 保留区可能落在两条空闲链表内：剔除重叠，防止后续 HeapAlloc 或
-      // VirtualAlloc 复用同一地址（此前 NULL 保留漏掉这一步，是双重占用的隐患路径）。
+      // Reservations may intersect either free list; remove overlaps so later HeapAlloc or
+      // VirtualAlloc cannot reuse the same addresses. NULL reservations previously omitted this step, risking double allocation.
       this.trimFreeBlocks(base, base + aligned);
       this.trimVirtualFreeBlocks(base, base + aligned);
       this.virtualRegions.set(base, { size: aligned });
       this.zero(base, aligned);
       return base;
     }
-    /** MEM_RELEASE 释放整个保留区；MEM_DECOMMIT 保留区域、只清零内容。 */
+    /** MEM_RELEASE frees an entire reservation; MEM_DECOMMIT retains it and zeroes content only. */
     protected virtualFree(addr: number, size: number, type: number): boolean {
       const entry = [...this.virtualRegions.entries()].find(
         ([base, region]) => addr >= base && addr < base + region.size,
@@ -1492,13 +1489,13 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
           return false;
         }
         this.virtualRegions.delete(base);
-        // wemu 的 RELEASE 经 try_free 把区域还给 virtual arena，只供后续
-        // VirtualAlloc 复用，绝不进入堆空闲链表（retrotick 连 RELEASE 都不回收，
-        // 只增不减；此处按 wemu 回收以避免长会话地址耗尽）。
+        // wemu RELEASE uses try_free to return regions solely to the virtual arena for later
+        // VirtualAlloc, never the heap free list. retrotick does not reclaim even RELEASE allocations;
+        // follow wemu here to avoid address exhaustion in long sessions.
         this.addVirtualFreeBlock(base, region.size);
         return true;
       }
-      // wemu 只认 MEM_DECOMMIT 标志：既非 RELEASE 也非 DECOMMIT 的类型失败。
+      // wemu recognizes MEM_DECOMMIT only here; reject types that are neither RELEASE nor DECOMMIT.
       if ((type & 0x4000) === 0) {
         this.warnVirtual(addr, 'VirtualFree 类型既非 MEM_RELEASE 也非 MEM_DECOMMIT');
         return false;
@@ -1508,12 +1505,13 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         this.warnVirtual(addr, 'MEM_DECOMMIT 范围超出保留区');
         return false;
       }
-      // 客体内存无法真正缺页；清零保证游戏不会继续读到已解除提交的旧数据。
+      // Guest memory cannot truly become nonresident; zeroing prevents reads of stale decommitted data.
       this.zero(addr, Math.max(0, decommitEnd - addr));
       return true;
     }
-    /** NULL 保留：先复用 MEM_RELEASE 归还的区域（自高向低，近似 Windows 的
-     *  自顶向下地址空间复用），没有再自虚拟区顶端向下扫描空闲位置。 */
+    /**
+     * NULL reservation: first reuse MEM_RELEASE regions high-to-low, approximating Windows top-down reuse; otherwise scan downward from the virtual-arena top.
+     */
     protected findVirtualBase(size: number): number {
       let reuseBase = 0;
       for (const block of this.virtualFreeBlocks) {
@@ -1521,9 +1519,9 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         if (block.size >= size && top >= block.ptr && top > reuseBase) reuseBase = top;
       }
       if (reuseBase) {
-        // 从该块顶端切走 [reuseBase, reuseBase+size)，剩余留在链表。
-        // 三种切法都要避免留下零尺寸条目：整块用完→删除；从块头切→前移；
-        // 从中间切→只缩到 reuseBase。
+        // Carve [reuseBase, reuseBase+size) from the block's top and retain the remainder in the list.
+        // Avoid zero-sized entries in all cases: remove fully consumed blocks, advance their start when cutting from the head,
+        // or shrink the end to reuseBase when cutting internally.
         for (let i = this.virtualFreeBlocks.length - 1; i >= 0; i--) {
           const block = this.virtualFreeBlocks[i]!;
           if (reuseBase >= block.ptr && reuseBase + size <= block.ptr + block.size) {
@@ -1560,11 +1558,11 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       }
       return 0;
     }
-    /** 从堆空闲链表剔除 [base, end) 覆盖的范围，防止后续 HeapAlloc 复用。 */
+    /** Remove [base, end) from the heap free list to prevent later HeapAlloc reuse. */
     protected trimFreeBlocks(base: number, end: number): void {
       this.trimBlocks(this.freeBlocks, base, end);
     }
-    /** 从 VirtualAlloc 释放链表剔除 [base, end)，防止后续 VirtualAlloc 复用。 */
+    /** Remove [base, end) from the VirtualAlloc free list to prevent later VirtualAlloc reuse. */
     protected trimVirtualFreeBlocks(base: number, end: number): void {
       this.trimBlocks(this.virtualFreeBlocks, base, end);
     }
@@ -1572,9 +1570,9 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       for (let i = blocks.length - 1; i >= 0; i--) {
         const block = blocks[i]!;
         const blockEnd = block.ptr + block.size;
-        if (end <= block.ptr || blockEnd <= base) continue; // 不相交
+        if (end <= block.ptr || blockEnd <= base) continue; // No intersection.
         if (base <= block.ptr && blockEnd <= end) {
-          blocks.splice(i, 1); // 整块被覆盖
+          blocks.splice(i, 1); // The entire block is covered.
         } else if (block.ptr < base && end < blockEnd) {
           blocks.splice(i, 1, { ptr: block.ptr, size: base - block.ptr }, { ptr: end, size: blockEnd - end });
         } else if (base <= block.ptr) {
@@ -1591,7 +1589,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       console.warn(`[VM memory] 0x${address.toString(16)}：${detail}`);
     }
     protected getDriveType(rootPathPtr: number): number {
-      // Win32 允许 NULL 表示当前目录所在卷；本兼容层的当前目录位于 C:。
+      // Win32 allows NULL for the current directory's volume; this layer's current directory is on C:.
       if (!rootPathPtr) return this.driveTypes.get('C') ?? DRIVE_NO_ROOT_DIR;
       const root = this.readCString(rootPathPtr).trim();
       const drive = /^([a-z]):(?:[\\/]|$)/i.exec(root)?.[1]?.toUpperCase();

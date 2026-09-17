@@ -43,10 +43,10 @@ it('普通发送只复制逻辑字节，独占帧移交且 ACK 保持正确字�
   memory.set([8, 9], 10);
   socket.send(memory.subarray(10, 12));
   expect(memory.byteLength).toBe(65536);
-  memory.fill(0); // send 返回后客体可立即复用原数据。
+  memory.fill(0); // The guest may reuse the original data immediately after send returns.
   const owned = new Uint8Array([1, 2, 3]);
   socket.sendOwned(owned);
-  expect(messages).toHaveLength(1); // 当前执行片段还没有派发数据。
+  expect(messages).toHaveLength(1); // No data has been dispatched in the current execution slice yet.
   await Promise.resolve();
   expect(messages.at(-1).frames.map((frame: Uint8Array) => [...frame])).toEqual([
     [8, 9],

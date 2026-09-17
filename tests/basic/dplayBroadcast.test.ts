@@ -1,14 +1,13 @@
 /**
- * BroadcastChannel DirectPlay 传输单元测试（迁移自 scripts/dplayBroadcastChannelSmoke.mts）：
- * 客体内存读出来的是整片 WASM 缓冲上的视图，postMessage 前必须只克隆逻辑载荷，
- * 不能把整个 VM 底缓冲带进结构化克隆。Node 里 BroadcastChannel 是全局的。
+ * BroadcastChannel DirectPlay transport unit tests (migrated from scripts/dplayBroadcastChannelSmoke.mts).
+ * Guest memory reads return views into the entire WASM buffer. Before postMessage, clone only the logical payload, not the VM's entire backing buffer. BroadcastChannel is global in Node.
  */
 import { expect, it } from 'vitest';
 import { BroadcastChannelTransport } from '../../src/vm86/shim/dplayTransport';
 import type { DplayWire } from '../../src/vm86/shim/dplayWire';
 
 it('BroadcastChannel 精确尺寸 payload 克隆（不携带整个 VM 底缓冲）', async () => {
-  // 随机 channel 名，避免与其他测试/进程冲突。
+  // Random channel name avoids conflicts with other tests/processes.
   const channelName = `dplay-broadcast-smoke-${Date.now()}-${Math.random()}`;
   const oversizedBacking = new Uint8Array(1024 * 1024);
   oversizedBacking.set([1, 2, 3, 4, 5], 123);

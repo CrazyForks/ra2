@@ -1,11 +1,11 @@
 import { preventThirdPartyDownloads } from '../../helpers/offlineBrowser';
-/** 无游戏资源的真实 shader 回归；先启动 dev。GPU/软件渲染器耗时不可混为游戏 FPS。 */
+/** Real shader regression without game assets; start dev first. GPU/software-renderer timings are not game FPS. */
 import assert from 'node:assert/strict';
 import { chromium } from '@playwright/test';
 
 const browser = await chromium.launch({ args: ['--no-sandbox', '--enable-unsafe-swiftshader'] });
 try {
-  const page = await browser.newPage({ ignoreHTTPSErrors: true });
+  const page = await browser.newPage({ locale: 'zh-CN', ignoreHTTPSErrors: true });
   await preventThirdPartyDownloads(page);
   await page.goto(process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15174/');
   const result = await page.evaluate<{
@@ -57,7 +57,7 @@ try {
     }
     for(let i=0;i<reference.length;i++) if(reference[i]!==nearest[i]) changed++;
     const weights = t => [-0.5*t+t*t-0.5*t*t*t,1-2.5*t*t+1.5*t*t*t,0.5*t+2*t*t-1.5*t*t*t,-0.5*t*t+0.5*t*t*t];
-    // 独立 CPU 参考仅用于测试；readPixels 自底向上，输入帧自顶向下。
+    // Independent CPU reference for tests only; readPixels is bottom-up, while input frames are top-down.
     for(let y=0;y<h;y++) for(let x=0;x<w;x++) {
       const px=(x+0.5)*width/w-0.5, py=(h-y-0.5)*height/h-0.5;
       const bx=Math.floor(px),by=Math.floor(py),wx=weights(px-bx),wy=weights(py-by);
@@ -80,7 +80,7 @@ try {
     const a=draw(normal,{...constant,cursor},14,10),b=draw(sr,{...constant,cursor},14,10);
     let cursorErrors=0;
     for(let i=0;i<a.length;i++) if(a[i]!==b[i]) cursorErrors++;
-    // 异步整帧模型的高分辨率输出不能改变原始光标尺寸/坐标系。
+    // High-resolution output from asynchronous full-frame models must not change native cursor size or coordinates.
     const enlarged = {width:14,height:10,pixels:new Uint8Array(),palette:new Uint8Array(),rgba:new Uint8Array(14*10*4)};
     for(let i=0;i<14*10;i++) enlarged.rgba.set([17,83,219,255],i*4);
     normal.renderer.draw(enlarged,14,10,undefined,{...constant,cursor});

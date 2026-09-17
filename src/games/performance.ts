@@ -1,4 +1,4 @@
-/** 原生模拟计数，不是 DirectDraw/VBlank、rAF 或目标帧率。 */
+/** Native simulation counters, not DirectDraw/VBlank, rAF, or target frame rates. */
 export interface GameFrameCounters {
   frame: number;
   gameSpeed: number;

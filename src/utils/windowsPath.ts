@@ -1,4 +1,4 @@
-/** 把 DOS/Win32 路径折叠到相对根目录，匹配 Linux host 上的大小写无关资源表。 */
+/** Fold DOS/Win32 paths into root-relative paths matching case-insensitive resource tables on Linux hosts. */
 export function normalizeWindowsPath(path: string): string {
   const slashes = path
     .replace(/\\/g, '/')

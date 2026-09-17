@@ -1,3 +1,4 @@
+import { t, localizeText } from '../../../shared/i18n/translate';
 import { useEffect, useRef, useState } from 'react';
 import type { SupportedGameId } from '../../../../games/catalog';
 import { loadCustomMapFiles, saveCustomMapFiles } from '../../../../adapter/cachedGameFiles';
@@ -16,7 +17,7 @@ export function CustomMapDialog({
   const [files, setFiles] = useState(new Map<string, Uint8Array>());
   const [busy, setBusy] = useState(true);
   const [readFailed, setReadFailed] = useState(false);
-  const [status, setStatus] = useState('正在读取已保存的地图…');
+  const [status, setStatus] = useState(t('正在读取已保存的地图…'));
   const [applied, setApplied] = useState(false);
   const alive = useRef(true);
   const fail = (error: unknown) => {
@@ -53,7 +54,7 @@ export function CustomMapDialog({
       const staged = new Map(files);
       const replaced = new Set<string>();
       for (const archive of archives) {
-        setStatus(`正在读取 ${archive.name}…`);
+        setStatus(t('正在读取 {0}…', archive.name));
         const extracted = await readCustomMapPackage(new Uint8Array(await archive.arrayBuffer()), (message) => {
           if (alive.current) setStatus(message);
         });
@@ -63,9 +64,10 @@ export function CustomMapDialog({
           staged.set(name, bytes);
         }
       }
-      if (replaced.size && !window.confirm(`将覆盖已添加的同名文件：\n${[...replaced].join('\n')}\n是否继续？`)) return;
+      if (replaced.size && !window.confirm(t('将覆盖已添加的同名文件：\n{0}\n是否继续？', [...replaced].join('\n'))))
+        return;
       setFiles(staged);
-      setStatus(`已暂存 ${staged.size} 个文件，点击应用后生效。`);
+      setStatus(t('已暂存 {0} 个文件，点击应用后生效。', staged.size));
     } catch (error) {
       fail(error);
     } finally {
@@ -86,7 +88,7 @@ export function CustomMapDialog({
         setStatus(await applyLive(files));
         setApplied(true);
       } catch (error) {
-        throw new Error(`文件已保存，但动态挂载失败：${error instanceof Error ? error.message : String(error)}`);
+        throw new Error(t('文件已保存，但动态挂载失败：{0}', error instanceof Error ? error.message : String(error)));
       }
     } catch (error) {
       fail(error);
@@ -95,18 +97,21 @@ export function CustomMapDialog({
     }
   };
   return (
-    <Modal open title="自定义地图包" className="custom-map-dialog" busy={busy} onClose={() => finish(false)}>
-      <h3>自定义地图包 · {gameId.toUpperCase()}</h3>
+    <Modal open title={t('自定义地图包')} className="custom-map-dialog" busy={busy} onClose={() => finish(false)}>
+      <h3>
+        {t('自定义地图包 ·')} {gameId.toUpperCase()}
+      </h3>
       <p>
-        探索压缩包及嵌套归档，挂载 .yrm 和 .mpr；.csf
-        仅保存，暂不挂载。保留地图扩展名，不转换地图版本。应用后每次启动自动加载。
-        {applyLive && '本次仅动态新增文件，不重启 VM、不刷新地图列表；同名替换和移除下次启动生效。'}
+        {t(
+          '探索压缩包及嵌套归档，挂载 .yrm 和 .mpr；.csf 仅保存，暂不挂载。保留地图扩展名，不转换地图版本。应用后每次启动自动加载。',
+        )}{' '}
+        {applyLive && t('本次仅动态新增文件，不重启 VM、不刷新地图列表；同名替换和移除下次启动生效。')}
       </p>
       <input
         type="file"
         accept=".zip,.7z,.rar"
         multiple
-        aria-label="添加自定义地图压缩包"
+        aria-label={t('添加自定义地图压缩包')}
         disabled={busy || readFailed}
         onChange={(event) => {
           const archives = [...(event.currentTarget.files ?? [])];
@@ -117,11 +122,11 @@ export function CustomMapDialog({
       <ul>
         {[...files].map(([name, bytes]) => (
           <li key={name}>
-            {name}（{bytes.length} B）{name.endsWith('.csf') ? '〔暂不挂载〕' : ''}{' '}
+            {name}（{bytes.length} B）{name.endsWith('.csf') ? t('〔暂不挂载〕') : ''}{' '}
             <button
               type="button"
               disabled={busy}
-              aria-label={`移除 ${name}`}
+              aria-label={t('移除 {0}', name)}
               onClick={() =>
                 setFiles((previous) => {
                   const next = new Map(previous);
@@ -130,17 +135,17 @@ export function CustomMapDialog({
                 })
               }
             >
-              移除
+              {t('移除')}{' '}
             </button>
           </li>
         ))}
       </ul>
-      <p role="status">{status}</p>
+      <p role="status">{localizeText(status)}</p>
       <button type="button" disabled={busy || readFailed} onClick={() => void apply()}>
-        {applyLive ? '应用到运行中的 VM' : '应用'}
+        {applyLive ? t('应用到运行中的 VM') : t('应用')}
       </button>
       <button type="button" disabled={busy} onClick={() => finish(false)}>
-        {applied ? '关闭' : '取消'}
+        {applied ? t('关闭') : t('取消')}
       </button>
     </Modal>
   );

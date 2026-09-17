@@ -83,7 +83,7 @@ describe('浏览器 Worker CPU 调度', () => {
     const engine = scheduler();
     expect(installWorkerCpuScheduler(engine)).toBe(true);
     const channel = Channel.instances[0]!;
-    engine.yield(delay, 0); // 已过期，仍由上游回调过滤
+    engine.yield(delay, 0); // Expired; still filtered by the upstream callback
     engine.yield(delay, 1);
     expect(engine.seen).toEqual([]);
     channel.deliver();

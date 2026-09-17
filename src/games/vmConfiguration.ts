@@ -1,13 +1,13 @@
 import type { SupportedGame, SupportedGameId } from './catalog';
 import { ra2YrVmConfiguration } from './shared/vmConfiguration';
 
-// 按所选游戏登记运行时工厂；共享实现是显式选择，不作为未知游戏的回退。
+// Register runtime factories by selected game; shared implementations are explicit choices, never fallbacks for unknown games.
 const runtimeFactories = {
   ra2: ra2YrVmConfiguration,
   yr: ra2YrVmConfiguration,
 } satisfies Record<SupportedGameId, typeof ra2YrVmConfiguration>;
 
-/** 主线程与 Worker 在本线程按相同游戏定义组装，不跨线程传递工厂。 */
+/** Main thread and Worker assemble locally from identical game definitions; factories never cross threads. */
 export function gameVmConfiguration(
   game: Pick<SupportedGame, 'id'>,
   ...options: Parameters<typeof ra2YrVmConfiguration>

@@ -113,10 +113,7 @@ const STORAGE_MAGIC = new TextEncoder().encode('SGBYSTG1');
 const MAX_OLE_STREAM_BYTES = 64 * 1024 * 1024;
 
 /**
- * OLE32 最小面。CoInitialize 只是每线程 COM 初始化计数（单执行线模型恒为主线程）；
- * CoCreateInstance 除了宿主实现的 DirectPlay，还会调用客体通过
- * CoRegisterClassObject 注册的 IClassFactory。RA2 用这条标准 COM 路径创建
- * Locomotor 等游戏内部对象，不能把注册调用仅当作成功的空操作。
+ * Minimal OLE32 support. CoInitialize counts COM initialization per thread, using the main thread in a single-execution model. Besides host DirectPlay, CoCreateInstance calls guest IClassFactory objects registered with CoRegisterClassObject. RA2 creates internal objects such as Locomotor through this standard COM path; registration cannot be a successful no-op.
  */
 export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
   return class extends Base {
@@ -124,7 +121,7 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
       super(...args);
     }
 
-    /** 单执行线模型下只有一条线程，初始化深度用计数即可。 */
+    /** The single-execution model has one thread, so a counter tracks initialization depth. */
     private comInitCount = 0;
     private nextClassCookie = 1;
     private registeredClasses = new Map<string, { cookie: number; factory: number }>();
@@ -142,8 +139,8 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
     dispatchOle32(call: Win32Call, key: string, _name: string, a: number[]): Win32Result | null {
       switch (key) {
         case 'OLE32.DLL!CoInitialize': {
-          // 官方语义：首次 S_OK(0)，重复初始化 S_FALSE(1)。pvReserved 必须为 NULL，
-          // 原版调用点传 0，这里不检查。
+          // Official semantics: first initialization returns S_OK(0), repeats S_FALSE(1). pvReserved must be NULL;
+          // native call sites pass 0, so no check is needed here.
           const first = this.comInitCount === 0;
           this.comInitCount++;
           return { eax: first ? 0 : 1 };
@@ -173,7 +170,7 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
           const destination = a[1] ?? 0;
           if (!destination) return { eax: 0x8000_4003 }; // E_POINTER
           if (!a[0]) {
-            this.zero(destination, 16); // NULL 字符串按 GUID_NULL
+            this.zero(destination, 16); // Treat NULL strings as GUID_NULL.
             return { eax: 0 };
           }
           const value = this.readOleWideString(a[0]).trim();
@@ -242,8 +239,8 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
           return { eax: 0 };
         }
         case 'OLE32.DLL!OleLoadFromStream':
-          // 当前存档路径只用 OleSaveToStream；保持可识别的 HRESULT，
-          // 不让未实现导入直接终止 VM。
+          // Current saves use only OleSaveToStream; retain recognizable HRESULTs
+          // instead of terminating the VM on unimplemented imports.
           if (a[2]) this.writeU32(a[2], 0);
           return { eax: 0x8000_4001 }; // E_NOTIMPL
         case 'OLE32.DLL!StgCreateDocfile': {
@@ -294,7 +291,7 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
           }
           return null;
         case 'OLE32.DLL!CoCreateInstance': {
-          // stdcall 5 参数 20 字节：rclsid, pUnkOuter, dwClsContext, riid, ppv。
+          // stdcall with five arguments and 20 bytes: rclsid, pUnkOuter, dwClsContext, riid, ppv.
           const rclsid = a[0] ?? 0;
           const pUnkOuter = a[1] ?? 0;
           const riid = a[3] ?? 0;
@@ -325,8 +322,8 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
               return { eax: 0 };
             }
           }
-          // RA2 会探测可选的 WOL/DirectPlay lobby COM 类。单机模式没有注册这些
-          // 外部组件，按真实 Windows 的“类未注册”返回，让游戏走离线路径。
+          // RA2 probes optional WOL/DirectPlay lobby COM classes. These external components are not registered
+          // in single-player; return Windows class-not-registered so the game takes its offline path.
           return { eax: 0x8004_0154 }; // REGDB_E_CLASSNOTREG
         }
       }
@@ -792,10 +789,7 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
     }
 
     /**
-     * OleSaveToStream 不是简单的成功桩：RA2 传入的 IPersistStream 是客体
-     * C++ COM 对象。借导入桩返回地址串起 GetClassID、IStream::Write 和
-     * IPersistStream::Save，让客体对象仍按原版 vtable 执行，同时宿主 IStream
-     * 继续通过动态 Win32 桩落入上面的存储实现。
+     * OleSaveToStream is not a simple success stub: RA2 passes guest C++ IPersistStream objects. Chain GetClassID, IStream::Write, and IPersistStream::Save through import-stub return addresses so guest objects execute original vtables while host IStream methods enter storage implementations through dynamic Win32 stubs.
      */
     private redirectOleSaveToStream(call: Win32Call, persistStream: number, stream: number): void {
       const originalReturn = this.readU32(call.stack);
@@ -823,7 +817,7 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
       code.push(0x8b, 0x11, 0xff, 0x52, 0x0c);
       jumpIfFailed();
 
-      // WriteClassStm 的有效载荷就是 16-byte CLSID。
+      // WriteClassStm's payload is exactly a 16-byte CLSID.
       push(written);
       push(16);
       push(clsid);
@@ -864,7 +858,7 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
     ): void {
       const factory = this.alloc(4, true);
       const iidClassFactory = this.alloc(16, true);
-      // IID_IClassFactory = {00000001-0000-0000-C000-000000000046}（内存字节序）。
+      // IID_IClassFactory = {00000001-0000-0000-C000-000000000046} in memory byte order.
       this.memory.write_memory([1, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46], iidClassFactory);
       const originalReturn = this.readU32(call.stack);
       const code: number[] = [];
@@ -890,11 +884,11 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
       push(riid);
       push(outer);
       code.push(0x51, 0x8b, 0x11, 0xff, 0x52, 0x0c); // factory->CreateInstance
-      code.push(0x50); // 保存 HRESULT
+      code.push(0x50); // Save HRESULT.
       code.push(0x8b, 0x0d);
       emit32(factory);
       code.push(0x51, 0x8b, 0x11, 0xff, 0x52, 0x08); // factory->Release
-      code.push(0x58); // 恢复 CreateInstance HRESULT
+      code.push(0x58); // Restore CreateInstance HRESULT.
       const finish = code.length;
       code.push(0xb9);
       emit32(originalReturn);
@@ -910,9 +904,7 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
     }
 
     /**
-     * import stub 执行 ret 20 后落入这段桥，直接调用客体 IClassFactory vtable。
-     * 此时 CoCreateInstance 的参数已由 stdcall 清理，所以最后必须跳回原返回地址，
-     * 同时原样保留 CreateInstance 的 HRESULT。
+     * After import-stub ret 20, this bridge directly calls the guest IClassFactory vtable. stdcall already removed CoCreateInstance arguments, so jump to the original return address while preserving CreateInstance HRESULT.
      */
     protected redirectRegisteredCoCreate(
       call: Win32Call,

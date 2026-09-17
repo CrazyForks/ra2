@@ -5,7 +5,7 @@ import { type GameFileProvider } from '../resources/contracts';
 import { type GameSource } from '../games/source';
 import type { VmAttachResult } from './vmShell';
 
-/** 只收 CSF / YRM / MPR；不执行安装器，不把包中的 EXE、DLL 或规则文件挂进游戏。 */
+/** Accept only CSF / YRM / MPR; do not execute installers or mount bundled EXEs, DLLs, or rules files into the game. */
 export async function readCustomMapPackage(
   bytes: Uint8Array,
   onStatus?: (message: string) => void,
@@ -27,18 +27,18 @@ export function validateCustomMapFiles(files: ReadonlyMap<string, Uint8Array>): 
   return normalized;
 }
 
-/** 与主线程/Worker 共用同一覆盖语义；客体改写只落会话，不污染原安装目录。 */
+/** Use the same overlay semantics on the main thread and in Workers; guest writes stay in the session and do not alter the original installation. */
 export function mountCustomMapFiles(source: GameSource, files: ReadonlyMap<string, Uint8Array>): GameSource {
   if (!files.size) return source;
   const normalized = validateCustomMapFiles(files);
-  // 对比地图兼容性时禁用附加 CSF，避免覆盖本体文本表；旧缓存也走此闸门。
-  // 仅过滤挂载副本，不删除提取结果，主线程与 Worker 的行为保持一致。
+  // Disable add-on CSF files for map compatibility comparisons so they cannot override the base text table; old caches pass through this gate too.
+  // Filter only the mounted copy, preserving extracted data and identical main-thread/Worker behavior.
   for (const name of normalized.keys()) if (name.endsWith('.csf')) normalized.delete(name);
   if (!normalized.size) return source;
   return { ...source, files: new OverlayGameFileProvider(source.files, normalized, ' + 自定义地图', true) };
 }
 
-/** 首版热挂载只新增地图；已有文件可能被客体打开或缓存，不在运行中覆盖。 */
+/** Initial hot-mount support adds new maps only; do not overwrite existing files that the guest may have open or cached. */
 export async function prepareDynamicMaps(
   base: GameFileProvider,
   files: ReadonlyMap<string, Uint8Array>,
@@ -49,7 +49,7 @@ export async function prepareDynamicMaps(
   const added = new Map<string, Uint8Array>();
   const result: VmAttachResult = { attached: [], existing: [] };
   for (const [name, bytes] of normalized) {
-    // 同时在接收端过滤，旧缓存或直接 RPC 传入的 CSF 都不能绕过。
+    // Filter on the receiving side too so old caches or direct RPC CSF input cannot bypass the restriction.
     if (name.endsWith('.csf')) continue;
     const present =
       listing !== null

@@ -1,4 +1,4 @@
-/** 最终颜色帧之后、独立光标之前运行；不得保留或修改客体帧内存。 */
+/** Run after the final color frame and before the independent cursor; never retain or modify guest-frame memory. */
 export interface FramePostProcess {
   draw(width: number, height: number): void;
   destroy(): void;
@@ -9,12 +9,14 @@ export interface ColorPassOptions {
   fragment: string;
   colorSampler: string;
   linear?: boolean;
-  /** 同步设置效果参数；纹理槽 0 留给最终颜色。资源由调用方自行销毁。 */
+  /** Set effect parameters synchronously; reserve texture slot 0 for final color. The caller destroys its resources. */
   bind?: (gl: WebGL2RenderingContext, program: WebGLProgram) => void;
 }
 
-/** 单 pass GLSL ES 宿主。先 GPU 内复制最终颜色，兼容现有 AI 输出及缓存重绘路径。
- * 每帧增加一次颜色复制；这是集成基线，尚未做 FBO 融合或性能优化。 */
+/**
+ * Single-pass GLSL ES host. Copy final color on the GPU first, supporting existing AI output and cached redraws.
+ * Adds one color copy per frame; this is an integration baseline without FBO fusion or performance optimization.
+ */
 export class ColorPostProcess implements FramePostProcess {
   private program: WebGLProgram | null = null;
   private texture: WebGLTexture | null = null;
@@ -62,7 +64,7 @@ export class ColorPostProcess implements FramePostProcess {
   draw(width: number, height: number): void {
     if (this.destroyed) return;
     const { gl } = this;
-    // 效果使用独立 VAO，并恢复共享绑定，避免污染索引色/整数纹理及下一帧。
+    // Use a separate VAO for effects and restore shared bindings to avoid contaminating indexed/integer textures or the next frame.
     const previousVao = gl.getParameter(gl.VERTEX_ARRAY_BINDING) as WebGLVertexArrayObject | null;
     const previousActive = gl.getParameter(gl.ACTIVE_TEXTURE) as number;
     gl.activeTexture(gl.TEXTURE0);

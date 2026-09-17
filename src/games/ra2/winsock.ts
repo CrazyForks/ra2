@@ -21,7 +21,7 @@ type DplayChain = InstanceType<ReturnType<typeof withDplayx>>;
 
 declare module '../../vm86/win32' {
   interface Win32ShimOptions {
-    /** RA2 虚拟 LAN 传输工厂；浏览器默认 WebSocket，Node 回归可注入 BroadcastChannel。 */
+    /** RA2 virtual LAN transport factory; browsers default to WebSocket, while Node regressions may inject BroadcastChannel. */
     ra2NetworkTransportFactory?: Ra2NetworkTransportFactory;
     ra2NetworkEnabled?: boolean;
     ra2NetworkRoom?: string;
@@ -30,7 +30,7 @@ declare module '../../vm86/win32' {
   }
 }
 
-// ---- Winsock 1.1 常量 -------------------------------------------------------
+// ---- Winsock 1.1 constants -------------------------------------------------
 const AF_INET = 2;
 const AF_IPX = 6;
 const SOCK_STREAM = 1;
@@ -38,8 +38,8 @@ const SOCK_DGRAM = 2;
 const IPPROTO_UDP = 17;
 const IPPROTO_TCP = 6;
 const NSPROTO_IPX = 1000;
-// IPX 套接字选项（level = NSPROTO_IPX）；IPX_PTYPE(0x4000)/IPX_FILTERPTYPE(0x4001)
-// 等头部选项由客体双方自行解释 payload，setsockopt 登记即成功，无需逐选项记录。
+// IPX socket options (level = NSPROTO_IPX): guest peers interpret header options such as IPX_PTYPE(0x4000)/IPX_FILTERPTYPE(0x4001)
+// through the payload; accepting setsockopt suffices without storing each option separately.
 const IPX_ADDRESS = 0x4007;
 const IPX_MAX_ADAPTER_NUM = 0x400d;
 const SOL_SOCKET = 0xffff;
@@ -78,14 +78,14 @@ const SOCKET_HANDLE_BASE = 0xa000;
 const MAX_SOCKETS = 64;
 const EPHEMERAL_PORT_BASE = 49_152;
 const EPHEMERAL_PORT_SPAN = 16_384;
-/** 每个 socket 的接收队列上限：UDP 允许丢包，超限丢新包而不是撑爆内存。 */
+/** Per-socket receive-queue limit: UDP allows loss, so drop new packets on overflow instead of exhausting memory. */
 const RECV_QUEUE_MAX_PACKETS = 64;
 const RECV_QUEUE_MAX_BYTES = 256 * 1024;
-/** sockaddr_in 固定 16 字节。 */
+/** sockaddr_in is always 16 bytes. */
 const SOCKADDR_IN_BYTES = 16;
 /** sockaddr_ipx：family(2) + netnum(4) + nodenum(6) + socket(2)。 */
 const SOCKADDR_IPX_BYTES = 14;
-/** 环回目标：127.0.0.0/8 与本机虚拟地址。 */
+/** Loopback destinations: 127.0.0.0/8 and the local virtual address. */
 const LOOPBACK_PREFIX = 0x7f00_0000;
 
 interface Ra2SocketState {
@@ -93,9 +93,9 @@ interface Ra2SocketState {
   family: number;
   type: number;
   protocol: number;
-  /** 绑定的本地地址（网络序 u32；0 = INADDR_ANY）。 */
+  /** Bound local address, a network-order u32; 0 = INADDR_ANY. */
   localAddr: number;
-  /** 绑定端口（主机序数值；0 = 未绑定）。 */
+  /** Bound port in host order; 0 = unbound. */
   localPort: number;
   broadcast: boolean;
   reuseAddr: boolean;
@@ -104,7 +104,7 @@ interface Ra2SocketState {
   asyncHwnd: number;
   asyncMsg: number;
   asyncEvents: number;
-  /** FD_READ 通知是边沿触发：已通知且队列未排空时不重复投递。 */
+  /** FD_READ notification is edge-triggered: do not repeat it while the notified queue remains nonempty. */
   readNotified: boolean;
   recvQueue: Array<{ srcAddr: number; srcPort: number; bytes: Uint8Array }>;
   recvBytes: number;
@@ -118,31 +118,19 @@ function bswap32(value: number): number {
   return (((value & 0xff) << 24) | ((value & 0xff00) << 8) | ((value >>> 8) & 0xff00) | ((value >>> 24) & 0xff)) >>> 0;
 }
 
-/** 网络序 u32 → 点分十进制文本。 */
+/** Network-order u32 to dotted-decimal text. */
 export function formatRa2Address(addr: number): string {
   return `${(addr >>> 24) & 0xff}.${(addr >>> 16) & 0xff}.${(addr >>> 8) & 0xff}.${addr & 0xff}`;
 }
 
 /**
- * RA2 的 Winsock 1.1 客体语义（WSOCK32.DLL 19 个序数导入）。
+ * RA2 Winsock 1.1 guest semantics for 19 ordinal imports from WSOCK32.DLL.
  *
- * 每个 VM 一张独立 socket 表 + 逐调用错误状态；数据报经 RA2 虚拟 LAN
- * （BroadcastChannel / WebSocket 中继）到达对端，payload 原样透传。
- * 网络懒接入：首个 socket 或 gethostbyname 才创建传输，
- * 单机路径不触碰任何网络设施。
+ * Each VM has an independent socket table and per-call error state. Datagrams reach peers through RA2 virtual LAN (BroadcastChannel / WebSocket relay) with unchanged payloads. Create the transport lazily on the first socket or gethostbyname; single-player never touches network facilities.
  *
- * RA2 局域网的线协议是 IPX（主菜单「网络」按钮 → socket(AF_IPX, SOCK_DGRAM,
- * NSPROTO_IPX)），1.006 的 UDP 路径只服务互联网模式。这里把 IPX socket 映射到
- * 虚拟 LAN 数据报：IPX socket 号 ↔ 传输端口，nodenum ↔ 虚拟地址
- * （[a0,a1,a2,a3,a0,a1] 重复前缀布局，游戏拷贝 IPX_ADDRESS 时会重叠读取
- * 末两字节，该布局保证还原后仍是同一节点），FF×6 广播 ↔ 子网定向广播。
- * 传输未接入（Node 回归 / 单机）时 socket 与 bind 照常成功，发送按丢包语义
- * 丢弃，大厅可以正常打开。
+ * RA2 LAN uses IPX: the main-menu Network button opens socket(AF_IPX, SOCK_DGRAM, NSPROTO_IPX); 1.006's UDP path serves only Internet mode. Map IPX sockets to virtual LAN datagrams: IPX socket number to transport port, nodenum to virtual address with repeated-prefix layout [a0,a1,a2,a3,a0,a1]. The game's IPX_ADDRESS copies overlap the last two bytes; this layout restores the same node. Map FFx6 broadcasts to subnet-directed broadcasts. Without a transport, as in Node regressions/single-player, socket and bind still succeed, sends drop packets, and the lobby can open normally.
  *
- * 序数 1111 = EnumProtocolsA（mswsock 转发，Win9x PROTOCOL_INFOA 32 字节
- * 结构）。已经动态轨迹确认：RA2 启动时以 lpiProtocols=[IPPROTO_UDP,1000,0]、
- * 4KB 缓冲调用，返回值仅用于「Found protocol %s, max frame size is %d」
- * 诊断日志；协议目录提供 UDP/TCP 两项即可满足。
+ * Ordinal 1111 is EnumProtocolsA, forwarded from mswsock, using 32-byte Win9x PROTOCOL_INFOA structures. Traces confirm RA2 calls it at startup with lpiProtocols=[IPPROTO_UDP,1000,0] and a 4KB buffer, using results only for the diagnostic log "Found protocol %s, max frame size is %d"; UDP/TCP catalog entries suffice for that usage.
  */
 export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBase) {
   return class extends Base {
@@ -177,17 +165,17 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
     private ra2HostentBlock = 0;
     private ra2InetNtoaBlock = 0;
     private ra2LastNetLogAt = 0;
-    /** 传输未接入时为本机 IPX 节点分配的子网地址（会话内稳定）。 */
+    /** Subnet address assigned to the local IPX node without a transport; stable for the session. */
     private ra2IpxFallbackAddr = 0;
 
-    // ---- 基础工具 -----------------------------------------------------------
+    // ---- Basic helpers --------------------------------------------------------
 
     private wsaFail(code: number): Win32Result {
       this.wsaError = code;
       return { eax: SOCKET_ERROR };
     }
 
-    /** 稳定且房间内近似唯一的虚拟主机名（RA2VM- 前缀 + 实例随机后缀）。 */
+    /** Stable, approximately room-unique virtual hostname: RA2VM- plus a random instance suffix. */
     private ensureRa2Hostname(): string {
       if (!this.ra2Hostname) {
         const suffix = Math.floor(Math.random() * 0xff_ffff)
@@ -199,7 +187,7 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
       return this.ra2Hostname;
     }
 
-    /** 客体 sockaddr_in → { family, port, addr }（端口/地址转成本函数内部约定数值）。 */
+    /** Guest sockaddr_in to { family, port, addr }, converting port/address to internal numeric conventions. */
     private readSockaddrIn(ptr: number): { family: number; port: number; addr: number } | null {
       if (!ptr) return null;
       return {
@@ -218,9 +206,9 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
       this.writeU32(ptr + 4, beAddr);
     }
 
-    // ---- IPX 地址映射 ---------------------------------------------------------
+    // ---- IPX address mapping --------------------------------------------------
 
-    /** 本机 IPX 节点地址：优先传输分配的地址，未接入时用会话级随机的子网地址。 */
+    /** Local IPX node address: prefer the transport-assigned address; otherwise use a session-random subnet address. */
     private ensureRa2IpxSelfAddr(): number {
       if (this.ra2SelfAddr) return this.ra2SelfAddr;
       if (!this.ra2IpxFallbackAddr) {
@@ -229,18 +217,18 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
       return this.ra2IpxFallbackAddr;
     }
 
-    /** 虚拟地址 → IPX nodenum：[a0,a1,a2,a3,a0,a1]（前缀重复，见文件头注释）。 */
+    /** Virtual address to IPX nodenum: [a0,a1,a2,a3,a0,a1], repeating the prefix as explained in the header comment. */
     private ipxNodeOf(addr: number): number[] {
       const b = [(addr >>> 24) & 0xff, (addr >>> 16) & 0xff, (addr >>> 8) & 0xff, addr & 0xff];
       return [b[0]!, b[1]!, b[2]!, b[3]!, b[0]!, b[1]!];
     }
 
-    /** IPX nodenum 是否全 FF（IPX 广播节点）。 */
+    /** Whether IPX nodenum is all FF, the IPX broadcast node. */
     private isIpxBroadcastNode(node: number[]): boolean {
       return node.every((byte) => byte === 0xff);
     }
 
-    /** 客体 sockaddr_ipx → { family, node, socket }（socket 号转成本函数内部约定数值）。 */
+    /** Guest sockaddr_ipx to { family, node, socket }, converting the socket number to internal numeric conventions. */
     private readSockaddrIpx(ptr: number): { family: number; node: number[]; socket: number } | null {
       if (!ptr) return null;
       return {
@@ -253,15 +241,15 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
     private writeSockaddrIpx(ptr: number, addr: number, socket: number): void {
       this.zero(ptr, SOCKADDR_IPX_BYTES);
       this.memory.write_memory([AF_IPX & 0xff, 0], ptr);
-      // netnum 保持 0：所有节点同在本地网段。
+      // Keep netnum at 0: all nodes belong to the local subnet.
       this.memory.write_memory(this.ipxNodeOf(addr), ptr + 6);
       const beSocket = bswap16(socket);
       this.memory.write_memory([beSocket & 0xff, (beSocket >>> 8) & 0xff], ptr + 12);
     }
 
-    // ---- 虚拟 LAN 会话 -------------------------------------------------------
+    // ---- Virtual LAN session --------------------------------------------------
 
-    /** 懒接入虚拟 LAN；任何失败都记入 joinFailed，保持隔离单机语义。 */
+    /** Join the virtual LAN lazily; record any failure in joinFailed and retain isolated single-player semantics. */
     private ensureRa2Network(): void {
       if (this.ra2Transport || this.ra2JoinFailed) return;
       if (this.options.ra2NetworkEnabled !== true) {
@@ -339,7 +327,7 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
       console.warn(`[ra2net] ${message}`);
     }
 
-    /** 数据报进入本机：按端口分派到已绑定 socket，触发 FD_READ 边沿通知。 */
+    /** Incoming datagrams: dispatch by port to bound sockets and trigger FD_READ edge notifications. */
     private deliverDatagram(
       srcAddr: number,
       srcPort: number,
@@ -349,7 +337,7 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
     ): void {
       for (const socket of this.ra2Sockets.values()) {
         if (socket.type !== SOCK_DGRAM || socket.localPort === 0 || socket.localPort !== destPort) continue;
-        // 绑定到具体地址的 socket 只收发到该地址的包；INADDR_ANY 与广播包不受限。
+        // Sockets bound to a specific address receive only packets addressed to it; INADDR_ANY and broadcasts are unrestricted.
         if (
           !loopback &&
           socket.localAddr !== 0 &&
@@ -362,7 +350,7 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
           socket.recvQueue.length >= RECV_QUEUE_MAX_PACKETS ||
           socket.recvBytes + payload.byteLength > RECV_QUEUE_MAX_BYTES
         ) {
-          continue; // UDP 语义：队列满丢新包
+          continue; // UDP semantics: drop new packets when the queue is full.
         }
         socket.recvQueue.push({ srcAddr, srcPort, bytes: payload.slice() });
         socket.recvBytes += payload.byteLength;
@@ -373,7 +361,7 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
       }
     }
 
-    /** 隐式绑定（sendto 未 bind 的 socket 时 Windows 自动分配临时端口）。 */
+    /** Implicit bind: Windows assigns an ephemeral port when sendto uses an unbound socket. */
     private bindEphemeral(socket: Ra2SocketState): boolean {
       for (let attempt = 0; attempt < EPHEMERAL_PORT_SPAN; attempt++) {
         const port = EPHEMERAL_PORT_BASE + ((socket.handle + attempt * 7) % EPHEMERAL_PORT_SPAN);
@@ -394,7 +382,7 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
       this.ra2Sockets.clear();
     }
 
-    /** 冒烟/调试自检：虚拟 LAN 与 socket 表快照。 */
+    /** Smoke/debug inspection: snapshot the virtual LAN and socket table. */
     public inspectRa2Network(): {
       started: number;
       selfAddr: string;
@@ -423,7 +411,7 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
       if ((requested & 0xff) < 1) return this.wsaFail(WSAVERNOTSUPPORTED);
       this.wsaStartupCount++;
       if (data) {
-        // WSADATA 1.1：wVersion/wHighVersion + 257B 描述 + 129B 状态 + 限制字段。
+        // WSADATA 1.1: wVersion/wHighVersion, 257B description, 129B status, and limit fields.
         this.zero(data, 400);
         this.memory.write_memory([1, 1, 1, 1], data);
         const description = 'RA2 Virtual Winsock 1.1';
@@ -465,7 +453,7 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
       if (family !== AF_INET && family !== AF_IPX) return this.wsaFail(WSAEAFNOSUPPORT);
       if (type !== SOCK_DGRAM && type !== SOCK_STREAM) return this.wsaFail(WSAESOCKTNOSUPPORT);
       if (family === AF_IPX) {
-        // IPX 只有数据报语义；协议号固定 NSPROTO_IPX。
+        // IPX supports only datagrams; the protocol is always NSPROTO_IPX.
         if (type !== SOCK_DGRAM) return this.wsaFail(WSAESOCKTNOSUPPORT);
         if (protocol !== 0 && protocol !== NSPROTO_IPX) return this.wsaFail(WSAEPROTONOSUPPORT);
       } else if (
@@ -494,7 +482,7 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
         recvQueue: [],
         recvBytes: 0,
       });
-      // 首个 socket 建立即接入虚拟 LAN（发现流量在 sendto 之前就可能到达）。
+      // Join the virtual LAN on first socket creation; discovery traffic may arrive before sendto.
       this.ensureRa2Network();
       return { eax: handle };
     }
@@ -515,7 +503,7 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
           (other) => other !== socket && other.localPort === addr.socket,
         );
         if (conflict) return this.wsaFail(WSAEADDRINUSE);
-        // IPX 绑定不限制投递地址：netnum 0 表示本地网段，节点即本机。
+        // IPX bind does not restrict delivery addresses: netnum 0 means the local subnet and the node is local.
         socket.localAddr = 0;
         socket.localPort = addr.socket;
         return { eax: 0 };
@@ -577,10 +565,10 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
         const loopback =
           !broadcast && (destAddr === self || (this.ra2IpxFallbackAddr !== 0 && destAddr === this.ra2IpxFallbackAddr));
         if (broadcast || loopback) {
-          // 广播回本机（真实协议栈行为）与指向本机节点的包都走本地投递。
+          // Deliver broadcasts back to the local host, matching real stacks, and locally addressed packets through local delivery.
           this.deliverDatagram(self, socket.localPort, target.socket, payload, true);
         }
-        // 传输未就绪时按丢包语义处理，客体仍看到发送成功；本机单播不再上线。
+        // If transport is not ready, drop as packet loss while reporting send success to the guest; local unicast never goes online.
         if (!loopback) {
           this.ra2Transport?.sendDatagram(destAddr, target.socket, socket.localPort, payload);
         }
@@ -591,7 +579,7 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
       if (target.family !== AF_INET) return this.wsaFail(WSAEAFNOSUPPORT);
       if (target.port === 0) return this.wsaFail(WSAEDESTADDRREQ);
       if (socket.localPort === 0 && !this.bindEphemeral(socket)) return this.wsaFail(WSAEADDRINUSE);
-      if (length === 0) return { eax: 0 }; // 空数据报本地丢弃（线协议不承载空包）
+      if (length === 0) return { eax: 0 }; // Drop empty datagrams locally; the wire protocol does not carry them.
       const payload = this.memory.read_memory(buffer, length).slice();
       const broadcast = isRa2BroadcastAddress(target.addr);
       if (broadcast && !socket.broadcast) return this.wsaFail(WSAEACCES);
@@ -602,10 +590,10 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
         return { eax: length };
       }
       if (broadcast) {
-        // 广播同時回本机（真实协议栈行为）再扇出到房间其他成员。
+        // Loop broadcasts back locally, matching real stacks, then fan out to other room members.
         this.deliverDatagram(this.ra2SelfAddr || 0x7f00_0001, socket.localPort, target.port, payload, true);
       }
-      // 传输未就绪时按 UDP 丢包语义处理，客体仍看到发送成功。
+      // If transport is not ready, apply UDP packet-loss semantics while reporting send success to the guest.
       this.ra2Transport?.sendDatagram(target.addr, target.port, socket.localPort, payload);
       return { eax: length };
     }
@@ -636,7 +624,7 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
       if (!peek) {
         socket.recvQueue.shift();
         socket.recvBytes -= head.bytes.byteLength;
-        // FD_READ 重武装：排空后允许下一次边沿通知；未排空则按 Winsock 语义再投一次。
+        // Rearm FD_READ after draining for the next edge; if still nonempty, post another notification following Winsock semantics.
         if (socket.recvQueue.length === 0) {
           socket.readNotified = false;
         } else if ((socket.asyncEvents & FD_READ) !== 0 && socket.asyncHwnd) {
@@ -655,8 +643,8 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
       const valuePtr = a[3] ?? 0;
       const valueLength = a[4] ?? 0;
       if (!valuePtr || valueLength < 4) return this.wsaFail(WSAEFAULT);
-      // IPX_PTYPE / IPX_FILTERPTYPE 等头部选项：虚拟 LAN 原样透传 payload，
-      // 头部由客体双方自行解释，登记即成功。
+      // IPX_PTYPE / IPX_FILTERPTYPE and other header options: virtual LAN forwards payloads unchanged,
+      // and guest peers interpret headers, so registration succeeds directly.
       if (level === NSPROTO_IPX) return { eax: 0 };
       if (level !== SOL_SOCKET) return this.wsaFail(WSAENOPROTOOPT);
       const value = this.readU32(valuePtr);
@@ -688,13 +676,13 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
       if (!valuePtr || !lengthPtr) return this.wsaFail(WSAEFAULT);
       if (level === NSPROTO_IPX) {
         if (option === IPX_MAX_ADAPTER_NUM) {
-          // 单网卡：游戏要求请求的适配器序号 < 该值。
+          // One network adapter: the game requires requested adapter indexes to be less than this value.
           this.writeU32(valuePtr, 1);
           this.writeU32(lengthPtr, 4);
           return { eax: 0 };
         }
         if (option === IPX_ADDRESS) {
-          // 布局按游戏读取：netnum@0(4)、保留@4(4)、nodenum@8(6)、socket@14(2)。
+          // Layout follows game reads: netnum@0(4), reserved@4(4), nodenum@8(6), socket@14(2).
           if (this.readU32(lengthPtr) < 16) return this.wsaFail(WSAEFAULT);
           this.zero(valuePtr, 16);
           this.memory.write_memory(this.ipxNodeOf(this.ensureRa2IpxSelfAddr()), valuePtr + 8);
@@ -745,11 +733,11 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
       socket.asyncHwnd = hwnd;
       socket.asyncMsg = message;
       socket.asyncEvents = events;
-      // 数据报 socket 恒可写：原生协议栈在登记后立即投一次 FD_WRITE。
+      // Datagram sockets are always writable; native stacks post FD_WRITE immediately after registration.
       if ((events & FD_WRITE) !== 0) {
         this.queueMessage(message, socket.handle, FD_WRITE, hwnd);
       }
-      // 登记时队列里已有积压：立即补一次 FD_READ。
+      // If the queue already contains data at registration, post FD_READ immediately.
       if ((events & FD_READ) !== 0 && socket.recvQueue.length > 0 && !socket.readNotified) {
         socket.readNotified = true;
         this.queueMessage(message, socket.handle, FD_READ, hwnd);
@@ -778,7 +766,7 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
       }
       const requested = this.readCString(namePtr, 256).toLowerCase();
       const hostname = this.ensureRa2Hostname().toLowerCase();
-      // 查询本机名是游戏获知本机 IP 的入口；此时接入虚拟 LAN 还来得及参与发现。
+      // Resolving the local hostname is how the game obtains its own IP; joining the virtual LAN now is still early enough for discovery.
       this.ensureRa2Network();
       let addr: number;
       if (requested === hostname) {
@@ -789,7 +777,7 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
         this.wsaError = WSAHOST_NOT_FOUND;
         return { eax: 0 };
       }
-      // hostent 静态缓冲（真实 Winsock 每线程一份，重复调用覆盖）。
+      // Static hostent buffer; real Winsock keeps one per thread, overwritten by repeated calls.
       if (!this.ra2HostentBlock) this.ra2HostentBlock = this.alloc(96, true);
       const block = this.ra2HostentBlock;
       this.zero(block, 96);
@@ -798,26 +786,26 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
       for (let i = 0; i < host.length; i++) {
         this.memory.write_memory([host.charCodeAt(i) & 0x7f], nameOut + i);
       }
-      const addrList = block + 16 + 64; // h_addr_list 数组：[addrPtr, 0]
+      const addrList = block + 16 + 64; // h_addr_list array: [addrPtr, 0].
       const addrOut = addrList + 8;
       this.writeU32(addrOut, bswap32(addr));
       this.writeU32(addrList, addrOut);
       this.writeU32(block, nameOut); // h_name
-      this.writeU32(block + 4, block + 16 + 64 + 8 + 4); // h_aliases → 空数组
+      this.writeU32(block + 4, block + 16 + 64 + 8 + 4); // h_aliases points to an empty array.
       this.memory.write_memory([AF_INET & 0xff, 0, 4, 0], block + 8); // h_addrtype + h_length
       this.writeU32(block + 12, addrList);
       return { eax: block };
     }
 
-    /** EnumProtocolsA：Win9x PROTOCOL_INFOA（8 字段 32 字节），名字串紧随结构体数组。 */
+    /** EnumProtocolsA: Win9x PROTOCOL_INFOA, 8 fields and 32 bytes; name strings immediately follow the structure array. */
     private wsaEnumProtocols(a: number[]): Win32Result {
       const protocolsPtr = a[0] ?? 0;
       const buffer = a[1] ?? 0;
       const lengthPtr = a[2] ?? 0;
       if (!lengthPtr) return this.wsaFail(WSAEFAULT);
       const capacity = this.readU32(lengthPtr);
-      // 与装有 IPX/SPX 协议栈的真实 Win9x 一致：目录同时提供 UDP/TCP/IPX。
-      // 游戏按 [IPPROTO_UDP, NSPROTO_IPX, 0] 探测，找到即允许局域网入口。
+      // Match real Win9x with IPX/SPX installed by providing UDP/TCP/IPX catalog entries.
+      // The game probes [IPPROTO_UDP, NSPROTO_IPX, 0] and enables LAN entry when found.
       const catalog = [
         {
           id: IPPROTO_UDP,
@@ -829,7 +817,7 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
         { id: IPPROTO_TCP, family: AF_INET, socketType: SOCK_STREAM, messageSize: 0, name: 'TCP' },
         { id: NSPROTO_IPX, family: AF_IPX, socketType: SOCK_DGRAM, messageSize: 576, name: 'IPX' },
       ];
-      // lpiProtocols 是以 0 结尾的协议号数组；NULL 表示枚举全部。
+      // lpiProtocols is a zero-terminated protocol-number array; NULL enumerates all protocols.
       let requested: number[] | null = null;
       if (protocolsPtr) {
         requested = [];
@@ -870,7 +858,7 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
     }
 
     private wsaInetNtoa(a: number[]): Win32Result {
-      // 客体按值传入 in_addr（u32 的小端解释），文本从低字节开始逐段输出。
+      // The guest passes in_addr by value as a little-endian u32; output dotted text starting from the low byte.
       if (!this.ra2InetNtoaBlock) this.ra2InetNtoaBlock = this.alloc(16, true);
       const value = a[0] ?? 0;
       const text = `${value & 0xff}.${(value >>> 8) & 0xff}.${(value >>> 16) & 0xff}.${(value >>> 24) & 0xff}`;
@@ -881,10 +869,10 @@ export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBas
       return { eax: this.ra2InetNtoaBlock };
     }
 
-    /** WSOCK32.DLL 序数导入分派（19 个序数全部具备语义）。 */
+    /** WSOCK32.DLL ordinal-import dispatch; all 19 ordinals have implemented semantics. */
     protected dispatchGameWinsock(key: string, a: number[]): Win32Result | null {
-      // Winsock 语义包含 RA2 协议目录、主机名与虚拟 LAN 地址空间，绝不能因
-      // 某个未知游戏也导入 WSOCK32 就自动套用。
+      // These Winsock semantics include RA2's protocol catalog, hostname, and virtual LAN address space; never apply them automatically
+      // just because an unknown game also imports WSOCK32.
       if (!this.gameProfile.virtualWinsockLan) return null;
       switch (key) {
         case 'WSOCK32.DLL!ord115':

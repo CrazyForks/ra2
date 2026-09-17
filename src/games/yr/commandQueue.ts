@@ -2,7 +2,7 @@ import type { GuestMemory } from '../../vm86/win32';
 import { createCommandQueueReader } from '../shared/commandQueue';
 import { YR_STARTUP_PAGE_HASH } from './startupPage';
 
-/** YR 1.001：EventClass 为 111 字节；各环地址与 RA2 隔离。 */
+/** YR 1.001: EventClass is 111 bytes; all ring addresses are isolated from RA2. */
 export function createYrCommandQueueReader(memory: GuestMemory, hash: string) {
   return createCommandQueueReader(memory, hash, {
     hash: YR_STARTUP_PAGE_HASH,

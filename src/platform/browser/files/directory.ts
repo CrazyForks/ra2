@@ -1,19 +1,21 @@
 import type { GameFileProvider } from '../../../resources/contracts';
 import { normalizeGuestPath } from '../../../vm86/paths';
 
-// 当前 DOM 类型库未声明异步目录枚举，仅补充实际使用的 entries。
+// Current DOM types omit asynchronous directory enumeration; add only the entries method actually used.
 type IterableDirectoryHandle = FileSystemDirectoryHandle & {
   entries(): AsyncIterableIterator<[string, FileSystemHandle]>;
 };
 
-/** 用户授权的真实游戏目录；大小写无关读取，写操作串行落盘。 */
+/** User-authorized real game directory; case-insensitive reads and serialized disk writes. */
 export class DirectoryGameFileProvider implements GameFileProvider {
   readonly label: string;
   private writeChain: Promise<void> = Promise.resolve();
-  /** 写入尚未落盘时的快照优先于磁盘读取（避免 save 后立即 load 被异步 close 卡住）。
-   *  落盘完成即移除：此后读盘即最新内容，Windows 端在会话中覆盖的存档下次打开可见。 */
+  /**
+   * Pending-write snapshots take precedence over disk reads so immediate save/load does not stall on asynchronous close.
+   * Remove snapshots after persistence; subsequent reads see fresh disk content, including saves overwritten externally in Windows during the session.
+   */
   private readonly writeSnapshots = new Map<string, Uint8Array>();
-  /** File System Access 的 entries() 在大目录上很贵，每个目录只建一次大小写无关索引。 */
+  /** File System Access entries() is expensive for large directories; build each directory's case-insensitive index once. */
   private entryIndexes = new WeakMap<
     FileSystemDirectoryHandle,
     Promise<Map<string, { name: string; handle: FileSystemHandle }>>
@@ -80,12 +82,12 @@ export class DirectoryGameFileProvider implements GameFileProvider {
     const operation = this.writeChain.then(() => this.writeNow(path, snapshot));
     this.writeChain = operation.catch(() => {
       if (this.writeSnapshots.get(normalized) === snapshot) this.writeSnapshots.delete(normalized);
-      // 保持后续存档写入可以继续排队；调用方仍会收到 operation 的原始 reject。
+      // Allow later save writes to remain queued; callers still receive the operation's original rejection.
     });
     void operation.then(
       () => {
-        // 落盘完成：磁盘已是最新内容，撤掉快照让后续读取（包括 Windows 端的外部
-        // 覆盖）直接走 getFile()。身份比较防止误删更新一次写入的快照。
+        // Persistence is complete and disk content is current; remove the snapshot so later reads, including external Windows
+        // overwrites, use getFile() directly. Identity comparison prevents removing a newer write's snapshot.
         if (this.writeSnapshots.get(normalized) === snapshot) this.writeSnapshots.delete(normalized);
       },
       () => {},

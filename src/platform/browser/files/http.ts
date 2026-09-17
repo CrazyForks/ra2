@@ -9,7 +9,7 @@ const PREFIX_CACHE_MAX_ENTRY_BYTES = 64 * 1024;
 
 const HTTP_FETCH_RETRY_DELAYS_MS = [0, 100, 300] as const;
 
-/** 瞬时网络失败不能直接中断 VM 的 CreateFile；真实 HTTP 状态码仍由调用者处理。 */
+/** Transient network failures must not immediately abort VM CreateFile; callers still handle actual HTTP status codes. */
 export async function fetchGameResource(url: string, init?: RequestInit): Promise<Response> {
   let lastError: unknown;
   for (const delay of HTTP_FETCH_RETRY_DELAYS_MS) {
@@ -23,12 +23,12 @@ export async function fetchGameResource(url: string, init?: RequestInit): Promis
   throw lastError;
 }
 
-/** Vite 本地开发后端（URL 根 /game/）；原版资源只读，存档等写入保存到浏览器 IndexedDB。 */
+/** Vite local development backend rooted at /game/: original assets are read-only; saves and other writes persist in browser IndexedDB. */
 export class HttpGameFileProvider implements GameFileProvider {
-  /** 不支持 Range 的服务器只接收一次完整 Blob；只留最近一个，避免多个大包常驻。 */
+  /** Servers without Range support return a full Blob once; retain only the latest one to avoid keeping multiple large packages resident. */
   private rangeFallback: { path: string; blob: Blob } | null = null;
   readonly label = '开发版资源';
-  // FindFirstFile 反复读取 1 字节以取得文件长度；避免每轮枚举都发起 Range 请求。
+  // FindFirstFile repeatedly reads one byte for file length; avoid a Range request on every enumeration.
   private readonly prefixes = new Map<string, FilePrefix>();
   private prefixBytes = 0;
   private readonly pendingPrefixes = new Map<string, { length: number; request: Promise<FilePrefix | null> }>();
@@ -55,7 +55,7 @@ export class HttpGameFileProvider implements GameFileProvider {
     if (this.writes.has(normalized)) return true;
     const persisted = this.writeCache.hasKnownKey(normalized);
     if (persisted) return true;
-    // 持久化 key 尚未枚举完成时不能把 IndexedDB 中的同名文件误判为缺失。
+    // Before persisted-key enumeration finishes, do not misclassify same-named IndexedDB files as missing.
     if (persisted === null) return null;
     const slash = normalized.lastIndexOf('/');
     const directory = slash < 0 ? '' : normalized.slice(0, slash);
@@ -116,7 +116,7 @@ export class HttpGameFileProvider implements GameFileProvider {
       if (result && generation === this.cacheGeneration && !this.writes.has(normalized)) {
         this.rememberPrefix(normalized, result);
       }
-      // 不把缓存或共享 Promise 的缓冲交给调用者修改或 transfer。
+      // Never expose cached/shared-Promise buffers for caller modification or transfer.
       return result ? { bytes: result.bytes.slice(), totalSize: result.totalSize } : null;
     } finally {
       if (this.pendingPrefixes.get(normalized) === entry) this.pendingPrefixes.delete(normalized);
@@ -179,8 +179,8 @@ export class HttpGameFileProvider implements GameFileProvider {
       return new Uint8Array(await blob.slice(offset, offset + length).arrayBuffer());
     }
     const bytes = new Uint8Array(await response.arrayBuffer());
-    // 支持 Range 的开发服务器返回 206；普通静态服务器若忽略 Range 返回 200，
-    // 仍只把所需切片交给 VM，避免在客体文件层再保留整个影片包。
+    // Range-capable development servers return 206; if a static server ignores Range and returns 200,
+    // still pass only the requested slice to the VM so the guest file layer does not retain the whole movie package.
     return response.status === 206 ? bytes : bytes.slice(offset, offset + length);
   }
 
@@ -212,8 +212,8 @@ export class HttpGameFileProvider implements GameFileProvider {
   async list(directory: string): Promise<string[] | null> {
     const normalized = normalizeGuestPath(directory);
     const listing = await this.readDirectoryListing(normalized);
-    // 存档等写入保存在 IndexedDB 而不落盘：合并进来，否则 list（导出存档的
-    // 枚举路径）看不到它们，跨浏览器传输会导出残包。
+    // Saves and other writes live in IndexedDB rather than disk; merge them into list results used for save export,
+    // or cross-browser transfers will export incomplete packages.
     const prefix = normalized ? `${normalized}/` : '';
     const extra = new Set<string>();
     const absorb = (key: string): void => {
@@ -235,8 +235,8 @@ export class HttpGameFileProvider implements GameFileProvider {
     const url = `/game/.list${directory ? `?dir=${encodeURIComponent(directory)}` : ''}`;
     const request = fetchGameResource(url)
       .then(async (response) => {
-        // 清单端点的 404 表示目录确定不存在（RA2 常先探测虚拟的 @:/ 路径），
-        // 与网络/端点不可用不同。缓存为空清单后可同步拒绝该目录下所有 loose 文件。
+        // A 404 from the listing endpoint means the directory is definitely absent; RA2 often probes virtual @:/ paths first.
+        // This differs from network/endpoint failure. Cache an empty listing to reject all loose files below that directory synchronously.
         if (response.status === 404) return [];
         if (!response.ok) return null;
         return response.json() as Promise<string[]>;

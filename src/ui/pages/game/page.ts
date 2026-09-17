@@ -1,3 +1,4 @@
+import { t } from '../../shared/i18n/translate';
 import type { LiveModelId } from './experiments/modelProbe';
 import { FrameEffectController } from '../../../app/session/frameEffectController';
 import {
@@ -49,7 +50,7 @@ let activeNetworkCleanup: (() => void) | null = null;
 let pageGeneration = 0;
 let activeRendererCleanup: (() => void) | null = null;
 
-// 客体逻辑坐标空间由实际帧更新；800×600 仅是收到首帧前的兼容初值。
+// Actual frames update guest logical coordinates; 800x600 is only a compatibility default before the first frame.
 let gameFrameWidth = 800;
 let gameFrameHeight = 600;
 let refitActiveCanvas: (frameWidth?: number, frameHeight?: number) => void = () => {};
@@ -58,7 +59,7 @@ let activeFitCleanup: (() => void) | null = null;
 
 export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
   const generation = ++pageGeneration;
-  // 换会话先释放旧画面与尺寸监听，避免 resize 回调继续引用上一轮闭包。
+  // Release the old presentation and size listeners before switching sessions so resize callbacks cannot retain prior closures.
   activeRendererCleanup?.();
   activeRendererCleanup = null;
   activeFitCleanup?.();
@@ -69,9 +70,9 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
   activeVm = null;
   if (!canvasFitInstalled) {
     canvasFitInstalled = true;
-    // backing store 重设会清空位图：缩放后立刻强制重绘当前帧，否则主菜单等
-    // 帧稀疏场景会空白到下一帧（视觉上像「缩放坏了」）。回调在 resize 时才触发，
-    // 届时下面的 let 均已初始化（闭包引用 TDZ 变量但不在初始化前调用，安全）。
+    // Backing-store resets clear the bitmap; force an immediate redraw after resizing or sparse-frame scenes such as menus
+    // remain blank until the next frame, appearing broken. This callback runs only on resize,
+    // after the let declarations below initialize; capturing TDZ variables is safe because they are not accessed early.
     const fit = installCanvasFit(
       canvas,
       () => ({ width: gameFrameWidth, height: gameFrameHeight }),
@@ -82,8 +83,8 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
     refitActiveCanvas = fit;
     activeFitCleanup = fit.destroy;
   }
-  // 默认由 WebGL2 shader 展开 8-bit 索引帧；?webgl=0 可强制走 Canvas 2D，
-  // 供无硬件加速或特定浏览器出现回退时对照。
+  // By default WebGL2 shaders expand 8-bit indexed frames; ?webgl=0 forces Canvas 2D
+  // for comparison when hardware acceleration is unavailable or specific browsers fall back.
   const frameRenderer = createVmFrameRenderer(
     canvas,
     new URLSearchParams(window.location.search).get('webgl') !== '0',
@@ -94,7 +95,7 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
     new URLSearchParams(window.location.search).get('sr-model') === 'fast' ? 'fast' : 'gan',
   );
   const calls: string[] = [];
-  /** 每个 Win32 API 的累计调用次数，` 面板显示 top 热点（性能排查用）。 */
+  /** Cumulative calls per Win32 API; the backtick panel shows top hotspots for performance diagnosis. */
   const callHistogram = new Map<string, number>();
   const exposeRuntimeCallProbe = () => {
     if (!debugAutoOpen) return;
@@ -108,18 +109,18 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
     );
     canvas.dataset.vmTextOutCalls = String(callHistogram.get('GDI32.DLL!TextOutA') ?? 0);
   };
-  // 调试框默认不建、不采集：DOM 更新与客体内存采样都有开销，且面板会遮住画面。
-  // ?debug=1 启动即开；否则按第一次 ` 懒创建，之后 ` 切换显示。
+  // Do not create the debug panel or collect samples by default: DOM updates and guest-memory sampling cost time, and the panel obscures gameplay.
+  // ?debug=1 opens it at startup; otherwise the first backtick creates it lazily, and later presses toggle visibility.
   const debugAutoOpen = new URLSearchParams(window.location.search).get('debug') === '1';
-  let status: VmStatus = { phase: 'loading', detail: '初始化…' };
+  let status: VmStatus = { phase: 'loading', detail: t('初始化…') };
   let callCount = 0;
   let lastPointerProbeAt = 0;
   let pointerProbeSeq = 0;
   let requestedClockRate = 1;
-  // 默认增益与工具栏滑杆初值同源（DEFAULT_VOLUME_PERCENT 由 DEFAULT_MASTER_VOLUME 推导），
-  // 不再让页面、工具栏和 worker 配置各写一份字面量。
+  // Default gain and initial toolbar slider values share one source: DEFAULT_VOLUME_PERCENT derives from DEFAULT_MASTER_VOLUME,
+  // avoiding separate literals in page, toolbar, and Worker configuration.
   let requestedVolume = DEFAULT_MASTER_VOLUME;
-  let performanceLine = 'HC --/s · 主线程阻塞 --';
+  let performanceLine = t('HC --/s · 主线程阻塞 --');
   let schedulePerformanceRender = () => {};
   let exitHandled = false;
   let vm: VmShell | null = null;
@@ -150,13 +151,13 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
           return new LiveModel(changed);
         }
       : async () => {
-          throw new Error('生产模式不开放模型实验');
+          throw new Error(t('生产模式不开放模型实验'));
         },
     currentFrame: () => presenter.frame,
     isCurrent: () => generation === pageGeneration && !exitHandled,
     invalidate: () => presenter.invalidate(),
     beforeLoad: () => {
-      // 增强模型已完成自身倍率的超分，显示阶段不叠加 CNN/GAN。
+      // The enhancement model already upscaled by its native factor; do not stack CNN/GAN in the display stage.
       frameRenderer.setUpscaleMode('off');
       toolbar.setUpscaleMode('off');
     },
@@ -205,7 +206,7 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
   };
 
   let panelCreated = false;
-  // `as` 防止 TS 把「仅闭包内赋值」的变量窄化到 null（判空后变 never）。
+  // The as assertion prevents TS narrowing a variable assigned only inside closures to null, then never after a null check.
   let gameTitle = 'Red Alert 2';
   let lastDebugUpdate = 0;
   const renderDebug = () => {
@@ -238,7 +239,7 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
       debugVisible.set(!debugVisible.getSnapshot());
       return;
     }
-    // 玩家快捷键：输入控件聚焦时不响应；VM 未启动时无动作。
+    // Player shortcuts: ignore while input controls are focused and do nothing before VM startup.
     const target = event.target as HTMLElement | null;
     if (target?.closest('input, select, textarea, [contenteditable="true"]')) return;
     if (!vm) return;
@@ -248,7 +249,7 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
       return;
     }
     if (event.key === '[' || event.key === ']') {
-      // 速度 慢/快：1× → 2× → 4× 两端封顶；数字键留给原版游戏热键。
+      // Slower/faster clock multipliers: 1x -> 2x -> 4x with clamped endpoints; reserve number keys for native game hotkeys.
       const rates = [1, 2, 4];
       const index = rates.indexOf(requestedClockRate);
       const next = event.key === ']' ? rates[Math.min(index + 1, rates.length - 1)]! : rates[Math.max(index - 1, 0)]!;
@@ -263,11 +264,11 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
   };
   window.addEventListener('keydown', activeKeyHandler);
   if (debugAutoOpen) {
-    // ?debug=1 是显式要求：无视生产构建/触屏，直接打开；` 仍可切换。
+    // ?debug=1 is explicit: open even in production or on touch devices; backtick still toggles it.
     ensureDebugPanel();
     debugVisible.set(true);
   } else {
-    // 未开 ?debug=1：面板与采集保持零开销，也绝不遮游戏画面。
+    // Without ?debug=1, keep the panel and collection inactive, with no overhead or obstruction of the game.
     debugVisible.set(false);
   }
 
@@ -291,7 +292,7 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
         canvas.dataset.vmCampaignHoverDispatches = `${state.campaignHoverDispatches}`;
       },
       () => {
-        /* 调试探针失败不影响输入。 */
+        /* Debug-probe failures must not affect input. */
       },
     );
   };
@@ -313,8 +314,8 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
     presenter.destroy();
   };
   presenter.render();
-  // 上次导入的文件集已持久化：缓存齐全时直接恢复启动，不再弹选择面板；
-  // 无缓存或缓存不齐（配额降级等）时回到选择面板。
+  // Restore and start directly from the last persisted complete import without showing the picker;
+  // missing/incomplete caches, such as quota-reduced sets, return to the picker.
   const cachedSource = await restoreCachedGameSource().catch(() => null);
   if (generation !== pageGeneration) return;
   gameSource = cachedSource ?? (await selectGameFiles());
@@ -331,7 +332,7 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
         phase: status.phase,
         text:
           status.phase === 'loading'
-            ? `启动层已就绪 · 其他资源 ${status.loaded}/${status.total}：${status.detail}`
+            ? t('启动层已就绪 · 其他资源 {0}/{1}：{2}', status.loaded, status.total, status.detail)
             : status.detail,
       }),
     );
@@ -341,9 +342,9 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
       progressive.cancel();
     };
   } else activeResourceCleanup = null;
-  // 本体缓存与附加包独立；开发版 HTTP 和缓存恢复都走相同的启动挂载入口。
+  // Base-game caches and add-ons are independent; development HTTP and restored caches share the same startup mount path.
   gameSource.additionalFiles = await loadCustomMapFiles(gameSource.game.id).catch((error) => {
-    console.warn('[自定义地图] 无法读取已保存的附加包', error);
+    console.warn(t('[自定义地图] 无法读取已保存的附加包'), error);
     return new Map<string, Uint8Array>();
   });
   if (generation !== pageGeneration) return;
@@ -359,12 +360,12 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
 
   bootState.set({
     game: gameSource.game,
-    status: { phase: 'loading', detail: '初始化…' },
+    status: { phase: 'loading', detail: t('初始化…') },
     cancel: async () => {
       if (exitHandled) return;
       exitHandled = true;
       await releaseRuntime();
-      mainPanel.set({ phase: 'exited', detail: '启动已取消' });
+      mainPanel.set({ phase: 'exited', detail: t('启动已取消') });
     },
   });
   const hideBootOverlay = () => bootState.set(null);
@@ -425,16 +426,16 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
     exitHandled = true;
     await releaseRuntime();
     await forgetGameDirectory();
-    // 清掉持久化的文件集：换源后回到选择面板，而不是再次自动恢复。
+    // Clear persisted file sets so switching sources returns to the picker rather than restoring automatically again.
     await clearCachedGameFiles().catch(() => {});
     window.location.reload();
   };
 
   const installRuntimeInput = (startedVm: VmShell) => {
     if (activeInputCleanup) activeInputCleanup();
-    // RA2 的 Win32 硬件光标作为小纹理独立叠在 framebuffer 上；Pointer Lock
-    // 隐藏系统光标后仍可见，移动时也无需重传整张画面。推向屏幕边缘时逻辑
-    // 光标钳在当前客体帧边界，边缘滚动可持续；?mouse-lock=0 回退到绝对坐标模式。
+    // Overlay RA2's Win32 hardware cursor as a small independent framebuffer texture; it remains visible after Pointer Lock
+    // hides the system cursor and moves without retransmitting the whole frame. At screen edges, clamp the logical
+    // cursor to current guest-frame bounds for sustained edge scrolling; ?mouse-lock=0 restores absolute coordinates.
     const mouseLock = new URLSearchParams(window.location.search).get('mouse-lock');
     const lockDesktopMouse = mouseLock === null ? true : mouseLock !== '0';
     const installedInput = installGameInput(canvas, startedVm, lockDesktopMouse, presentHostCursor, () => ({
@@ -502,7 +503,7 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
         ),
       ),
     (error, detail) => {
-      console.error('[VM] 启动失败', error);
+      console.error(t('[VM] 启动失败'), error);
       if (!problemPanelShown) showProblemPanel('error', detail);
     },
     releaseRuntime,
@@ -517,19 +518,19 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
   vm.setMasterVolume(requestedVolume);
   activeVm = vm;
   toolbar.setMapsAvailable(status.phase === 'running');
-  // RA2 的 Win32 硬件光标作为小纹理独立叠在 framebuffer 上；Pointer Lock
-  // 隐藏系统光标后仍可见，移动时也无需重传整张画面。推向屏幕边缘时逻辑
-  // 光标钳在当前客体帧边界，边缘滚动可持续；?mouse-lock=0 回退到绝对坐标模式。
+  // Overlay RA2's Win32 hardware cursor as a small independent framebuffer texture; it remains visible after Pointer Lock
+  // hides the system cursor and moves without retransmitting the whole frame. At screen edges, clamp the logical
+  // cursor to current guest-frame bounds for sustained edge scrolling; ?mouse-lock=0 restores absolute coordinates.
   try {
     const debugRoute = readDebugRoute();
     if (debugRoute.length) {
       void playDebugRoute(vm, debugRoute, () => presenter.frame !== null).catch((error) =>
-        console.warn('[VM] URL debug 路线失败', error),
+        console.warn(t('[VM] URL debug 路线失败'), error),
       );
     }
   } catch (error) {
-    // runtime 已通过 onStatus 把可读错误画到页面；此处阻止动态入口产生未处理 rejection。
-    console.error('[VM] 启动失败', error);
+    // Runtime already rendered a readable error through onStatus; prevent an unhandled rejection from the dynamic entry point here.
+    console.error(t('[VM] 启动失败'), error);
   }
 }
 
@@ -540,7 +541,7 @@ function readDebugRoute(): Array<[number, number]> {
     .filter(Boolean)
     .map((part) => {
       const [x, y] = part.split(',').map(Number);
-      if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error(`无效 debug 路线坐标：${part}`);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error(t('无效 debug 路线坐标：{0}', part));
       return [Math.max(0, Math.min(gameFrameWidth - 1, x | 0)), Math.max(0, Math.min(gameFrameHeight - 1, y | 0))];
     });
 }
@@ -573,10 +574,10 @@ async function waitForDebugRouteReady(hasFrame: () => boolean): Promise<void> {
     }
     await new Promise<void>((resolve) => window.setTimeout(resolve, 100));
   }
-  throw new Error('主菜单尚未就绪，未发送快速进入路线');
+  throw new Error(t('主菜单尚未就绪，未发送快速进入路线'));
 }
 
-/** React 卸载与 HMR 共用服务销毁，不再从服务层删除 UI 节点。 */
+/** React unmount and HMR share service destruction; the service layer no longer removes UI nodes. */
 export function stopVmPage(): void {
   ++pageGeneration;
   cancelSourceRequest();

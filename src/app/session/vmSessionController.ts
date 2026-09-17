@@ -10,8 +10,8 @@ export type VmSessionShellFactory<T extends SessionRuntime = SessionRuntime> = (
 ) => Promise<T>;
 
 /**
- * 独立持有 VM shell 的异步生命周期，不依赖页面 DOM。
- * 新启动使旧的 create/start 结果失效；清理只等待已经获取的 shell。
+ * Own the VM shell's asynchronous lifecycle independently of the page DOM.
+ * New starts invalidate old create/start results; cleanup waits only for shells already acquired.
  */
 export class VmSessionController {
   private generation = 0;
@@ -41,7 +41,7 @@ export class VmSessionController {
     } catch (error) {
       const wasCurrent = this.isCurrent(generation);
       if (this.activeShell === shell) this.activeShell = null;
-      // 清理前使回调失效，防止 stop/destroy 的状态覆盖原始启动错误。
+      // Invalidate callbacks before cleanup so stop/destroy status cannot overwrite the original startup error.
       if (wasCurrent) ++this.generation;
       await this.destroyShell(shell);
       if (wasCurrent) throw error;
@@ -83,7 +83,7 @@ export class VmSessionController {
   }
 }
 
-/** 丢弃已失效会话的回调，不在各页面重复实现代次判断。 */
+/** Discard callbacks from invalidated sessions instead of duplicating generation checks across pages. */
 export function guardVmCallbacks(callbacks: GameVmCallbacks, isCurrent: () => boolean): GameVmCallbacks {
   return {
     onNetworkStatus: (status) => {

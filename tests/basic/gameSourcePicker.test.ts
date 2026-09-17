@@ -1,3 +1,4 @@
+import '../helpers/chineseLocale';
 import { HttpGameFileProvider } from '../../src/platform/browser/files/http';
 import { afterEach, expect, it, vi } from 'vitest';
 import { GAME_MANIFESTS } from '../../src/games/manifest';

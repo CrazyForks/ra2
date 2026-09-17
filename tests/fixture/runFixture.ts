@@ -1,6 +1,5 @@
 /**
- * fixture 端到端执行器：在 Node 内用 v86 + 真实固件 boot.bin 启动合成 PE，
- * 跑通 hypercall 服务环（与 tests/real-game/helpers/runVmSmoke.ts 同一握手，去掉游戏专属断言）。
+ * Fixture end-to-end runner: boot a synthetic PE in Node with v86 and the real boot.bin firmware, and run the hypercall service loop (same handshake as tests/real-game/helpers/runVmSmoke.ts, without game-specific assertions).
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -39,7 +38,7 @@ function v86WasmPath(): string {
   return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
 }
 
-/** fast = 客体内高速桩（_lread 镜像 + 临界区桩）；slow = 全部走 host hypercall。 */
+/** fast = guest fast stubs (_lread mirrors + critical sections); slow = host hypercalls for every call. */
 export type FixtureMode = 'fast' | 'slow';
 
 export interface FixtureRunResult {
@@ -89,14 +88,14 @@ export async function runFixture(mode: FixtureMode, timeoutMs = 30_000): Promise
   emulator.write_memory(staging.subarray(image.imageBase, image.imageBase + image.sizeOfImage), image.imageBase);
   writeU32(emulator, HYPERCALL_ENTRY, image.entry);
   writeU32(emulator, HYPERCALL_CALLBACK_DEPTH, 0);
-  // 固件从共享页读主线程栈顶（ra2 起不再是硬编码 0x700000），与 vmCore 保持一致。
+  // Firmware reads the main-thread stack top from the shared page (no longer hardcoded to 0x700000 since RA2), matching vmCore.
   writeU32(emulator, HYPERCALL_STACK_TOP, 0x0070_0000);
 
   const shim = new Win32Shim(emulator, {
     firstDynamicId: image.importList.length + 1,
     enableFastFileMirror: mode === 'fast',
     moduleName: FIXTURE_MODULE_NAME,
-    // 堆 arena 收窄到 16MB 以内，与 32MB 客体内存匹配。
+    // Narrow the heap arena to below 16 MB to fit the 32 MB guest memory.
     heapTop: 0x00e0_0000,
     virtualTop: 0x00e0_0000,
   });

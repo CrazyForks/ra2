@@ -4,7 +4,7 @@ import { preventThirdPartyDownloads } from '../../helpers/offlineBrowser';
 
 const browser = await chromium.launch({ args: ['--no-sandbox', '--enable-unsafe-swiftshader'] });
 try {
-  const page = await browser.newPage({ ignoreHTTPSErrors: true });
+  const page = await browser.newPage({ locale: 'zh-CN', ignoreHTTPSErrors: true });
   await preventThirdPartyDownloads(page);
   await page.goto(process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15185/');
   const result = await page.evaluate<{ checks: number }>(`(async () => {

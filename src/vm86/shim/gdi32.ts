@@ -5,8 +5,10 @@ import type { Constructor } from './state';
 
 type Kernel32Chain = InstanceType<ReturnType<typeof withKernel32>>;
 
-/** 单个 run 的抗锯齿像素记录上限：只防失控超长字符串，正常界面远达不到。
- * 超限时该 run 退化为纯实心重映射（边缘混合像素换页后不再修正）。 */
+/**
+ * Per-run antialiased-pixel record limit, guarding only runaway strings well beyond normal UI sizes.
+ * Over-limit runs fall back to solid-only remapping; blended edge pixels are no longer corrected after palette changes.
+ */
 const MAX_AA_CHANGES_PER_RUN = 1 << 18;
 
 const DEFAULT_GDI_FONT: Readonly<VmGdiFont> = {
@@ -20,7 +22,7 @@ const DEFAULT_GDI_FONT: Readonly<VmGdiFont> = {
   faceName: '細明體',
 };
 
-/** Gdi32 的 Win32 API case（原 Win32Shim.dispatch 主 switch 拆分）。 */
+/** Gdi32 Win32 API cases extracted from Win32Shim.dispatch's main switch. */
 export function withGdi32<TBase extends Constructor<Kernel32Chain>>(Base: TBase) {
   return class extends Base {
     constructor(...args: any[]) {
@@ -55,7 +57,7 @@ export function withGdi32<TBase extends Constructor<Kernel32Chain>>(Base: TBase)
           return { eax: a[3] ?? 0 };
         case 'GDI32.DLL!DeleteObject': {
           const handle = a[0] ?? 0;
-          // Win32 不允许删除 stock object，也不允许删除仍选入任一 DC 的对象。
+          // Win32 forbids deleting stock objects or objects still selected into any DC.
           if (
             this.gdiStockObjects.has(handle) ||
             [...this.gdiDcs.values()].some((dc) => dc.selectedFont === handle || dc.selectedBrush === handle)
@@ -149,7 +151,7 @@ export function withGdi32<TBase extends Constructor<Kernel32Chain>>(Base: TBase)
         selectedFont: this.getStockObject(13), // SYSTEM_FONT
         selectedBrush: this.getStockObject(0), // WHITE_BRUSH
         textColor: 0,
-        backgroundMode: 2, // OPAQUE；客体可显式切换为 TRANSPARENT。
+        backgroundMode: 2, // OPAQUE; the guest may explicitly choose TRANSPARENT.
         backgroundColor: 0,
       });
       return handle;
@@ -160,7 +162,7 @@ export function withGdi32<TBase extends Constructor<Kernel32Chain>>(Base: TBase)
       this.gdiDcs.delete(handle);
       if (dc.surface === this.primarySurface) {
         const primary = this.surfaces.get(this.primarySurface);
-        if (primary) primary.dirty = true; // DC 画过字，释放时像素已改
+        if (primary) primary.dirty = true; // The DC drew text, so pixels have changed by release time.
         this.emitPrimaryFrame();
       }
       return true;
@@ -215,7 +217,7 @@ export function withGdi32<TBase extends Constructor<Kernel32Chain>>(Base: TBase)
     ): boolean {
       const dc = this.gdiDcs.get(dcHandle);
       if (!dc || !stringPtr || count < 0 || count > 0x10_0000) return false;
-      // screen DC 只用于查设备能力；文字绘制必须有实际 surface。
+      // Screen DCs only query device capabilities; text rendering requires an actual surface.
       const surface = this.surfaces.get(dc.surface);
       if (!surface || !count) return true;
       const bytes = this.memory.read_memory(stringPtr, count);
@@ -235,8 +237,8 @@ export function withGdi32<TBase extends Constructor<Kernel32Chain>>(Base: TBase)
       const bottom = Math.min(surface.height, originY + bitmap.height);
       if (right <= left || bottom <= top) return true;
       if (surface.bpp === 16) {
-        // RA2 的 DirectDraw 模式是 RGB565。GDI 文字不是其主渲染路径，但错误框和
-        // 少量兼容界面仍可能借 surface DC 写字，因此至少提供正确的实心字形落点。
+        // RA2 DirectDraw uses RGB565. GDI text is not its primary rendering path, but error dialogs
+        // and some compatibility UI still draw through surface DCs, so provide correct solid-glyph placement at minimum.
         const width = right - left;
         const height = bottom - top;
         const start = surface.pixels + top * surface.pitch + left * 2;
@@ -267,7 +269,7 @@ export function withGdi32<TBase extends Constructor<Kernel32Chain>>(Base: TBase)
       const start = surface.pixels + top * surface.pitch + left;
       const span = (height - 1) * surface.pitch + width;
       const block = this.memory.read_memory(start, span).slice();
-      // 覆盖度偏置：阈值 128 为中性，调低更粗、调高更细（与原滑杆语义一致）。
+      // Coverage bias: 128 is neutral; lower values thicken and higher values thin strokes, matching the existing slider.
       const bias = 128 - (bitmap.threshold ?? 128);
       const changes: GdiTextPixelChange[] = [];
       let overflow = false;
@@ -277,14 +279,14 @@ export function withGdi32<TBase extends Constructor<Kernel32Chain>>(Base: TBase)
         for (let targetX = left; targetX < right; targetX++) {
           const sourceX = targetX - originX;
           const coverage = bitmap.alpha[sourceY * bitmap.width + sourceX]!;
-          if (coverage <= 0) continue; // 偏置绝不从零覆盖度造出像素（会破坏透明背景）
+          if (coverage <= 0) continue; // Bias must never create pixels from zero coverage, which would destroy transparent backgrounds.
           const alpha = coverage + bias;
           if (alpha <= 0) continue;
           const offset = targetRow + targetX - left;
           const original = block[offset]!;
-          // 抗锯齿：实心覆盖直接写文字索引；边缘按覆盖度把文字色混进背景色，
-          // 再映射到最近调色板色（背景色/混合结果与调色板换页无关，remap 时按记录重算）。
-          // 色键背景（透明）不混合，保持原版 1-bit 落实心像素。
+          // Antialiasing: solid coverage writes the text index directly; edges blend text into the background by coverage,
+          // then choose the nearest palette color. Background/blended colors are palette-independent; remap recomputes from records.
+          // Do not blend color-key transparent backgrounds; retain native 1-bit solid-pixel behavior.
           const index = this.textPixelIndex(palette, surface, original, dc.textColor, alpha, paletteIndex);
           if (index === null || index === original) continue;
           block[offset] = index;
@@ -301,8 +303,8 @@ export function withGdi32<TBase extends Constructor<Kernel32Chain>>(Base: TBase)
         paletteIndex,
         changed: overflow ? null : changes,
       });
-      // 上限只防失控增长：被逐出的 run 会失去调色板换页时的重映射保护，
-      // 所以上限要远高于一个界面可能同时存在的文字数量。
+      // The cap only guards runaway growth: evicted runs lose remapping protection during palette changes,
+      // so set it far above the text count that one UI could display simultaneously.
       if (surface.textRuns.length > 1024) surface.textRuns.splice(0, surface.textRuns.length - 1024);
       return true;
     }
@@ -335,11 +337,11 @@ export function withGdi32<TBase extends Constructor<Kernel32Chain>>(Base: TBase)
         const block = this.memory.read_memory(start, span).slice();
         const bias = 128 - (run.bitmap.threshold ?? 128);
         if (run.changed?.length) {
-          // 抗锯齿路径：恢复原背景后按新调色板重新混合（幂等）；被后续绘制覆盖的点放弃。
+          // Antialiasing path: restore the original background and reblend with the new palette idempotently; abandon pixels overwritten by later drawing.
           const kept: GdiTextPixelChange[] = [];
           const pitch = surface.pitch;
           for (const change of run.changed) {
-            // 如果字形之后已被其他绘制覆盖，不将旧文字强行画回去。
+            // Never repaint old text over glyph pixels replaced by subsequent drawing.
             if (block[change.offset] !== change.written) continue;
             const sourceX = left + (change.offset % pitch) - run.x;
             const sourceY = top + ((change.offset / pitch) | 0) - run.y;
@@ -357,7 +359,7 @@ export function withGdi32<TBase extends Constructor<Kernel32Chain>>(Base: TBase)
           run.paletteIndex = nextIndex;
           continue;
         }
-        // 无抗锯齿记录（含超上限退化）：只修正实心像素。
+        // Without antialiasing records, including over-limit fallback, correct only solid pixels.
         if (nextIndex === run.paletteIndex) continue;
         for (let targetY = top; targetY < bottom; targetY++) {
           const sourceY = targetY - run.y;
@@ -373,8 +375,9 @@ export function withGdi32<TBase extends Constructor<Kernel32Chain>>(Base: TBase)
         run.paletteIndex = nextIndex;
       }
     }
-    /** Blt/copyRect 把字形像素拷到目标面后，把源面的 run 平移过来：
-     *  否则目标面上的文字没有 run 记录，调色板换页时不再被重映射（变白）。 */
+    /**
+     * After Blt/copyRect copies glyph pixels, translate source runs onto the destination too; otherwise destination text has no remapping records and turns white on palette changes.
+     */
     protected transferGdiTextRuns(
       source: SurfaceState,
       sourceRect: number[],
@@ -396,7 +399,7 @@ export function withGdi32<TBase extends Constructor<Kernel32Chain>>(Base: TBase)
           run.y >= sy + height
         )
           continue;
-        // 色键把字形像素滤掉时，run 也不该跟过去。
+        // If color keying filters out glyph pixels, do not copy their runs either.
         if (sourceKey && run.paletteIndex >= sourceKey[0] && run.paletteIndex <= sourceKey[1]) continue;
         dest.textRuns.push({
           x: run.x + (dx - sx),
@@ -416,15 +419,15 @@ export function withGdi32<TBase extends Constructor<Kernel32Chain>>(Base: TBase)
       right: number,
       bottom: number,
     ): void {
-      // 每次 blit 都走这里（統一天下 ~18 万次/秒）：没有文字 run 时 filter 会
-      // 白白分配新数组，直接返回。
+      // Every blit reaches here, about 180,000/sec in Tongyi Tianxia; when no text runs exist,
+      // return directly instead of allocating a pointless filtered array.
       if (!surface.textRuns.length) return;
       surface.textRuns = surface.textRuns.filter(
         (run) =>
           run.x + run.bitmap.width <= left || run.x >= right || run.y + run.bitmap.height <= top || run.y >= bottom,
       );
     }
-    /** 按覆盖度把文字色混进背景色（COLORREF），返回最近调色板索引（alpha 0-255）。 */
+    /** Blend text COLORREF into background by coverage and return the nearest palette index; alpha is 0-255. */
     protected mixTextPixel(entries: Uint8Array, background: number, textRef: number, alpha: number): number {
       const mix = (shift: number): number => {
         const from = (background >>> shift) & 0xff;
@@ -434,9 +437,9 @@ export function withGdi32<TBase extends Constructor<Kernel32Chain>>(Base: TBase)
       const mixed = (mix(0) | (mix(8) << 8) | (mix(16) << 16)) >>> 0;
       return this.nearestPaletteIndex(entries, mixed);
     }
-    /** 文字像素的目标索引；null = 保持原样（透明背景）。
-     * 背景落在源色键范围内时视为透明：不混合（混合会产出与色键不同的中间色，
-     * blit 时被当不透明拷走），只在有效覆盖度过半时落实心文字像素——原版 1-bit 行为。 */
+    /**
+     * Destination text-pixel index; null preserves a transparent background. Treat source-color-key backgrounds as transparent without blending, which would create non-key colors copied as opaque by blits. Write solid text only above half effective coverage, matching native 1-bit behavior.
+     */
     protected textPixelIndex(
       entries: Uint8Array,
       surface: SurfaceState,

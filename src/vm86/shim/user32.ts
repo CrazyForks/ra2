@@ -10,7 +10,7 @@ import { mapVirtualKey, toAscii } from './keyboard';
 
 type Gdi32Chain = InstanceType<ReturnType<typeof withGdi32>>;
 
-/** 内置窗口类由 host 实现默认过程；向客体暴露非零 token，保持 subclass 链语义。 */
+/** The host implements built-in window-class default procedures; expose nonzero guest tokens to preserve subclass-chain semantics. */
 const HOST_DEFAULT_WNDPROC = 0xffff_0001;
 const HOST_DEFAULT_CLASSES = new Set([
   '#32770',
@@ -24,7 +24,7 @@ const HOST_DEFAULT_CLASSES = new Set([
   'msctls_trackbar32',
 ]);
 
-/** User32 的 Win32 API case（原 Win32Shim.dispatch 主 switch 拆分）。 */
+/** User32 Win32 API cases extracted from Win32Shim.dispatch's main switch. */
 export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
   const Windowing = withUser32Windowing(Base);
   const MessageLoop = withUser32MessageLoop(Windowing);
@@ -42,15 +42,15 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
           if (!a[3]) return { eax: 0 };
           const state = a[2] ? this.memory.read_memory(a[2], 256) : new Uint8Array(256);
           const chars = toAscii(a[0] ?? 0, a[1] ?? 0, state);
-          // LPWORD 接收一到两个字节，不按字符数量写入 DWORD；无字符时保留缓冲。
+          // LPWORD receives one or two bytes, not a DWORD based on character count; preserve the buffer when no character exists.
           if (chars.length) this.memory.write_memory([chars[0]!, chars[1] ?? 0], a[3]);
           return { eax: chars.length };
         }
         case 'USER32.DLL!LoadIconA':
           return { eax: 0x2001 };
         case 'USER32.DLL!LoadCursorA': {
-          // 真实加载并解码光标资源（作为独立小纹理呈现，pointer lock 下仍可见）。
-          // 仅处理整数 id 的资源光标；字符串名/系统光标回退到固定假句柄。
+          // Load and decode real cursor resources, presenting them as independent textures visible under Pointer Lock.
+          // Handle only integer resource IDs; string names/system cursors fall back to fixed synthetic handles.
           const hInstance = a[0] ?? 0;
           const idOrPtr = a[1] ?? 0;
           if (idOrPtr > 0 && idOrPtr <= 0xffff) return { eax: this.loadCursorImage(hInstance, idOrPtr) };
@@ -64,7 +64,7 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
               this.windowClasses.set(normalized, this.readU32(a[0] + 4));
               this.windowClassStyles.set(normalized, this.readU32(a[0]));
             }
-            // hCursor（偏移 24）：RA2 菜单用类光标显示、不调 SetCursor，捕获它用于呈现。
+            // Capture class hCursor at offset 24 for rendering; RA2 menus use it without SetCursor.
             const classCursor = this.readU32(a[0] + 24);
             if (classCursor) this.classCursor = classCursor;
           }
@@ -79,10 +79,10 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
           if (!this.windows.has(hwnd)) return { eax: 0 };
           const key = `${hwnd}:-16`;
           const style = this.windowLongs.get(key) ?? 0;
-          // 返回本窗口原有的 WS_VISIBLE，不检查父窗口；父窗口隐藏期间，
-          // 调用方仍会用此返回值决定临时隐藏子控件后是否恢复显示。
+          // Return the window's previous WS_VISIBLE bit without checking parents; callers use it
+          // to decide whether to restore temporarily hidden children even while their parent is hidden.
           const wasVisible = (style & 0x10000000) !== 0;
-          const showing = (a[1] ?? 0) !== 0; // SW_HIDE=0；其余命令都会显示
+          const showing = (a[1] ?? 0) !== 0; // SW_HIDE=0; all other commands show the window.
           if (shimTraceEnabled('VM_TRACE_WVIS') && wasVisible !== showing) {
             console.log(
               `👁️ ShowWindow hwnd=0x${hwnd.toString(16)} parent=0x${(this.windowParents.get(hwnd) ?? 0).toString(16)} cls=${this.windowClassNames.get(hwnd)} id=${this.controlIds.get(hwnd)} cmd=${a[1]} -> ${showing ? 'SHOW' : 'HIDE'}`,
@@ -94,13 +94,13 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
           const shellPage = this.shellPageSyncTarget(hwnd);
           if (shellPage) this.synchronizeShellPage(shellPage !== hwnd);
           if (!showing) {
-            // 隐藏含焦点窗口的整棵子树后，键盘输入应回到顶层窗口。
-            // RA2 从 shell 进入战场时会隐藏而非立即销毁部分页面；若仍把
-            // WM_KEYDOWN 投给隐藏控件，原版输入管理器就收不到 Ctrl 等按键。
+            // After hiding the subtree containing focus, return keyboard input to the top-level window.
+            // RA2 hides some shell pages instead of immediately destroying them on battlefield entry;
+            // sending WM_KEYDOWN to hidden controls would prevent native input management from receiving Ctrl and other keys.
             this.hideWindowState(hwnd);
           } else {
-            // 父窗口重新显示时，之前已画入 primary 的子控件像素可能已被上层
-            // shell 页面覆盖。Win32 会让暴露的子窗口重新绘制，不能只重画父框。
+            // When a parent reappears, upper shell pages may have overwritten child pixels previously drawn into primary.
+            // Win32 repaints exposed children too; redrawing only the parent border is insufficient.
             this.invalidateWindowTree(hwnd);
           }
           if (wasVisible === showing) return { eax: wasVisible ? 1 : 0 };
@@ -141,9 +141,9 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
             if (this.isWindowInTree(this.focusWindow, hwnd)) this.focusWindow = 0;
           }
           if (this.isWindowVisible(hwnd)) this.invalidateWindow(hwnd);
-          // 禁用时 Win32 先同步 WM_CANCELMODE，再发 WM_ENABLE；前者让正在拖动/
-          // 展开的控件收口，后者让 owner-draw 控件更新可交互与绘制状态。
-          // EnableWindow 的返回值仍是调用前的禁用状态，而不是 WndProc 返回值。
+          // When disabling a window, Win32 synchronously sends WM_CANCELMODE before WM_ENABLE; the former closes active drags/
+          // popups, while the latter updates owner-drawn control interaction/rendering state.
+          // EnableWindow still returns the prior disabled state, not WndProc's result.
           const messages = enabled
             ? [{ message: 0x000a, wParam: 1, lParam: 0 }]
             : [
@@ -261,7 +261,7 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
           this.validateWindow(a[0] ?? 0);
           return { eax: 1 };
         case 'USER32.DLL!SystemParametersInfoA':
-          // SPI_GETWORKAREA：游戏用它居中 800×600 窗口。
+          // SPI_GETWORKAREA lets the game center its 800x600 window.
           if ((a[0] ?? 0) === 0x30 && a[2]) {
             this.writeRect(a[2], 0, 0, this.displayWidth, this.displayHeight);
           }
@@ -277,10 +277,10 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
               `🧭 ComboDropWin hwnd=0x${hwnd.toString(16)} parent=0x${(this.windowParents.get(hwnd) ?? 0).toString(16)} rect=${rect ? `${rect.x},${rect.y},${rect.width},${rect.height}` : '-'}`,
             );
           }
-          // RA2 的 ComboDropWin 在 WM_CREATE 中从 CREATESTRUCT.lpCreateParams
-          // 保存所属 NewCombo HWND。漏掉这条 Win32 创建语义会使它
-          // 后续查 CB_GETITEMHEIGHT 时把消息发给 NULL，并在 0x5ecac7
-          // 用返回的 0 作除数崩溃。
+          // RA2 ComboDropWin stores its owning NewCombo HWND from CREATESTRUCT.lpCreateParams
+          // during WM_CREATE. Omitting this creation semantic later sends CB_GETITEMHEIGHT
+          // to NULL, returning 0 and causing a divide-by-zero
+          // at 0x5ecac7.
           if (
             this.gameProfile.shell?.initializeComboDropWindow &&
             this.windowClassNames.get(hwnd)?.toLowerCase() === 'combodropwin' &&
@@ -291,9 +291,9 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
           return { eax: hwnd };
         }
         case 'USER32.DLL!CreateDialogIndirectParamA': {
-          // CreateDialogIndirectParam 创建的 modeless 对话框同样是一个 HWND。
-          // RA2 的主菜单自己解析控件表并在后续消息泵初始化，这里
-          // 先保留对话框过程，使 DispatchMessageA 能进入原版 dialog proc。
+          // Modeless dialogs created by CreateDialogIndirectParam are HWNDs too.
+          // RA2 parses main-menu controls itself and initializes them through later message pumping;
+          // retain the dialog procedure so DispatchMessageA can enter the native dialog proc.
           const hwnd = this.nextWindow++;
           const callback = a[3] ?? 0;
           this.windows.set(hwnd, callback);
@@ -325,7 +325,7 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
         case 'USER32.DLL!GetDlgItem': {
           const parent = a[0] ?? 0;
           const id = a[1] ?? 0;
-          // Win32 只查找既有直接子窗口；不存在时返回 NULL，绝不会凭空创建 HWND。
+          // Win32 searches existing immediate children only; missing controls return NULL and never create HWNDs implicitly.
           return { eax: this.dialogChildren.get(`${parent}:${id}`) ?? 0 };
         }
         case 'USER32.DLL!GetNextDlgTabItem': {
@@ -337,7 +337,7 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
           const visit = (parent: number) => {
             if (seen.has(parent)) return;
             seen.add(parent);
-            // 模板/创建顺序独立于绘制时 BringWindowToTop 改动的 Z 序。
+            // Template/creation order is independent of Z-order changes from BringWindowToTop during drawing.
             for (const [child, owner] of this.windowParents) {
               if (owner !== parent || !this.windows.has(child)) continue;
               order.push(child);
@@ -498,7 +498,7 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
         case 'USER32.DLL!GetWindow': {
           const hwnd = a[0] ?? 0;
           const relation = a[1] ?? 0;
-          if (relation === 4) return { eax: 0 }; // GW_OWNER：当前 modeless dialog 没有 owner
+          if (relation === 4) return { eax: 0 }; // GW_OWNER: the current modeless dialog has no owner.
           if (relation === 5) {
             // GW_CHILD
             return { eax: [...this.windowParents].find(([, parent]) => parent === hwnd)?.[0] ?? 0 };
@@ -605,7 +605,7 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
               if (value) this.dialogChildren.set(`${value}:${id}`, hwnd);
             }
             this.windowParents.set(hwnd, value);
-            this.syncWindowTreeToGuest(hwnd); // 父链变更影响所有后代绝对坐标
+            this.syncWindowTreeToGuest(hwnd); // Parent-chain changes affect every descendant's absolute coordinates.
             return { eax: previous };
           }
           if (index === -12) {
@@ -651,7 +651,7 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
           return { eax: previous };
         }
         case 'USER32.DLL!SetCursor': {
-          // 追踪当前硬件光标（返回上一个 HCURSOR，符合 Win32 语义）。
+          // Track the current hardware cursor and return the previous HCURSOR, matching Win32.
           const previous = this.currentCursorHandle;
           this.currentCursorHandle = a[0] ?? 0;
           return { eax: previous };
@@ -675,8 +675,8 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
           return { eax: 1 };
         }
         case 'USER32.DLL!ShowCursor': {
-          // 与客体快速桩同一份计数器；fast-files 关闭时经 host 也要让
-          // RA2 的 `while (ShowCursor(FALSE) >= 0);` 载入循环能够退出。
+          // Share the guest fast stub's counter; host handling with fast-files disabled must also let
+          // RA2's while (ShowCursor(FALSE) >= 0); loading loop terminate.
           const next = ((this.readU32(HYPERCALL_CURSOR_COUNT) | 0) + (a[0] ? 1 : -1)) | 0;
           this.writeU32(HYPERCALL_CURSOR_COUNT, next >>> 0);
           return { eax: next >>> 0 };
@@ -709,9 +709,9 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
           const target = a[1] ?? 0;
           const length = a[2] ?? 0;
           if (!source || !target) return { eax: 0 };
-          // 当前 Win9x 客体的 ANSI/OEM 窄字符页都配置为兼容 DBCS（中文环境下
-          // CP_ACP 与控制台 OEM 页使用同一套双字节序列）。保持每个输入字节和
-          // 明确的 cchSrc 长度；先 slice，确保 lpSrc/lpDst 重叠时也符合 Win32。
+          // The current Win9x guest configures both ANSI/OEM narrow code pages for compatible DBCS;
+          // Chinese CP_ACP and console OEM use identical byte pairs. Preserve every input byte
+          // and explicit cchSrc length; slice first for Win32-compatible overlapping lpSrc/lpDst.
           if (length) this.memory.write_memory(this.readBytes(source, length).slice(), target);
           return { eax: 1 };
         }
@@ -789,8 +789,8 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
           this.markInputReady();
           {
             const launcher = this.gameProfile.launcher;
-            // YR 的复制保护壳通知 launcher 后，只接受一条 WM_BEEF。真实 launcher
-            // 把共享内存句柄放在 lParam；浏览器直启时在这里补发同形消息。
+            // After notifying the launcher, YR's copy-protection wrapper accepts one WM_BEEF. The real launcher
+            // places a shared-memory handle in lParam; direct browser startup supplies the same-shaped message here.
             if (
               launcher?.protectedData &&
               !this.launcherResponseQueued &&
@@ -815,10 +815,10 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
           }
           {
             const delayMs = this.peekTimerDelay();
-            // PeekMessage 本身是非阻塞 API；但真实 Win9x 上紧随其后的循环仍会
-            // 被线程调度器抢占。浏览器 VM 若在同一 WASM/JS 往返链里无限空转，
-            // 10/34ms 的 UI timer 永远得不到宏任务时间片。仅在确有待到期 timer
-            // 时让到最近期限（上限 10ms），保持无 timer 的游戏主循环不变。
+            // PeekMessage is nonblocking, but real Win9x schedulers still preempt the following loop.
+            // An endless browser VM WASM/JS chain would starve macrotasks needed by
+            // 10/34ms UI timers. Only when a timer is pending, yield until its nearest deadline,
+            // capped at 10ms, preserving timer-free game loops.
             if (delayMs > 0) this.invalidateFastPeek();
             else this.refreshFastPeekBudget();
             return delayMs > 0 ? { eax: 0, delayMs } : { eax: 0 };
@@ -843,11 +843,11 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
         case 'USER32.DLL!DispatchMessageA':
           return { eax: this.dispatchMessage(call, a[0] ?? 0) };
         case 'USER32.DLL!DefWindowProcA':
-          // 真实 DefWindowProc 收到 WM_CLOSE 会调用 DestroyWindow；原版退出链
-          // 依赖 WM_DESTROY 里的 PostQuitMessage，这里补全这条路径。
+          // Real DefWindowProc handles WM_CLOSE by calling DestroyWindow; native exit relies
+          // on PostQuitMessage in WM_DESTROY, so complete that path here.
           if ((a[1] ?? 0) === 0x0010 && (a[0] ?? 0)) this.destroyWindow(call, a[0]!);
-          // 原版退出时先以 WM_QUERYENDSESSION 询问是否可退出；真实 Win32 返回
-          // TRUE（1），返回 0 会让游戏放弃整个退出序列。
+          // Native exit first asks WM_QUERYENDSESSION whether shutdown is allowed. Win32 returns
+          // TRUE(1); returning 0 makes the game abandon its exit sequence.
           if ((a[1] ?? 0) === 0x0011) return { eax: 1 };
           return this.dispatchDefaultControl(call, a[0] ?? 0, a[1] ?? 0, a[2] ?? 0, a[3] ?? 0);
         case 'USER32.DLL!PostMessageA':
@@ -861,10 +861,10 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
           this.queueMessage(0x0012, a[0] ?? 0, 0, 0); // WM_QUIT
           return { eax: 0 };
         case 'USER32.DLL!DialogBoxParamA':
-          // placeholder：模态对话框尚未实现。不解析 DLGTEMPLATE、不创建控件、
-          // 不进入 modal 消息泵，也不调用对话框过程，直接返回 1。
-          // 返回 0 会让部分游戏直接退出，所以占位用 1 让启动流程继续。
-          // 真正实现时要解析模板并跑消息循环直到 EndDialog。
+          // Placeholder: modal dialogs remain unimplemented. Do not parse DLGTEMPLATE, create controls,
+          // run a modal message pump, or invoke the dialog procedure; return 1 directly.
+          // Returning 0 makes some games exit, so placeholder 1 lets startup continue.
+          // A real implementation must parse the template and pump messages until EndDialog.
           return { eax: 1 };
         default:
           void name;
@@ -872,8 +872,10 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
       }
     }
 
-    /** USER32 wsprintfA 是 cdecl 变参函数，ABI 表的 argBytes 必须为 0；
-     * 参数直接从 import stub 栈读取。RA2 载入页主要用 %d/%s 与定宽十六进制。 */
+    /**
+     * USER32 wsprintfA is cdecl variadic, so ABI argBytes must be 0.
+     * Read arguments directly from the import-stub stack; RA2 loading screens mostly use %d/%s and fixed-width hexadecimal.
+     */
     private wsprintfA(call: Win32Call): number {
       const destination = this.readU32(call.stack + 4);
       const formatPtr = this.readU32(call.stack + 8);
@@ -907,7 +909,7 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
           else if (flag === '#') alternate = true;
           else if (flag === '0') zero = true;
           else if (flag === ' ') {
-            /* 正数前空格；RA2 不依赖，按普通宽度处理。 */
+            /* Leading space for positive values; RA2 does not depend on it, so treat it as ordinary width. */
           } else break;
           cursor++;
         }
@@ -972,7 +974,7 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
             numeric = true;
             break;
           default:
-            // 未知格式保留文本，不消费参数，便于后续从画面/日志精确补充。
+            // Preserve unknown format text without consuming arguments, enabling precise follow-up from frames/logs.
             value = `%${specifier}`;
             break;
         }

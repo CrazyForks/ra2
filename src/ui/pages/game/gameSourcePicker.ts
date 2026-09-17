@@ -1,3 +1,4 @@
+import { t } from '../../shared/i18n/translate';
 import { GAME_ARCHIVE_DIRECTORY_RULES } from '../../../games/archivePolicy';
 import { SUPPORTED_GAMES, supportedGame, type SupportedGameId } from '../../../games/catalog';
 import { HttpGameFileProvider } from '../../../platform/browser/files/http';
@@ -24,11 +25,11 @@ export interface PickerState {
   manifest: { manifest: GameManifest; present: ReadonlySet<string>; complete: boolean } | null;
 }
 
-/** 资源导入服务：只接收 File/版本并发布状态，文件选择器生命周期属于 React hook。 */
+/** Resource-import service: accepts files/versions and publishes state; the React hook owns file-picker lifetime. */
 export function createGameSourcePicker(resolve: (source: GameSource) => void) {
   let disposed = false;
   const state: PickerState = {
-    description: '先选择游戏资源；只包含一个版本时自动启动，包含两个版本时再选择要玩的游戏。',
+    description: t('先选择游戏资源；只包含一个版本时自动启动，包含两个版本时再选择要玩的游戏。'),
     error: '',
     busy: false,
     manifest: null,
@@ -58,8 +59,8 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
         if (base) progressiveFilesOf(base)?.cancel();
         return;
       }
-      // null = 玩家取消选择（如压缩包对话框关闭）：按 AbortError 静默回到面板。
-      if (!base) throw new DOMException('已取消', 'AbortError');
+      // null means canceled selection, such as closing the archive dialog; silently return to the panel using AbortError semantics.
+      if (!base) throw new DOMException(t('已取消'), 'AbortError');
       if (gameId) await runImport(base, gameId);
       else {
         const names = presentNames(
@@ -72,17 +73,17 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
         else if (games.length > 1) {
           pendingSource = base;
           state.games = games;
-          state.description = '资源中包含以下游戏，请选择要启动的版本。';
+          state.description = t('资源中包含以下游戏，请选择要启动的版本。');
           publish();
         } else {
           progressiveFilesOf(base)?.cancel();
           throw new Error(
-            '未找到完整游戏资源。' +
+            t('未找到完整游戏资源。') +
               (Object.keys(GAME_MANIFESTS) as SupportedGameId[])
                 .map(
                   (id) =>
                     supportedGame(id).title +
-                    ' 缺少：' +
+                    t(' 缺少：') +
                     GAME_MANIFESTS[id].playerRequired
                       .filter((file) => !names.has(file.name.toLowerCase()))
                       .map((file) => file.name)
@@ -101,22 +102,23 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
       setButtonsDisabled(false);
     }
   };
-  /** 清单闸门：按所选版本的清单取主程序（game.exe / gamemd.exe）→
-   *  覆盖层 → 渲染清单；缺必需文件返回 null（面板保留清单）。 */
+  /**
+   * Manifest gate: fetch the selected version's executable (game.exe / gamemd.exe), overlay it, then render the manifest. Return null for missing required files while retaining the checklist.
+   */
   const manifestGate = async (
     base: GameFileProvider,
     archiveNames: ReadonlySet<string>,
     gameId: SupportedGameId,
   ): Promise<GameFileProvider | null> => {
     const manifest = GAME_MANIFESTS[gameId];
-    // 主程序一律用固定兼容版本（版本敏感，shim 固定地址依赖精确字节）。
+    // Always use the fixed compatible executable version; shim addresses depend on exact version-sensitive bytes.
     const thirdPartyFiles = await loadThirdPartyFiles(manifest, (message) => {
       state.description = message;
       publish();
     });
     if (disposed) return null;
-    // 覆盖层优先：主程序盖过归档同名文件。
-    const provider = new OverlayGameFileProvider(base, thirdPartyFiles, ' + 第三方', false, false, false);
+    // Overlay-first: the executable overrides any same-named archive file.
+    const provider = new OverlayGameFileProvider(base, thirdPartyFiles, t(' + 第三方'), false, false, false);
     const present = new Set(archiveNames);
     for (const thirdParty of manifest.thirdParty) present.add(thirdParty.name.toLowerCase());
     const missing = manifest.playerRequired
@@ -126,14 +128,15 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
     renderManifest(manifest, present, complete);
     if (!complete) {
       state.description =
-        `${supportedGame(gameId).title} 缺少必需文件：${missing.join('、')}。` + '请重新选择包含这些文件的资源。';
+        t('{0} 缺少必需文件：{1}。', supportedGame(gameId).title, missing.join('、')) +
+        t('请重新选择包含这些文件的资源。');
       publish();
       return null;
     }
-    state.description = '必需文件已集齐，正在启动…';
+    state.description = t('必需文件已集齐，正在启动…');
     publish();
-    // 记住本次导入：下次打开页面自动恢复，免重复选择（主程序已由
-    // thirdPartyFiles 单独持久化，这里只存玩家侧文件）。
+    // Remember this import for automatic restoration next time without another selection; executables are persisted separately
+    // by thirdPartyFiles, so store only player-supplied files here.
     if (base instanceof SessionGameFileProvider) {
       const persist = () => {
         const playerFiles = new Map<string, Uint8Array>();
@@ -143,26 +146,26 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
           if (base instanceof ProgressiveGameFileProvider && !base.inventory.has(lower)) continue;
           playerFiles.set(lower, bytes);
         }
-        // 分层导入不做“只存必需文件”的配额降级，否则又会丢掉空电影占位或
-        // MOD 覆盖。写入失败让原事务回滚，保留上次完整包。
+        // Layered imports must not fall back to required-files-only persistence on quota failure, which would lose empty movie placeholders
+        // or MOD overrides. Let the transaction roll back on failure, retaining the last complete package.
         return saveCachedGameFiles(
           gameId,
           playerFiles,
           base instanceof ProgressiveGameFileProvider ? [] : manifest.playerRequired.map((file) => file.name),
         );
       };
-      // 必须等其他层完整成功再原子替换缓存；取消/失败时保留上次完整资源集，
-      // 不把“已具备启动层”误标成“可刷新恢复的完整包”。
+      // Wait for every other layer to succeed before replacing the cache atomically; cancellation/failure preserves the last complete asset set,
+      // and startup-layer readiness must never be labeled a complete package restorable after refresh.
       if (base instanceof ProgressiveGameFileProvider) {
         void base.completion
           .then(persist)
-          .catch((error) => console.warn('[游戏文件] 后台解压未完成，不更新资源缓存', error));
+          .catch((error) => console.warn(t('[游戏文件] 后台解压未完成，不更新资源缓存'), error));
       } else void persist();
     }
     return provider;
   };
 
-  /** 导入尾部：走清单闸门 → 集齐则校验主程序并启动（缺件留在面板）。 */
+  /** Finish import through the manifest gate; once complete, verify the executable and start, otherwise remain on the panel. */
   const runImport = async (base: GameFileProvider, gameId: SupportedGameId): Promise<void> => {
     try {
       const present =
@@ -170,8 +173,8 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
           ? presentNames(base.inventory)
           : base instanceof SessionGameFileProvider
             ? presentNames(base.files.keys())
-            : // 开发版是目录 provider，不是内存归档；清单必须来自真实目录，不能
-              // 固定为空，否则资源齐全也永远卡在导入面板，浏览器回归无法启动。
+            : // Development uses a directory provider, not a memory archive; derive the manifest from the actual directory,
+              // or a fixed empty manifest permanently traps complete resources in the picker and prevents browser regressions from starting.
               presentNames((await base.list('')) ?? []);
       const provider = await manifestGate(base, present, gameId);
       if (!provider) {
@@ -192,23 +195,24 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
     }
   };
 
-  // 阶段状态文案（解析/读取进度），写入面板说明行。
+  // Write parsing/reading progress text into the panel description.
   const onStatus = (message: string): void => {
     if (state.games.length < 2) {
       state.description = message;
       publish();
     }
   };
-  /** 解析所选归档（迟到 change 复用：挂起项已被取消结算时重新进入完整
-   *  use 流程，按钮禁用与错误显示随流程恢复）；清单闸门在 use 里走。 */
+  /**
+   * Parse the selected archive. Reuse late change events by restarting the full use flow if the pending selection was already canceled, restoring disabled-button/error behavior. The manifest gate runs inside use.
+   */
   const processArchiveFile = async (file: File): Promise<GameFileProvider | null> => {
-    onStatus('正在解析归档目录并准备启动层…');
+    onStatus(t('正在解析归档目录并准备启动层…'));
     return openGameArchive(file, undefined, onStatus);
   };
-  /** 读取所选目录内清单所需文件（迟到 change 复用同归档）；清单闸门在 use 里走。 */
+  /** Read manifest-required files from the selected directory, handling late change like archives; the manifest gate runs in use. */
   const processFolderFiles = (files: File[]): Promise<GameFileProvider | null> =>
     (async () => {
-      // 只读清单所需文件；basename 任意层级匹配。
+      // Read only manifest-required files; match basenames at any depth.
       const wanted = presentNames(ARCHIVE_WANTED_NAMES);
       const wantedDirs = [...wanted].filter((name) => name.endsWith('/'));
       const extracted = new Map<string, Uint8Array>();
@@ -216,7 +220,7 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
       const readBytes = async (file: File): Promise<Uint8Array> => new Uint8Array(await file.arrayBuffer());
       for (const file of files) {
         const name = file.name.toLowerCase();
-        // 目录前缀条目（taunts/）按 webkitRelativePath 带目录存储。
+        // Store directory-prefix entries such as taunts/ with their webkitRelativePath structure.
         const rel = file.webkitRelativePath.split('/').slice(1).join('/').toLowerCase();
         const storeKey = wanted.has(name) ? name : (wantedDirs.find((dir) => rel.startsWith(dir)) ?? null);
         if (storeKey) {
@@ -225,10 +229,10 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
           archives.push(file);
         }
       }
-      // 目录内若有单个归档（安装包等）也深入解压（同一 7z-wasm Worker，
-      // 多层递归）；普通 exe（启动器副本等）非归档，尝试失败即跳过。
+      // Also recursively extract archives such as installers found inside directories, using the same 7z-wasm Worker;
+      // ordinary EXEs such as launcher copies are not archives, so skip failed attempts.
       for (const archive of archives.slice(0, 8)) {
-        onStatus(`正在解压目录内归档：${archive.name} …`);
+        onStatus(t('正在解压目录内归档：{0} …', archive.name));
         try {
           const result = await extractArchiveFiles(await readBytes(archive), {
             wanted: [...ARCHIVE_WANTED_NAMES],
@@ -237,11 +241,11 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
           });
           for (const [name, entryBytes] of result.files) extracted.set(name, entryBytes);
         } catch (error) {
-          console.warn('[游戏文件] 目录内归档无法解析，跳过', archive.name, error);
+          console.warn(t('[游戏文件] 目录内归档无法解析，跳过'), archive.name, error);
         }
       }
-      onStatus(`目录读取完成：${extracted.size} 个所需文件。`);
-      return new SessionGameFileProvider('本地目录', extracted);
+      onStatus(t('目录读取完成：{0} 个所需文件。', extracted.size));
+      return new SessionGameFileProvider(t('本地目录'), extracted);
     })();
   return {
     ...store,
@@ -270,7 +274,7 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
       return use(() => processFolderFiles(files));
     },
     development() {
-      // RA2/YR 共用开发资源目录，走与玩家导入相同的版本识别流程。
+      // RA2/YR share a development resource directory and use the same version discovery as player imports.
       return use(() => developmentSourceProvider(new HttpGameFileProvider()));
     },
     dispose() {
@@ -285,8 +289,9 @@ export async function developmentSourceProvider(provider: HttpGameFileProvider):
   return new ScopedGameFileProvider(provider, supportedGame('ra2').folder);
 }
 
-/** 从上次导入的 IndexedDB 文件集恢复游戏源：必需文件齐全则直接可用，
- *  页面跳过选择面板自动启动；不齐或无缓存返回 null（走选择面板）。 */
+/**
+ * Restore a game source from the last imported IndexedDB file set. If required files are complete, skip the picker and start automatically; return null for missing/incomplete caches to show the picker.
+ */
 export async function restoreCachedGameSource(): Promise<GameSource | null> {
   const preferred = loadPreferredGame();
   const order = [preferred, ...SUPPORTED_GAMES.map((game) => game.id).filter((id) => id !== preferred)];
@@ -299,7 +304,7 @@ export async function restoreCachedGameSource(): Promise<GameSource | null> {
     if (missing.length) continue;
     const thirdParty = await loadThirdPartyFiles(manifest).catch(() => null);
     if (!thirdParty) continue;
-    const provider = new OverlayGameFileProvider(cached, thirdParty, ' + 第三方', false, false, false);
+    const provider = new OverlayGameFileProvider(cached, thirdParty, t(' + 第三方'), false, false, false);
     const sources = await validateGameDirectory(provider, gameId).catch(() => []);
     if (sources[0]) return sources[0];
   }

@@ -33,7 +33,7 @@ describe('RA2 network wire', () => {
       [0x0af7_ff01, false], // high=255
       [0x0af7_01ff, false], // low=255
       [0x0af7_ffff, false],
-      [0x0bf7_0101, false], // 网段外
+      [0x0bf7_0101, false], // Outside the subnet.
       [0x0000_0101, false],
     ] as const) {
       expect(isAssignableRoomAddress(address), `0x${address.toString(16)}`).toBe(expected);

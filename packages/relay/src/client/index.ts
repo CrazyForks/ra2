@@ -1,4 +1,4 @@
-/** 浏览器与 Worker 的公开客户端入口；不加载服务端依赖。 */
+/** Public client entry point for browsers and Workers; does not load server dependencies. */
 export { WsRelaySocket } from './wsRelaySocket';
 export { PortRelaySocket, serveRelayPort } from './relayPort';
 export type { RelaySocket } from './relaySocket';

@@ -1,3 +1,4 @@
+import { t, localizeLabel, localizeText } from '../../../shared/i18n/translate';
 import { useState } from 'react';
 import { parseRa2RelayUrl } from '../../../../games/ra2/networkTransport';
 import type { GameSource } from '../../../../games/source';
@@ -36,7 +37,7 @@ export function GameSourcePickerView({ onSelected }: { onSelected(source: GameSo
       else url.searchParams.delete('relay');
       window.history.replaceState(window.history.state, '', url);
     } catch {
-      /* 无效草稿保留在输入框，禁止启动，修正后再更新配置。 */
+      /* Keep invalid drafts in the input and disable startup; update configuration only after correction. */
     }
   };
   const toggleNetwork = (enabled: boolean) => {
@@ -49,7 +50,7 @@ export function GameSourcePickerView({ onSelected }: { onSelected(source: GameSo
         const value = parseRa2RelayUrl(relay);
         if (value) url.searchParams.set('relay', relay.trim());
       } catch {
-        /* 输入框保留草稿，显示校验错误。 */
+        /* Retain the input draft and show the validation error. */
       }
     }
     window.history.replaceState(window.history.state, '', url);
@@ -61,7 +62,7 @@ export function GameSourcePickerView({ onSelected }: { onSelected(source: GameSo
     ? [
         ...state.manifest.thirdParty.map((file) => ({
           name: file.name,
-          note: '第三方分享（版本固定）',
+          note: t('第三方分享（版本固定）'),
           optional: false,
           ok: state.present.has(file.name.toLowerCase()),
         })),
@@ -86,21 +87,21 @@ export function GameSourcePickerView({ onSelected }: { onSelected(source: GameSo
   const hasVisibleDownloads = visibleGames.some((game) => game.links.length > 0);
   const emptyDownloadMessage =
     downloadLanguage === 'all'
-      ? '当前没有已核验的下载入口。'
-      : `当前没有已核验的 ${downloadLanguageLabels[downloadLanguage]} 下载入口。`;
+      ? t('当前没有已核验的下载入口。')
+      : t('当前没有已核验的 {0} 下载入口。', downloadLanguageLabels[downloadLanguage]);
   const emptyDownloadGlobalMessage =
     downloadLanguage === 'all'
-      ? '当前没有已核验的下载地址，请稍后查看。'
-      : `当前没有已核验的 ${downloadLanguageLabels[downloadLanguage]} 下载地址，请选择其他语言或稍后查看。`;
+      ? t('当前没有已核验的下载地址，请稍后查看。')
+      : t('当前没有已核验的 {0} 下载地址，请选择其他语言或稍后查看。', downloadLanguageLabels[downloadLanguage]);
   return (
     <section className="panel game-folder-panel message-box game-source-picker" aria-labelledby="source-picker-title">
       <input ref={props.archiveRef} type="file" accept=".zip,.exe,.rar,.7z" hidden onChange={props.archiveChanged} />
       <input ref={props.folderRef} type="file" {...{ webkitdirectory: '' }} hidden onChange={props.folderChanged} />
       <header className="source-picker-heading">
-        <span className="source-picker-brand">RA2 VM · 红色警戒</span>
-        <h3 id="source-picker-title">{props.games.length > 1 ? '选择要启动的游戏' : '选择游戏资源'}</h3>
+        <span className="source-picker-brand">{t('RA2 VM · 红色警戒')}</span>
+        <h3 id="source-picker-title">{props.games.length > 1 ? t('选择要启动的游戏') : t('选择游戏资源')}</h3>
         <p className="source-picker-description" role="status">
-          {props.description}
+          {localizeText(props.description)}
         </p>
       </header>
       <div className="network-settings">
@@ -111,11 +112,11 @@ export function GameSourcePickerView({ onSelected }: { onSelected(source: GameSo
             disabled={props.busy}
             onChange={(event) => toggleNetwork(event.currentTarget.checked)}
           />
-          联机
+          {t('联机')}{' '}
         </label>
         {networkEnabled && (
           <div className="relay-settings">
-            <label htmlFor="relay-address">联机 relay 地址（可选）</label>
+            <label htmlFor="relay-address">{t('联机 relay 地址（可选）')}</label>
             <input
               id="relay-address"
               type="text"
@@ -129,10 +130,11 @@ export function GameSourcePickerView({ onSelected }: { onSelected(source: GameSo
               onChange={(event) => updateRelay(event.currentTarget.value)}
             />
             <small id="relay-address-help">
-              留空使用默认服务；只需填写主机和端口，默认房间 /ra2；内网 IP 使用 WS，其他地址使用
-              WSS。联机玩家填写相同地址；刷新保留设置。
+              {t(
+                '留空使用默认服务；只需填写主机和端口，默认房间 /ra2；内网 IP 使用 WS，其他地址使用 WSS。联机玩家填写相同地址；刷新保留设置。',
+              )}{' '}
             </small>
-            {relayError && <p role="alert">{relayError}</p>}
+            {relayError && <p role="alert">{localizeText(relayError)}</p>}
           </div>
         )}
       </div>
@@ -142,21 +144,21 @@ export function GameSourcePickerView({ onSelected }: { onSelected(source: GameSo
             key={entry.name}
             className={`manifest-line ${entry.ok ? 'ok' : 'missing'}${entry.optional ? ' optional' : ''}`}
           >
-            {entry.ok ? '✓' : '✗'} {entry.name} — {entry.note}
-            {entry.optional && !entry.ok ? '（可选，不影响启动）' : ''}
+            {entry.ok ? '✓' : '✗'} {entry.name} — {localizeLabel(entry.note)}
+            {entry.optional && !entry.ok ? t('（可选，不影响启动）') : ''}
           </div>
         ))}
-        {state?.complete && <div className="manifest-line ok">✓ 必需文件已集齐，正在启动…</div>}
+        {state?.complete && <div className="manifest-line ok">{t('✓ 必需文件已集齐，正在启动…')}</div>}
       </div>
       <p className="source-picker-error" role="alert" hidden={!props.error}>
-        {props.error}
+        {localizeText(props.error)}
       </p>
       <div className="resource-actions">
         <button className="dialog-button" disabled={props.busy || !!relayError} onClick={() => props.pick('archive')}>
-          选择文件…
+          {t('选择文件…')}{' '}
         </button>
         <button className="dialog-button" disabled={props.busy || !!relayError} onClick={() => props.pick('folder')}>
-          选择文件夹…
+          {t('选择文件夹…')}{' '}
         </button>
         <button
           className="dialog-button game-download-entry"
@@ -164,11 +166,11 @@ export function GameSourcePickerView({ onSelected }: { onSelected(source: GameSo
           disabled={props.busy}
           onClick={() => setDownloads(true)}
         >
-          ↓ 没有游戏文件？点击下载
+          {t('↓ 没有游戏文件？点击下载')}{' '}
         </button>
       </div>
       {props.games.length > 1 && (
-        <div className="detected-games" aria-label="选择检测到的游戏">
+        <div className="detected-games" aria-label={t('选择检测到的游戏')}>
           {gameDownloadCatalog
             .filter((game) => props.games.includes(game.id))
             .map((game) => (
@@ -178,10 +180,8 @@ export function GameSourcePickerView({ onSelected }: { onSelected(source: GameSo
                 disabled={props.busy || !!relayError}
                 onClick={() => void props.chooseGame(game.id)}
               >
-                <span className="game-icon" aria-hidden="true">
-                  {game.id.toUpperCase()}
-                </span>
-                {game.title}
+                <img className="game-icon" src={`/icons/${game.id}.png`} alt="" aria-hidden="true" />
+                {localizeLabel(game.title)}
               </button>
             ))}
         </div>
@@ -193,27 +193,29 @@ export function GameSourcePickerView({ onSelected }: { onSelected(source: GameSo
             disabled={props.busy || !!relayError}
             onClick={() => props.pick('development')}
           >
-            开发测试
+            {t('开发测试')}{' '}
           </button>
         </div>
       )}
       <Modal
         open={downloads}
         onClose={() => setDownloads(false)}
-        title="下载游戏资源"
+        title={t('下载游戏资源')}
         className="game-download-dialog message-box"
       >
         <div className="game-download-dialog-header">
-          <h3>下载游戏资源</h3>
+          <h3>{t('下载游戏资源')}</h3>
           <button type="button" className="dialog-button" onClick={() => setDownloads(false)}>
-            关闭
+            {t('关闭')}{' '}
           </button>
         </div>
         <div className="download-links-note">
-          下载入口在新窗口打开第三方来源。语言筛选只筛选已核验的下载包；“全部”会保留所有目录入口，待核验入口会标注“语言待核验”。这里不修改已导入游戏的文字，也不是网页字体选择。下载完成后回到这里，点击「选择文件…」导入启动。
+          {t(
+            '下载入口在新窗口打开第三方来源。语言筛选只筛选已核验的下载包；“全部”会保留所有目录入口，待核验入口会标注“语言待核验”。这里不修改已导入游戏的文字，也不是网页字体选择。下载完成后回到这里，点击「选择文件…」导入启动。',
+          )}{' '}
         </div>
         <label className="download-language-filter" htmlFor="download-language">
-          <span>游戏文字语言</span>
+          <span>{t('游戏文字语言')}</span>
           <select
             id="download-language"
             value={downloadLanguage}
@@ -224,7 +226,7 @@ export function GameSourcePickerView({ onSelected }: { onSelected(source: GameSo
           >
             {downloadLanguageOptions.map((option) => (
               <option key={option.value} value={option.value}>
-                {option.label}
+                {localizeLabel(option.label)}
               </option>
             ))}
           </select>
@@ -232,11 +234,11 @@ export function GameSourcePickerView({ onSelected }: { onSelected(source: GameSo
         <div className="picker-games">
           {visibleGames.map((game) => (
             <section key={game.id} className="game-package-block">
-              <h4 className="game-package-header">{game.title}</h4>
+              <h4 className="game-package-header">{localizeLabel(game.title)}</h4>
               <div className="download-links-lines">
                 {game.links.length > 0 ? (
                   game.links.map((link) => {
-                    const languageLabel = downloadLanguageLabels[link.language];
+                    const languageLabel = localizeLabel(downloadLanguageLabels[link.language]);
                     return (
                       <a
                         key={link.href}
@@ -244,10 +246,16 @@ export function GameSourcePickerView({ onSelected }: { onSelected(source: GameSo
                         href={link.href}
                         target="_blank"
                         rel="noopener noreferrer"
-                        aria-label={`下载游戏资源：${link.label}（游戏文字语言：${languageLabel}；第三方来源，新窗口打开）`}
+                        aria-label={t(
+                          '下载游戏资源：{0}（游戏文字语言：{1}；第三方来源，新窗口打开）',
+                          link.label,
+                          languageLabel,
+                        )}
                       >
                         <span className="game-download-link-copy">
-                          <span>↓ 下载 · {link.label}</span>
+                          <span>
+                            {t('↓ 下载 ·')} {localizeLabel(link.label)}
+                          </span>
                           <span className="game-download-language">{languageLabel}</span>
                         </span>
                         <span aria-hidden="true">↗</span>
@@ -269,11 +277,13 @@ export function GameSourcePickerView({ onSelected }: { onSelected(source: GameSo
           </p>
         )}
       </Modal>
-      <p className="disclaimer">免责声明：本页面不提供游戏文件。游戏版权归原权利人所有，请只下载你合法拥有的内容。</p>
+      <p className="disclaimer">
+        {t('免责声明：本页面不提供游戏文件。游戏版权归原权利人所有，请只下载你合法拥有的内容。')}
+      </p>
       <p className="join-group-hook">
-        欢迎加入我们的微信交流群，
+        {t('欢迎加入我们的微信交流群，')}{' '}
         <button type="button" className="join-group-link" disabled={props.busy} onClick={openGroupJoinDialog}>
-          点此扫码入群
+          {t('点此扫码入群')}{' '}
         </button>
       </p>
     </section>

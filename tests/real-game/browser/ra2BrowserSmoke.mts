@@ -9,7 +9,7 @@ const MENU_FRAME_SAMPLES = 6;
 const GAME_ID = process.env.RA2_BROWSER_GAME === 'yr' ? 'yr' : 'ra2';
 const GAME_LABEL = GAME_ID === 'yr' ? 'RA2YR' : 'RA2';
 const EXECUTABLE = GAME_ID === 'yr' ? 'gamemd.exe' : 'game.exe';
-// clickLogical 接收 1440×900 归一化坐标；RA2 与 YR 的右栏实际横向位置不同。
+// clickLogical takes normalized 1440x900 coordinates; RA2 and YR sidebars have different actual horizontal positions.
 const MAIN_SINGLE_PLAYER: readonly [number, number] = GAME_ID === 'yr' ? [1288, 330] : [1034, 371];
 const SINGLE_PLAYER_BACK: readonly [number, number] = GAME_ID === 'yr' ? [1288, 830] : [1034, 708];
 const SINGLE_PLAYER_CAMPAIGN: readonly [number, number] = GAME_ID === 'yr' ? [1288, 330] : [1034, 371];
@@ -29,7 +29,7 @@ function serverReady(): Promise<boolean> {
 async function ensureServer(): Promise<ChildProcess | null> {
   if (await serverReady()) return null;
   const origin = new URL(ORIGIN);
-  // 直接启动 Vite，finally 中终止的就是服务本体，不留下 npm 的孙进程占用端口。
+  // Start Vite directly so finally terminates the server itself, leaving no npm grandchild holding the port.
   const server = spawn(
     process.execPath,
     ['node_modules/vite/bin/vite.js', '--host', origin.hostname, '--port', origin.port || '443'],
@@ -114,9 +114,9 @@ async function clickUntilShellPage(page: Page, canvas: Locator, expected: string
     if (current.toLowerCase().includes(expected.toLowerCase())) return;
     await clickLogical(page, canvas, x + offsets[attempt]![0], y + offsets[attempt]![1]);
     try {
-      // 原版切页会同步销毁一批 Win32 子窗口，并可能在返回主菜单时重新打开
-      // LANGUAGE.MIX/Bink。过早重击旧 owner-draw 控件会在销毁链中制造重入；
-      // 一次真实点击后给它完整的稳定窗口，再决定是否因动画吞键而重试。
+      // Native page transitions synchronously destroy batches of Win32 child windows and may reopen
+      // LANGUAGE.MIX/Bink when returning to the main menu. Clicking old owner-drawn controls too early causes reentrancy during destruction.
+      // After one real click, allow a full settling window before retrying a click potentially swallowed by animation.
       await expectShellPage(page, expected, 6_000);
       return;
     } catch {
@@ -127,7 +127,7 @@ async function clickUntilShellPage(page: Page, canvas: Locator, expected: string
           throw new Error(`菜单切换中断：${status.phase}：${status.detail}`);
         }
       }
-      // 原版在同一拍重绘按钮时可能吞掉一次点击；仍在原页面才安全重试。
+      // The original game may swallow a click while repainting buttons in the same tick; retry only if still on the original page.
     }
   }
   await canvas.screenshot({ path: `/tmp/${GAME_ID}-${expected}-click-failed.png` });
@@ -147,9 +147,9 @@ async function clickLogical(page: Page, canvas: Locator, x: number, y: number): 
   }
   const clientX = box.x + (targetX / width!) * box.width;
   const clientY = box.y + (targetY / height!) * box.height;
-  // 换页后相同位置对应下一级按钮；先移开再移回，让原版收到新的 hover。
-  // RA2 侧栏按钮约 100 CSS px 宽；只偏 30px 仍留在同一按钮里，原版收不到
-  // mouse-leave→enter 的 hover 状态迁移。先移到画面左半部，再回到按钮中心。
+  // After a page transition, the same position refers to the next-level button; move away and back to generate a fresh hover.
+  // RA2 sidebar buttons are about 100 CSS pixels wide; moving only 30 pixels stays inside the same button and produces no
+  // mouse-leave -> enter hover transition. Move to the left half of the screen before returning to the button center.
   await page.mouse.move(box.x + box.width * 0.25, clientY);
   await page.waitForTimeout(100);
   await page.mouse.move(clientX, clientY);
@@ -204,7 +204,7 @@ async function moveLockedGuest(
   const relative = (logicalDelta: number, cssExtent: number, logicalExtent: number): number => {
     if (!logicalDelta) return 0;
     const scaled = (logicalDelta * cssExtent) / logicalExtent;
-    // PointerEvent movement 是整数设备计数；不足 1 CSS px 的尾差也必须产生一拍。
+    // PointerEvent movement uses integer device counts; even a remainder below 1 CSS pixel must produce one event.
     return Math.sign(scaled) * Math.max(1, Math.abs(scaled));
   };
   await canvas.dispatchEvent('pointermove', {
@@ -231,10 +231,10 @@ async function probeHostUi(page: Page): Promise<void> {
   assert.equal(theme.yellow.toLowerCase(), '#fff600', `网页未应用 RA2 信息黄：${JSON.stringify(theme)}`);
   assert.equal(theme.debugBorder, 'rgb(150, 150, 150)', `Debug 金属边框未生效：${JSON.stringify(theme)}`);
   assert.equal(theme.sectionRadius, '0px', `Debug 面板仍是普通圆角卡片：${JSON.stringify(theme)}`);
-  // 控制栏按钮使用 CSS 三态，不再依赖游戏菜单精灵图。
+  // Toolbar buttons use three CSS states and no longer depend on game-menu sprites.
   assert(theme.toolbarBackground.includes('linear-gradient'), `CSS 工具按钮未生效：${JSON.stringify(theme)}`);
 
-  // 旧游戏专属光标表已删除；用通用的内存录制输出框验证面板滚轮加速。
+  // The old game-specific cursor table is gone; use the generic memory-recording output box to verify accelerated panel wheel scrolling.
   const scroller = page.locator('#vm-debug pre').first();
   const oldStyle = (await scroller.getAttribute('style')) ?? '';
   const oldText = (await scroller.textContent()) ?? '';
@@ -352,8 +352,8 @@ async function probeAndSkipCampaignVideo(
       { cause: error },
     );
   }
-  // 用户报告的故障不是首屏画面，而是音频/等待链在播放途中卡住。持续观察 8 秒，
-  // 同时检查每 500ms 的调用批次，避免只看开头 1.2 秒而漏掉 BinkWait 风暴。
+  // The reported failure occurs during audio/wait processing mid-playback, not on the first frame. Observe for eight seconds,
+  // checking call batches every 500 ms to avoid missing a BinkWait storm by examining only the first 1.2 seconds.
   const hashes = new Set<string>();
   let maxBinkWaitCalls = 0;
   let maxSoundPositionCalls = 0;
@@ -395,8 +395,8 @@ async function probeAndSkipCampaignVideo(
     buffersAfter > buffersBefore && playsAfter > playsBefore,
     `战役过场没有建立并播放音频缓冲：CreateSoundBuffer ${buffersBefore}→${buffersAfter}，Play ${playsBefore}→${playsAfter}`,
   );
-  // 浏览器真实 Esc 会先作为保留键解除 Pointer Lock，部分平台不再把 keydown
-  // 给页面。自动化环境直接触发同一个 pointerlockchange，验证页面会补出客体 Esc。
+  // A real browser Esc first releases Pointer Lock as a reserved key; some platforms do not deliver keydown to the page.
+  // Automation directly triggers the same pointerlockchange to verify that the page supplies the guest Esc.
   await page.evaluate(() => document.exitPointerLock());
   await page.waitForFunction(() => document.pointerLockElement === null, undefined, { timeout: 5_000 });
   console.log(
@@ -525,13 +525,14 @@ assert(existsSync('game/ra2/BINKW32.DLL'), '缺少 game/ra2/BINKW32.DLL');
 const server = await ensureServer();
 const browser = await chromium.launch({
   headless: process.env.RA2_BROWSER_HEADFUL !== '1',
-  // 两款游戏的 v86 RAM 为 640MiB；headless renderer 的默认 V8 old-space 在
-  // 连续帧探针/截图后偶发 GC 饥饿甚至 Target crashed。测试进程单独放宽上限，
-  // 保证失败来自客体或断言，而不是 Playwright 宿主内存门槛。
+  // Both games use 640 MiB of v86 RAM. The headless renderer's default V8 old-space limit can occasionally cause
+  // GC starvation or Target crashed after repeated frame probes/screenshots. Raise the limit for the test process
+  // so failures reflect guest behavior or assertions rather than Playwright host-memory thresholds.
   args: ['--js-flags=--max-old-space-size=4096'],
 });
 try {
   const context = await browser.newContext({
+    locale: 'zh-CN',
     viewport: { width: 1440, height: 1000 },
     ignoreHTTPSErrors: true,
   });
@@ -551,7 +552,7 @@ try {
   });
   page.on('crash', () => console.error(`❌ ${GAME_LABEL} Chromium renderer crashed`));
   await page.goto(`${ORIGIN}/?debug=1`, { waitUntil: 'domcontentloaded' });
-  // 本地资源现在必须显式选择；新浏览器上下文没有 IndexedDB 导入缓存。
+  // Local resources now require explicit selection; a fresh browser context has no IndexedDB import cache.
   await page.getByRole('button', { name: '开发测试', exact: true }).click();
   await page
     .locator('.detected-games button')
@@ -598,17 +599,17 @@ try {
   await clickUntilShellPage(page, canvas, 'singleplayer', ...MAIN_SINGLE_PLAYER);
   await page.waitForFunction(() => document.pointerLockElement?.id === 'screen', undefined, { timeout: 5_000 });
   await page.waitForTimeout(500);
-  // 返回主菜单会重新 BinkOpen 同一段 LANGUAGE.MIX 视频；不能只验证首屏。
-  // 不用 Esc 退出普通菜单：RA2 的旧式 KillTimer/CallWindowProc 回调链在该时点
-  // 会与 Pointer Lock 解锁消息重入；点击游戏自己的 Back 才是稳定原版路径。
+  // Returning to the main menu reopens the same LANGUAGE.MIX video through BinkOpen; checking only the first screen is insufficient.
+  // Do not use Esc to leave ordinary menus: RA2's legacy KillTimer/CallWindowProc chain can re-enter alongside
+  // Pointer Lock release messages at that point. Clicking the game's own Back button is the stable native path.
   const mainMenuOpensBeforeReturn =
     callsOf(await canvas.getAttribute('data-vm-bink-calls'))['BINKW32.DLL!_BinkOpen@8'] ?? 0;
   await clickUntilShellPage(page, canvas, 'mainmenu', ...SINGLE_PLAYER_BACK);
   await waitForQuietFileReads(page, canvas);
   await waitForBinkOpen(page, mainMenuOpensBeforeReturn, '返回主菜单');
   let returnedMainMenuProbe = await probeMainMenu(page, canvas);
-  // SetWindowText/MainMenu 会早于返回视频解码器完全恢复；若第一窗口仍夹着
-  // BinkOpen 初始化，等一拍后重测稳态，性能门槛本身不降低。
+  // SetWindowText/MainMenu precedes full decoder recovery on return. If the first window still includes BinkOpen
+  // initialization, wait one tick and remeasure steady state without lowering the performance threshold.
   if (returnedMainMenuProbe.emittedFrames < 20) {
     await page.waitForTimeout(1_000);
     returnedMainMenuProbe = await probeMainMenu(page, canvas);
@@ -657,10 +658,10 @@ try {
   const campaignVideoOpensBefore =
     callsOf(await canvas.getAttribute('data-vm-bink-calls'))['BINKW32.DLL!_BinkOpen@8'] ?? 0;
   const campaignVideoAudioBefore = callsOf(await canvas.getAttribute('data-vm-audio-calls'));
-  // 离开 shell 只代表进入战役简报，不能当作战场。必须等右侧栏和地图主体
-  // 同时真正渲染出来，才开始验证 Pointer Lock。每一轮只点击一次，然后等待
-  // 原版完成 CampaignMenu 的同步销毁；不能在进入重试循环前额外点击一次，否则
-  // 会把普通单击变成人为双击，撞进旧窗口销毁/新窗口创建的重入区。
+  // Leaving the shell means entering the campaign briefing, not necessarily the battlefield. Wait for both the sidebar and
+  // map to render before checking Pointer Lock. Click only once per round, then wait for the original game to finish
+  // synchronously destroying CampaignMenu. Do not add a click before the retry loop, which turns a normal click into
+  // an artificial double-click and enters the reentrant region between old-window destruction and new-window creation.
   const alliedOffsets = [
     [0, 0],
     [-20, 0],
@@ -686,15 +687,15 @@ try {
           throw new Error(`选择阵营中断：${status.phase}：${status.detail}`);
         }
       }
-      // CampaignMenu 重绘期间吞点击时，仅在仍有 shell title 时重试。
+      // Retry clicks swallowed by CampaignMenu repainting only while a shell title remains.
     }
   }
   assert.equal(await canvas.getAttribute('data-shell-page'), null, '选择盟军后仍停在 CampaignMenu');
   await probeAndSkipCampaignVideo(page, canvas, campaignVideoOpensBefore, campaignVideoAudioBefore);
   const battlefieldVideoBinkBefore = callsOf(await canvas.getAttribute('data-vm-bink-calls'));
   const battlefieldVideoAudioBefore = callsOf(await canvas.getAttribute('data-vm-audio-calls'));
-  // YR 的 shell/战役简报固定保持 800×600，进入真实战场时才读取 RA2MD.INI
-  // 切到所选模式；先等分辨率切换，避免把 800×600 简报误判成可操作战场。
+  // YR keeps the shell/campaign briefing at 800x600 and reads RA2MD.INI to switch to the selected mode only on
+  // entering the actual battlefield. Wait for the resolution change to avoid treating the briefing as a playable battlefield.
   await page.waitForFunction(
     () => document.querySelector<HTMLCanvasElement>('#screen')?.dataset.vmResolution === '1440x900',
     undefined,
@@ -705,9 +706,9 @@ try {
     `🔬 可操作战场：等待=${(playable.elapsedMs / 1_000).toFixed(1)}s，` +
       `右栏=${playable.signal.rightEdgeRatio.toFixed(3)}，地图=${playable.signal.fieldRatio.toFixed(3)}`,
   );
-  // 战场右上角 EVA/简报小窗是独立的 Bink 实例，不能用前面的全屏过场音频
-  // 断言代替。持续观察其 Close 和 DirectSound 流；实例可能在战场可操作判定
-  // 之前已经 Open，因此以播放结束的 Close 增量作为稳定生命周期闸门。
+  // The battlefield's top-right EVA/briefing window is a separate Bink instance; fullscreen cutscene audio assertions
+  // cannot cover it. Observe its Close and DirectSound stream. It may Open before the battlefield is deemed
+  // playable, so use the playback-ending Close increment as a stable lifecycle gate.
   await page.waitForTimeout(8_000);
   const battlefieldVideoBinkAfter = callsOf(await canvas.getAttribute('data-vm-bink-calls'));
   const battlefieldVideoAudioAfter = callsOf(await canvas.getAttribute('data-vm-audio-calls'));
@@ -743,10 +744,10 @@ try {
   assert.equal(battleResolution, '1440x900', `${GAME_LABEL} 未采用内存 INI 覆盖的 1440x900 战场分辨率`);
   const expectedPointer = `${battleWidth! - 1},${battleHeight! - 1}/${battleResolution}`;
 
-  // Esc 跳过影片后 Pointer Lock 已退出。先用 Playwright 的真实浏览器点击重新
-  // 获锁。无头 Chromium 不会为 CDP 注入的后续 mouse.move 生成相对 movementX/Y，
-  // 因此在“真实 document.pointerLockElement 已建立”的前提下用 PointerEvent 探针
-  // 注入相对计数，覆盖页面换算→Worker→USER32，而不把自动化限制误当产品回归。
+  // Skipping the video with Esc releases Pointer Lock. Reacquire it through a real Playwright browser click.
+  // Headless Chromium does not generate relative movementX/Y for subsequent CDP-injected mouse.move calls,
+  // so inject relative counts with a PointerEvent probe only after real document.pointerLockElement is established.
+  // This covers page conversion -> Worker -> USER32 without mistaking automation limitations for product regressions.
   const battleBox = await canvas.boundingBox();
   if (!battleBox) throw new Error('战场 canvas 不可见');
   await page.mouse.click(battleBox.x + 4, battleBox.y + 4);
@@ -766,9 +767,9 @@ try {
     battleBox.width,
     battleBox.height,
   );
-  // CSS→逻辑坐标是分数比例，第一拍 floor 后可能停在倒数 1px；真实鼠标仍会
-  // 继续向边缘产生计数。补一个完整画布的正向 sweep，最终必须严格钳在边界，
-  // 既不能停在旧分辨率，也不能让超量相对移动越界。
+  // CSS-to-logical scaling is fractional; flooring the first event can leave the cursor one pixel short of the edge.
+  // A real mouse continues producing counts toward the edge. Add a positive sweep spanning the whole canvas and
+  // require exact boundary clamping: neither retain the old resolution nor allow excess relative movement outside bounds.
   await page.waitForTimeout(100);
   await canvas.dispatchEvent('pointermove', {
     pointerType: 'mouse',
@@ -799,9 +800,9 @@ try {
     '浏览器 Esc 解锁后没有向客体补齐 WM_KEYUP/VK_ESCAPE',
   );
 
-  // 当前工具栏已移除旧 data-game-speed 按钮；保留原生速度观察边缘卷动，
-  // 不再等待不存在的 UI，也不通过改客体速度字段制造性能收益。
-  // 覆盖此前 Bink 返回后延迟发生的 PIT/线程上下文损坏。
+  // The toolbar no longer has the old data-game-speed buttons. Observe edge scrolling at native speed,
+  // without waiting for nonexistent UI or changing guest speed fields to manufacture performance gains.
+  // Cover the previously delayed PIT/thread-context corruption after returning from Bink.
   await page.waitForTimeout(10_000);
   assert(Number((await canvas.getAttribute('data-vm-frame')) ?? 0) > battleFrame, '战场画面停止更新');
   assert.equal(
@@ -820,15 +821,15 @@ try {
   const finalWorkerPointer = await canvas.getAttribute('data-vm-worker-cursor');
   const textOutCalls = Number((await canvas.getAttribute('data-vm-text-out-calls')) ?? 0);
 
-  // 当前原生 select 已隐藏，由自绘 listbox 触发 change；操作真实可见选项，
-  // 覆盖安全销毁 VM→reload→恢复偏好，不能等待隐藏 select 的可操作性。
+  // The native select is now hidden; a custom listbox triggers change. Use real visible options to cover safe
+  // VM disposal -> reload -> preference restoration, without waiting for the hidden select to become actionable.
   await page.evaluate(() => document.exitPointerLock());
   await page.locator('#vm-resolution-toggle').click();
   await Promise.all([
     page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30_000 }),
     page.locator('#vm-resolution-options').getByRole('option', { name: '1024×768', exact: true }).click(),
   ]);
-  // 开发目录不作为玩家归档缓存；重载后仍需显式选择开发资源。
+  // The development directory is not a player archive cache; explicitly select development resources again after reload.
   await page.getByRole('button', { name: '开发测试', exact: true }).click();
   await page
     .locator('.detected-games button')

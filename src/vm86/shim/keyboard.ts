@@ -1,4 +1,4 @@
-/** 固定 US 键盘布局的 Set-1 扫描码。VM 不读取宿主键盘布局，保持客体映射稳定。 */
+/** Fixed US-layout Set-1 scan codes; do not read host keyboard layouts, keeping guest mappings stable. */
 const scanToVk = new Map<number, number>([
   [0x01, 0x1b],
   [0x0e, 0x08],
@@ -88,8 +88,10 @@ const punctuation: Readonly<Record<number, string>> = {
   0x6f: '/',
 };
 
-/** MapVirtualKey 的方向不能混用：RA2 战场快捷键会调用它，未知键按 Win32 返回 0。
- * 语义：https://learn.microsoft.com/windows/win32/api/winuser/nf-winuser-mapvirtualkeya */
+/**
+ * MapVirtualKey directions are distinct. RA2 battlefield shortcuts call it; return Win32's 0 for unknown keys.
+ * Semantics: Microsoft Win32 documentation, MapVirtualKeyA.
+ */
 export function mapVirtualKey(code: number, type: number): number {
   if (type === 0 || type === 4) {
     const left = code === 0x10 ? 0xa0 : code === 0x11 ? 0xa2 : code === 0x12 ? 0xa4 : code;
@@ -120,8 +122,10 @@ export function mapVirtualKey(code: number, type: number): number {
   return 0;
 }
 
-/** ToAscii 的 US 布局子集：大小写取 Shift/CapsLock，Ctrl 生成控制字符。
- * 不产生死键；无字符的功能键返回空结果，不能用虚拟键码冒充 ASCII。 */
+/**
+ * US-layout ToAscii subset: Shift/CapsLock determines case; Ctrl generates control characters.
+ * No dead keys; noncharacter function keys return no result, never virtual key codes masquerading as ASCII.
+ */
 export function toAscii(code: number, scan: number, state: Uint8Array): number[] {
   if (scan & 0x8000) return [];
   const shift = ((state[0x10] ?? 0) & 0x80) !== 0;

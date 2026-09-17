@@ -1,15 +1,14 @@
 import { syntheticKeyStroke, type KeyStrokeTarget } from './input';
 
 /**
- * 触屏虚拟按键栏：Esc/Enter/空格/方向键 + 折叠切换。
+ * Touch virtual-key toolbar: Esc/Enter/Space/arrows plus collapse toggle.
  *
- * 容器挂在 document.body（startVmPage 会反复 ui.replaceChildren()，挂 #ui 会被清掉）。
- * 折叠状态存 localStorage，折叠后保留 ⌨ 切换按钮以便重新展开。
+ * Attach to document.body because startVmPage repeatedly calls ui.replaceChildren(), which would remove children of #ui. Persist collapse state in localStorage and retain the keyboard toggle button for reopening.
  */
 
 const STORAGE_KEY = 'ra2-vm-touch-controls-hidden';
 
-/** 根据画布上的实际输入显示触屏控件；设备能力不代表玩家正在用触屏。 */
+/** Show touch controls based on actual canvas input; device capability alone does not mean the player is using touch. */
 export function installAdaptiveTouchControls(canvas: HTMLElement, vm: KeyStrokeTarget): () => void {
   let cleanupTouch: (() => void) | undefined;
   const hide = () => {
@@ -21,7 +20,7 @@ export function installAdaptiveTouchControls(canvas: HTMLElement, vm: KeyStrokeT
     else if (event.pointerType === 'mouse') hide();
   };
   const onPointerMove = (event: PointerEvent) => {
-    // 零位移的重新命中事件不代表鼠标操作，避免布局变化时收起刚出现的按键。
+    // Zero-movement re-hit events are not mouse activity; avoid hiding newly shown keys after layout changes.
     if (event.pointerType === 'mouse' && (event.movementX || event.movementY)) hide();
   };
   canvas.addEventListener('pointerdown', onPointerDown);
@@ -71,14 +70,14 @@ export function installTouchControls(vm: KeyStrokeTarget): () => void {
     try {
       localStorage.setItem(STORAGE_KEY, collapsed ? '1' : '');
     } catch {
-      // 隐私模式等场景 localStorage 不可用；折叠状态只影响本次会话。
+      // When localStorage is unavailable, as in private mode, collapse state lasts only for this session.
     }
   };
   let initialCollapsed = false;
   try {
     initialCollapsed = localStorage.getItem(STORAGE_KEY) === '1';
   } catch {
-    // 隐私模式等场景 localStorage 不可用；折叠状态只影响本次会话。
+    // When localStorage is unavailable, as in private mode, collapse state lasts only for this session.
   }
   setCollapsed(initialCollapsed);
   if (collapse) {
@@ -95,11 +94,11 @@ export function installTouchControls(vm: KeyStrokeTarget): () => void {
       'pointerdown',
       (event) => {
         event.preventDefault();
-        // 把本指针的后续事件锁定在按键上；pointerup 时浏览器自动释放 capture。
+        // Capture subsequent pointer events on the key; the browser releases capture automatically on pointerup.
         try {
           key.setPointerCapture(event.pointerId);
         } catch {
-          // 指针可能已被浏览器取消；后续 pointercancel 路径会兜底释放。
+          // The browser may already have canceled the pointer; pointercancel provides fallback release.
         }
         held.set(event.pointerId, code);
         syntheticKeyStroke(vm, code, true);
@@ -112,29 +111,29 @@ export function installTouchControls(vm: KeyStrokeTarget): () => void {
     on(key, 'lostpointercapture', release);
   }
 
-  // 防止切后台/失焦后客体按键卡住（镜像 page.ts releaseInput 的语义）。
+  // Prevent stuck guest keys after backgrounding/blur, matching page.ts releaseInput semantics.
   on(window, 'blur', releaseAll);
   on(document, 'visibilitychange', () => {
     if (document.visibilityState === 'hidden') releaseAll();
   });
 
-  // —— 虚拟摇杆：透明悬浮层（独立于按键栏，不占布局、不挤游戏画面）。
-  // 倾斜摇杆 = 按住对应方向键并高频连发 keydown（原版每记 keydown 滚一步，
-  // 高频连发即连续平滑卷动）；不移动光标，绝不触发游戏的框选/拖拽判定。
+  // Virtual joystick: a transparent floating layer independent of the key toolbar, consuming no layout space or game area.
+  // Tilting holds the corresponding arrow keys and repeats keydown frequently; the original game scrolls one step per keydown,
+  // so repetition produces smooth scrolling without moving the cursor or triggering selection/drag detection.
   const joystick = document.getElementById('vm-touch-joystick') as HTMLButtonElement | null;
   const knob = joystick?.querySelector<HTMLSpanElement>('.joystick-knob');
   if (joystick && knob) {
     joystick.hidden = false;
-    const RADIUS = 34; // 摇杆最大位移（px）
-    const DEAD = 10; // 死区：小于此不触发方向
-    const REPEAT_MS = 50; // 按住方向时的 keydown 连发间隔（20 次/秒）
+    const RADIUS = 34; // Maximum joystick displacement in pixels.
+    const DEAD = 10; // Dead zone: smaller displacement activates no direction.
+    const REPEAT_MS = 50; // keydown repeat interval while holding a direction: 20 times per second.
     let joystickPointer = -1;
     let heldCodes: readonly string[] = [];
     let repeatTimer: number | undefined;
 
     const directionFor = (dx: number, dy: number): readonly string[] => {
       if (Math.hypot(dx, dy) < DEAD) return [];
-      const sector = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)); // 右=0，顺时针每 45° 一扇区
+      const sector = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)); // Right=0; sectors advance clockwise every 45 degrees.
       const sectors: ReadonlyArray<readonly string[]> = [
         ['ArrowRight'],
         ['ArrowRight', 'ArrowDown'],
@@ -181,7 +180,7 @@ export function installTouchControls(vm: KeyStrokeTarget): () => void {
       try {
         joystick.setPointerCapture(event.pointerId);
       } catch {
-        // 指针可能已被浏览器取消；pointercancel 路径会重置。
+        // The browser may already have canceled the pointer; pointercancel resets state.
       }
     });
     const track = (event: PointerEvent) => {
@@ -207,7 +206,7 @@ export function installTouchControls(vm: KeyStrokeTarget): () => void {
     on(joystick, 'pointercancel', release);
     on(joystick, 'lostpointercapture', release);
 
-    // 折叠/切后台时停平移并复位光标，绝不留无手指触发的滚动。
+    // Stop panning and reset the cursor on collapse/backgrounding; never leave scrolling active without a finger.
     on(window, 'blur', resetJoystick);
     on(document, 'visibilitychange', () => {
       if (document.visibilityState === 'hidden') resetJoystick();

@@ -51,55 +51,57 @@ import type { VmPointerState } from './vmShell';
 import type { GameVmCallbacks, VmStatus } from '../app/session/runtimeEvents';
 
 const DEFAULT_GUEST_MEMORY_SIZE = 128 * 1024 * 1024;
-/** 录制期间采样间隔：v86 无逐写钩子，修改次数按采样窗口近似（每窗 +1）。 */
+/** Recording sample interval: v86 has no per-write hook, so modification counts approximate sampling windows, incrementing once per window. */
 const MEM_RECORD_SAMPLE_MS = 500;
-/** 计数地址上限：堆/栈高频改动区域防撑爆计数表，超限只累加已有地址。 */
+/** Tracked-address limit: bound the table for frequently changing heap/stack regions; after the limit, increment only existing entries. */
 const MEM_RECORD_MAX_ADDRESSES = 100_000;
-/** 回传主线程的地址统计条数上限（UI 只显示前 200 条）。 */
+/** Maximum address-statistic entries returned to the main thread; the UI shows only the first 200. */
 const MEM_RECORD_MAX_REPORT = 10_000;
-/** 堆 arena 顶与客体总内存之间留 2MB 余量（与历史上 0x7e00000/128MB 的布局一致）。 */
+/** Leave 2MB between the heap arena end and total guest memory, matching the historical 0x7e00000/128MB layout. */
 const GUEST_MEMORY_MARGIN = 2 * 1024 * 1024;
-// RA2 映像止于 0xb46000；staging 必须覆盖最高映像地址而非只按文件大小估算。
+// The RA2 image ends at 0xb46000; staging must cover the highest image address rather than relying only on file size.
 const STAGING_SIZE = 16 * 1024 * 1024;
 const STUB_BASE = 0x0008_0000;
-// 多线程 import 桩包含寄存器/SEH/TLS 上下文切换；RA2 的 369 个导入已超过
-// 原 64KiB 区间。0x80000..0xc0000 留给静态桩，仍远低于 0x400000 PE 映像。
+// Multithreaded import stubs include register/SEH/TLS context switches; RA2's 369 imports exceed
+// the original 64KiB range. Reserve 0x80000..0xc0000 for static stubs, still far below the PE image at 0x400000.
 const STUB_LIMIT = 0x000c_0000;
-/** 连续处理少量 hypercall 后让一次宿主宏任务运行，保证输入/网络事件不会被微任务链饿死。 */
+/** After a small run of hypercalls, yield to a host macrotask so microtask chains cannot starve input/network events. */
 const HYPERCALLS_PER_HOST_YIELD = 128;
-/** 按调用数让出不等于按时间让出：复杂客体帧会把 128 次拉长到几十毫秒。 */
+/** Yielding by call count is not yielding by time: complex guest frames can stretch 128 calls into tens of milliseconds. */
 const HOST_SLICE_MS = 4;
 
-/** Win32 音频输出加宿主的主音量、全停与销毁能力。 */
+/** Win32 audio output plus host master-volume, stop-all, and destruction capabilities. */
 export interface VmAudioSink extends Win32AudioSink {
   setMasterVolume(linear: number): void;
   stopAll(): void;
   destroy(): Promise<void>;
 }
 
-/** 平台差异收敛点：主线程与 worker 各自的宿主设施从这里注入，VmCore 不含任何 DOM/window 引用。 */
+/** Platform injection boundary: supply main-thread or Worker host facilities here; VmCore contains no DOM/window references. */
 export interface VmCorePlatform {
-  /** 游戏资源策略在组装层注入；核心不按扩展名、游戏名称或 URL 猜测。 */
+  /** Inject game-resource policies at composition time; the core does not infer policies from extensions, game names, or URLs. */
   resourcePolicy: ResourcePolicy<GameSource>;
   startupPage?: string;
-  /** 固件 boot.bin 的字节获取（主线程与 worker 的 fetch 语义一致）。 */
+  /** Fetch boot.bin firmware bytes with matching main-thread and Worker semantics. */
   fetchBytes(url: string): Promise<Uint8Array>;
-  /** 帧发射时机：主线程 rAF 合并、worker 直接发射（postMessage 天然异步）。 */
+  /** Frame emission scheduling: coalesce with rAF on the main thread; emit directly in Workers since postMessage is asynchronous. */
   scheduleFrame(emit: () => void): void;
-  /** Worker mailbox 满时延后取快照；默认 false 保持主线程的呈现边界语义。 */
+  /** Defer snapshots when the Worker mailbox is full; default false preserves main-thread presentation-boundary semantics. */
   deferFrameSnapshot?: boolean;
   packedRgb565Frames?: boolean;
   takeFrameBuffer?: (size: number) => ArrayBuffer;
   audio: VmAudioSink;
-  /** 客体内高速 _lread 桩开关（?fast-files=0 退回逐次 hypercall 慢路径）。 */
+  /** Fast guest _lread stubs; ?fast-files=0 restores the per-call hypercall slow path. */
   fastFileRead: boolean;
-  /** 宿主注入 emulator 构造与调度；shim 始终由外层组装。 */
+  /** The host injects emulator construction and scheduling; the outer layer always assembles the shim. */
   createEmulator?: (options: ConstructorParameters<typeof V86>[0]) => V86;
   createShim: (emulator: V86, options: ConstructorParameters<typeof Win32ShimBase>[1]) => Win32ShimBase;
 }
 
-/** 平台无关的 VM 驱动：v86 + PE 装载 + Win32 shim + hypercall 轮询 + 帧转发。
- *  主线程模式（Win32GameVm）与 worker 模式（vmWorker.ts）共用此核心。 */
+/**
+ * Platform-independent VM driver: v86, PE loading, Win32 shim, hypercall polling, and frame forwarding.
+ * Shared by main-thread Win32GameVm and Worker vmWorker.ts.
+ */
 export class VmCore {
   private readonly rangePrefetch = new RangePrefetch();
   private emulator: V86 | null = null;
@@ -122,15 +124,15 @@ export class VmCore {
   private memRecordSamples = 0;
   private memRecordTruncated = false;
   private memRecordTimer: ReturnType<typeof globalThis.setInterval> | null = null;
-  /** MessageChannel 是无最小延迟的宿主任务边界；没有它时才退回 setTimeout(0)。 */
+  /** MessageChannel provides a host task boundary without a minimum delay; use setTimeout(0) only when unavailable. */
   private readonly hostYieldChannel: MessageChannel | null =
     typeof globalThis.MessageChannel === 'function' ? new globalThis.MessageChannel() : null;
   private hostYieldPending = false;
   private nextHostYieldAt = performance.now() + HOST_SLICE_MS;
-  // v86 正在 WASM I/O 回调栈上时不能重入 read_memory，放到紧随当前 CPU slice 的微任务。
-  // v86 的 serial 回调不能直接重入 read_memory，正常路径放到微任务；但不能让
-  // serial → microtask → serial 无限链独占 worker，否则鼠标、WebSocket、stop 等
-  // 外部消息会一直排在后面，表现为人物卡住不动。
+  // Do not reenter read_memory while v86 is on the WASM I/O callback stack; defer to a microtask immediately after the current CPU slice.
+  // v86 serial callbacks cannot directly reenter read_memory, so normally defer to a microtask; however,
+  // an endless serial -> microtask -> serial chain must not monopolize the Worker and indefinitely queue mouse, WebSocket, stop,
+  // and other external messages, which would make units appear frozen.
   private readonly hypercallListener = () => {
     if (this.calls > 0 && (this.calls % HYPERCALLS_PER_HOST_YIELD === 0 || performance.now() >= this.nextHostYieldAt)) {
       this.yieldToHost();
@@ -153,7 +155,7 @@ export class VmCore {
     this.hostYieldChannel?.port1.start();
   }
 
-  /** 替换文件层 provider（worker 挂载附加地图时）；其余 source 字段不变。 */
+  /** Replace the file provider when a Worker mounts add-on maps; preserve other source fields. */
   setFileProvider(files: GameFileProvider): void {
     this.missingStaticGuestFiles.clear();
     this.source = { ...this.source, files };
@@ -216,7 +218,7 @@ export class VmCore {
         memory_size: guestMemoryBytes,
         bios: { buffer: exactBuffer(bios) },
         autostart: false,
-        // UART IRQ 握手会在 host 释放前挂起客体；JIT 已通过长时战场调用压测。
+        // The UART IRQ handshake suspends the guest until the host releases it; JIT has passed prolonged battlefield-call stress tests.
         disable_jit: false,
         disable_keyboard: true,
         disable_mouse: true,
@@ -226,7 +228,7 @@ export class VmCore {
       await onceReady(emulator);
       emulator.add_listener('serial0-output-byte', this.hypercallListener);
 
-      // 只写实际用到的两段，不把整个 64MB 空镜像复制进 WASM。
+      // Write only the two used regions instead of copying an entire empty 64MB image into WASM.
       emulator.write_memory(staging.subarray(HYPERCALL_STACK, stubNext), HYPERCALL_STACK);
       emulator.write_memory(staging.subarray(image.imageBase, image.imageBase + image.sizeOfImage), image.imageBase);
       game.runtimeHooks?.prepareImage?.(emulator);
@@ -254,7 +256,7 @@ export class VmCore {
         heapBase: game.heapBase ?? game.stackTop,
         importArgBytes: game.argBytes,
         dynamicImportStub: importStub,
-        // 显式镜像区按配置边界取值；未配置时按客体内存的一半兜底。
+        // Use configured bounds for an explicit image region; otherwise fall back to half the guest memory.
         fastFileMirrorLimit:
           game.fastFileMirrorBase !== undefined && game.fastFileMirrorTop !== undefined
             ? Math.max(0, Math.min(game.fastFileMirrorTop, guestMemoryBytes) - game.fastFileMirrorBase)
@@ -262,8 +264,8 @@ export class VmCore {
               ? Math.floor(game.guestMemoryBytes / 2)
               : undefined,
         fastFileMirrorBase: game.fastFileMirrorBase,
-        // 配置来自游戏 profile，但绝不能越过本次实际创建的 v86 RAM；
-        // 否则大 MIX 镜像会在 write_memory 中触发 WASM unreachable。
+        // Configuration comes from the game profile but must never exceed this v86 instance's actual RAM;
+        // otherwise large MIX mirrors trigger WASM unreachable in write_memory.
         fastFileMirrorTop:
           game.fastFileMirrorTop === undefined ? undefined : Math.min(game.fastFileMirrorTop, guestMemoryBytes),
         fastFileMirrorFiles: game.fastFileMirrorFiles,
@@ -280,7 +282,7 @@ export class VmCore {
         files: preloadedFiles,
         audio: this.platform.audio,
         moduleName: game.executable,
-        // Worker 与主线程回退共用这里；只开放原版战役速度控制，不修改速度/时钟。
+        // Shared by Workers and main-thread fallback; expose only the original campaign speed control without changing speed or the clock.
         commandLineArguments: game.commandLineArguments,
         onFileWrite: (path, bytes) => this.queueFileWrite(path, bytes),
         driveTypes: game.driveTypes,
@@ -298,7 +300,7 @@ export class VmCore {
       this.shim.setGameClockRate(this.gameClockRate);
       this.status('ready', `游戏内存已就绪：${game.title}，目录：${gameFiles.label}`);
 
-      // 端口事件是主通道；50ms 轮询只用于 CPU 异常和极端情况下的兜底。
+      // Port events are primary; 50ms polling is only a fallback for CPU exceptions and exceptional conditions.
       this.pollTimer = globalThis.setInterval(() => void this.poll(), 50);
       await emulator.run();
       this.status('running', `${game.executable} 正在 v86 中执行（入口 0x${image.entry.toString(16)}）`);
@@ -337,12 +339,12 @@ export class VmCore {
     return this.gameClockRate;
   }
 
-  /** 主音量：所有客体音频汇合后的线性增益 0..1。 */
+  /** Master volume: linear gain 0..1 after combining all guest audio. */
   setMasterVolume(linear: number): void {
     this.platform.audio.setMasterVolume(linear);
   }
 
-  /** 与游戏无关的 shim 最终指针状态，用于验证 Worker 侧实际钳制边界。 */
+  /** Game-independent final shim pointer state, used to verify actual clamping bounds in the Worker. */
   getPointerState(): VmPointerState | null {
     return this.shim?.inspectPointerState() ?? null;
   }
@@ -351,7 +353,7 @@ export class VmCore {
     const emulator = this.emulator;
     const create = this.source.game.runtimeHooks?.createFrameReader;
     if (!emulator || !this.image || !create || this.currentPhase === 'loading') return null;
-    // 首次显式采样才校验 EXE，不为普通运行增加逐帧 Hook 或定时器。
+    // Verify the EXE only on the first explicit sample; do not add per-frame hooks or timers to normal runs.
     this.frameReader ??= import('../utils/sha256').then(async ({ sha256Hex }) => {
       const hash = await sha256Hex(this.source.executableBytes);
       return this.emulator === emulator ? create(emulator, hash) : null;
@@ -370,23 +372,23 @@ export class VmCore {
     );
   }
 
-  /** 写入当前游戏显式提供的速度状态；未提供时返回 null。 */
+  /** Write the speed state explicitly supplied by the current game; return null if unavailable. */
   setGameSpeedFlag(value: number): number | null {
     const hooks = this.source.game.runtimeHooks;
     if (!this.emulator || !hooks?.writeGameSpeedFlag) return null;
     return hooks.writeGameSpeedFlag(this.emulator, value);
   }
 
-  /** 内存改动录制：快照当前客体 RAM 为基线，并启动周期性采样计数。 */
+  /** Memory-change recording: snapshot current guest RAM as the baseline and start periodic sampling counts. */
   startMemRecord(): boolean {
     if (!this.emulator) return false;
-    // 重复开始 = 重新录制：先停掉旧采样器。
+    // Starting again restarts recording: stop the old sampler first.
     if (this.memRecordTimer !== null) {
       globalThis.clearInterval(this.memRecordTimer);
       this.memRecordTimer = null;
     }
-    // read_memory 返回客体内存的视图而非拷贝：快照必须立即复制，
-    // 否则视图内容随游戏运行同步变化，结束时 diff 恒为空。
+    // read_memory returns a view of guest memory, not a copy; copy the baseline immediately,
+    // or it will change with the running game and the final diff will always be empty.
     const snapshot = this.emulator.read_memory(0, this.guestMemoryBytes).slice();
     this.memRecordBase = snapshot;
     this.memRecordPrev = snapshot;
@@ -397,7 +399,7 @@ export class VmCore {
     return true;
   }
 
-  /** 结束录制：最后一次采样 + 与起始基线 diff，释放全部录制状态；未在录制中返回 null。 */
+  /** Finish recording with a final sample and baseline diff, then release all recording state; return null if not recording. */
   stopMemRecord(): GuestMemRecordResult | null {
     if (!this.emulator || !this.memRecordBase || !this.memRecordPrev) return null;
     if (this.memRecordTimer !== null) {
@@ -425,7 +427,7 @@ export class VmCore {
     return result;
   }
 
-  /** 周期性采样：与前一次快照 diff，被改动字的计数 +1（v86 无逐写钩子，次数按采样近似）。 */
+  /** Periodic sampling: diff against the previous snapshot and increment changed-word counts once; counts are approximate because v86 has no per-write hook. */
   private sampleMemRecord(): void {
     if (!this.emulator || !this.memRecordPrev) return;
     this.sampleMemRecordAgainst(this.emulator.read_memory(0, this.guestMemoryBytes).slice());
@@ -440,7 +442,7 @@ export class VmCore {
     this.memRecordPrev = current;
   }
 
-  /** 卸载路径无法 await 时的尽力提交：pagehide 与 worker flush 消息共用。 */
+  /** Best-effort flush when unload cannot await; shared by pagehide and Worker flush messages. */
   async flushFiles(): Promise<void> {
     await Promise.allSettled([...this.pendingFileWrites]);
     const writeError = this.pendingFileWriteError;
@@ -540,8 +542,8 @@ export class VmCore {
       );
       return;
     }
-    // 固件停机标记：PE 入口直接返回（未走 ExitProcess 的退出路径）时按退出处理，
-    // 否则页面会毫无反应地停在 FPS 0。
+    // Firmware halt marker: treat a direct return from the PE entry point as game exit, even without ExitProcess,
+    // rather than leaving the page unresponsive at FPS 0.
     if (this.readU32(HYPERCALL_HALTED) === 1) {
       this.clearPoll();
       if (this.emulator.is_running()) await this.emulator.stop();
@@ -566,7 +568,7 @@ export class VmCore {
       if (this.recentCalls.length > 16) this.recentCalls.shift();
       this.callbacks.onCall?.(call, this.calls);
 
-      // Win32 API 是同步的；host 可以在 hypercall 桩等待时完成浏览器的异步 fetch。
+      // Win32 APIs are synchronous; the host can complete asynchronous browser fetches while the hypercall stub waits.
       if (imported.key === 'KERNEL32.DLL!FindFirstFileA' && call.args[0] && call.args[1]) {
         const pattern = this.readCString(call.args[0]);
         this.shim.setFileSearchResults(pattern, await readGuestFileSearch(this.source.files, pattern));
@@ -582,8 +584,8 @@ export class VmCore {
         if (sync) await sync;
       }
 
-      // MOVIES*.MIX 只常驻索引前缀。原版 seek 到其中某段 BIK 后，在同步
-      // ReadFile 边界按 2MiB 页补取真实字节；不下载/复制整个 300+MiB 影片包。
+      // Keep only MOVIES*.MIX index prefixes resident. When the original game seeks to a BIK segment,
+      // fetch actual bytes in 2MiB pages at the synchronous ReadFile boundary instead of downloading/copying the whole 300+MiB movie package.
       if (
         (imported.key === 'KERNEL32.DLL!ReadFile' || imported.key === 'KERNEL32.DLL!_lread') &&
         call.args[0] &&
@@ -626,7 +628,7 @@ export class VmCore {
         threadDelay = completion.delayMs;
       }
 
-      // 先写返回寄存器，最后清 request；清零就是客体继续执行的 release 信号。
+      // Write return registers first, then clear request; zeroing it is the release signal for guest execution.
       this.writeU32(HYPERCALL_EAX, result.eax);
       this.writeU32(HYPERCALL_EDX, result.edx ?? 0);
       this.writeU32(HYPERCALL_REQUEST, 0);
@@ -688,14 +690,15 @@ export class VmCore {
     );
   }
 
-  /** 本会话确认不存在的静态资源；避免 RA2 对 MIX 内文件的数千次松散文件探测
-   * 每次都跨 File System Access/HTTP provider。写入同名文件时会立即失效。 */
+  /**
+   * Static resources confirmed absent in this session; avoid crossing File System Access/HTTP providers for thousands of RA2 loose-file probes of MIX entries. Writing a same-named file invalidates the cache immediately.
+   */
   private readonly missingStaticGuestFiles = new Set<string>();
 
-  /** 客体打开文件前，把 provider 的当前内容同步进 Win32 文件层。
-   *  每次打开都重读：真实 Win9x 上磁盘文件被外部替换（例如在 Windows 端玩了同一
-   *  份存档）后，下一次打开必然读到新内容。之前按「打开过就不再读」缓存，
-   *  页面会话内换入的 Windows 存档永远读不到旧快照之外的内容——读档状态错乱。 */
+  /**
+   * Synchronize current provider content into the Win32 file layer before the guest opens a file.
+   * Reread on every open: real Win9x sees externally replaced disk content on the next open, such as a save modified in Windows. The old read-once cache kept returning stale snapshots for Windows saves replaced within a page session, corrupting loaded state.
+   */
   private syncGuestFile(pathPtr: number): Promise<void> | null {
     const guestPath = this.readCString(pathPtr);
     const normalized = normalizeGuestPath(guestPath);
@@ -703,8 +706,8 @@ export class VmCore {
     const sessionStatic = this.platform.resourcePolicy.isSessionStatic(normalized);
     if (sessionStatic && (this.missingStaticGuestFiles.has(normalized) || this.shim!.hasMountedFile(normalized)))
       return null;
-    // discover 阶段已经取得 HTTP 游戏目录清单；若清单和 IndexedDB 索引都
-    // 确认不存在，同步结束本次 loose-name 探测，不为每个 MIX 内素材 await。
+    // Discovery already obtained the HTTP game directory listing; if both that listing and the IndexedDB index
+    // confirm absence, finish this loose-name probe synchronously rather than awaiting every MIX resource.
     if (sessionStatic && this.source.files.hasKnownFile?.(guestPath) === false) {
       this.missingStaticGuestFiles.add(normalized);
       return null;
@@ -720,9 +723,9 @@ export class VmCore {
       }
       const sparse = sparsePrefix ? await provider.readPrefix?.(guestPath, sparsePrefix) : null;
       const bytes = sparse?.bytes ?? (await provider.read(guestPath));
-      // 静态资源不存在也缓存；RA2 会先把 MIX 内每个素材名当松散文件探测。
+      // Cache missing static resources too; RA2 first probes every MIX entry as a loose file.
       if (!bytes) {
-        // 热挂载可能发生在异步读取期间，旧 provider 的 miss 不能重新污染新缓存。
+        // Hot mounting may occur during an async read; a miss from the old provider must not contaminate the new cache.
         if (sessionStatic && provider === this.source.files) this.missingStaticGuestFiles.add(normalized);
         return;
       }

@@ -13,7 +13,7 @@ export interface CheatGuide {
 export type CheatGuideGameId = SupportedGameId;
 export const CHEAT_GUIDES: Partial<Record<SupportedGameId, CheatGuide>> = {};
 
-/** RA2/YR 尚未登记经过验证的作弊指南。 */
+/** No verified cheat guides are registered for RA2/YR yet. */
 export function activeCheatGameForPhase(_game: SupportedGameId | null, _phase: VmPhase): CheatGuideGameId | null {
   return null;
 }

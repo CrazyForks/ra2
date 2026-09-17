@@ -6,13 +6,11 @@ const SITE = 0x0051_3762;
 const SIGNATURE = [
   0xbd, 0x12, 0, 0, 0, 0xeb, 0x0d, 0x33, 0xc9, 0x83, 0xf8, 0x04, 0x0f, 0x94, 0xc1, 0x83, 0xc1, 0x10, 0x8b, 0xe9,
 ];
-/** 原生状态保存在 EBP：`mov ebp, 18` 后由 `mov ebp, eax` 收尾。 */
+/** Native state is held in EBP: mov ebp, 18 is followed by the final mov ebp, eax. */
 const MOV_OPERAND = 0x2d;
 
 /**
- * 原版 1.006：Main_Game 首次菜单状态默认 EBP=18；SinglePlayer 的遭遇战
- * 按钮在 0x513363 返回 11，分发表 0x5146F4 将其送到 0x513D93。
- * 只替换初始状态选择，保留设置页的原生初始化、消息泵及返回路径。
+ * Original 1.006: Main_Game's initial menu state defaults to EBP=18. The SinglePlayer skirmish button returns 11 at 0x513363; dispatch table 0x5146F4 routes it to 0x513D93. Replace only initial state selection, preserving native setup initialization, message pumping, and return paths.
  */
 export function installRa2SkirmishStartup(
   memory: GuestMemory,
@@ -29,8 +27,9 @@ export function installRa2SkirmishStartup(
   });
 }
 
-/** 原生主菜单 LAN 按钮返回状态 3；先由原版设置会话与网络协议，再进入 Lobby。
- * 不能直接选状态 16，否则会跳过 Session=3 及协议初始化。 */
+/**
+ * The native main-menu LAN button returns state 3; let the original code set the session and network protocol before entering Lobby. Never select state 16 directly, which skips Session=3 and protocol initialization.
+ */
 export function installRa2LanStartup(memory: GuestMemory, reserve: (size: number) => number, hash: string): number {
   return installStartupTrampoline(memory, reserve, hash, {
     label: 'RA2 LAN 直达',

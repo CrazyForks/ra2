@@ -1,4 +1,4 @@
-/* 使用项目临时背景，独立铺在舞台上；保持背景比例，宽高比不同时留底色。 */
+/* Place the temporary project background independently on the stage; preserve its aspect ratio and leave the base color visible when ratios differ. */
 .game-home #stage {
   background:
     linear-gradient(#0003, #0003),
@@ -11,7 +11,7 @@
 .game-home #vm-controls {
   display: none;
 }
-/* 内容只占原图内屏区域，独立滚动，不覆盖顶部徽标和四周金属框。 */
+/* Keep content within the image's inner screen, scrolling independently without covering the top logo or surrounding metal frame. */
 .game-home #ui {
   inset: auto;
   top: 52%;
@@ -192,7 +192,7 @@
   border-color: #ff9090;
 }
 
-/* 与游戏对话框共用红色斜面按钮、灰色面板和黄字，不使用网页表单的米金配色。 */
+/* Share the game dialogs' beveled red buttons, gray panels, and yellow text instead of the web form's beige-gold palette. */
 .game-home #ui > .game-source-picker {
   background: #262626;
   border: 2px outset #aaa;
@@ -265,8 +265,10 @@
   gap: 8px;
 }
 .game-source-picker .detected-games .game-icon {
+  display: block;
   width: 32px;
   height: 32px;
+  object-fit: contain;
 }
 .game-source-picker .development-sources {
   margin-top: 18px;
@@ -277,7 +279,7 @@
   width: 100%;
 }
 
-/* 窄屏不把表单塞进缩小的内屏：完整背景放在顶部，表单在其下方随页面滚动。 */
+/* On narrow screens, place the full background above the scrolling form instead of squeezing the form into a shrunken inner screen. */
 @media (max-width: 560px) {
   .game-home #stage {
     background: #121315;

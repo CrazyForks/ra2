@@ -160,7 +160,7 @@ describe('RA2 Winsock dispatch', () => {
     expect(readU32(memory, protocolBuffer + 0x10)).toBe(2);
     expect(readAsciiZ(memory, readU32(memory, protocolBuffer + 0x1c))).toBe('UDP');
     expect(readU32(memory, protocolBuffer + 32 + 0x14)).toBe(6);
-    // 第三项是 IPX（协议号 1000、AF_IPX、数据报）：局域网的实际线协议。
+    // The third entry is IPX (protocol 1000, AF_IPX, datagram), the actual LAN wire protocol.
     expect(readU32(memory, protocolBuffer + 64 + 0x14)).toBe(1000);
     expect(readU32(memory, protocolBuffer + 64 + 0x04)).toBe(6);
     expect(readU32(memory, protocolBuffer + 64 + 0x10)).toBe(2);
@@ -254,7 +254,7 @@ describe('RA2 Winsock dispatch', () => {
     const shim = startupShim(memory, fixture.factory);
     const AF_IPX = 6;
     const NSPROTO_IPX = 1000;
-    const selfNode = [0x0a, 0xf7, 0x01, 0x01, 0x0a, 0xf7]; // 10.247.1.1 的重复前缀布局
+    const selfNode = [0x0a, 0xf7, 0x01, 0x01, 0x0a, 0xf7]; // Repeated-prefix layout for 10.247.1.1
     const writeSockaddrIpx = (ptr: number, node: number[], socketNum: number) => {
       memory.write_memory([AF_IPX, 0], ptr);
       memory.write_memory(new Uint8Array(4), ptr + 2); // netnum = 0
@@ -262,7 +262,7 @@ describe('RA2 Winsock dispatch', () => {
       memory.write_memory([(socketNum >>> 8) & 0xff, socketNum & 0xff], ptr + 12);
     };
 
-    // 协议/类型校验：IPX 只接受数据报 + NSPROTO_IPX。
+    // Protocol/type validation: IPX accepts only datagrams with NSPROTO_IPX.
     expect(callShim(shim, 'WSOCK32.DLL!ord23', [AF_IPX, 1, NSPROTO_IPX]).eax).toBe(SOCKET_ERROR);
     expect(callShim(shim, 'WSOCK32.DLL!ord111').eax).toBe(10044);
     expect(callShim(shim, 'WSOCK32.DLL!ord23', [AF_IPX, SOCK_DGRAM, 999]).eax).toBe(SOCKET_ERROR);
@@ -270,7 +270,7 @@ describe('RA2 Winsock dispatch', () => {
     const socket = callShim(shim, 'WSOCK32.DLL!ord23', [AF_IPX, SOCK_DGRAM, NSPROTO_IPX]).eax >>> 0;
     expect(socket).not.toBe(SOCKET_ERROR);
 
-    // bind sockaddr_ipx（socket 号 5000）；重复绑定同号冲突。
+    // Bind sockaddr_ipx (socket 5000); binding the same socket number again conflicts.
     const address = 0x3000;
     writeSockaddrIpx(address, selfNode, 5000);
     expect(callShim(shim, 'WSOCK32.DLL!ord2', [socket, address, 14]).eax).toBe(0);
@@ -280,7 +280,7 @@ describe('RA2 Winsock dispatch', () => {
     expect(callShim(shim, 'WSOCK32.DLL!ord111').eax).toBe(10048);
     expect(callShim(shim, 'WSOCK32.DLL!ord3', [other]).eax).toBe(0);
 
-    // getsockopt：IPX_MAX_ADAPTER_NUM 与 IPX_ADDRESS（netnum@0、nodenum@8、socket@14）。
+    // getsockopt: IPX_MAX_ADAPTER_NUM and IPX_ADDRESS (netnum@0, nodenum@8, socket@14).
     const option = 0x3600;
     const optionLength = 0x3400;
     writeU32(memory, optionLength, 4);
@@ -288,15 +288,15 @@ describe('RA2 Winsock dispatch', () => {
     expect(readU32(memory, option)).toBe(1);
     writeU32(memory, optionLength, 24);
     expect(callShim(shim, 'WSOCK32.DLL!ord7', [socket, NSPROTO_IPX, 0x4007, option, optionLength]).eax).toBe(0);
-    expect(readU32(memory, option)).toBe(0); // netnum = 本地网段
+    expect(readU32(memory, option)).toBe(0); // netnum = local network segment
     expect([...memory.read_memory(option + 8, 6)]).toEqual(selfNode);
-    expect(readU16(memory, option + 14)).toBe(0x8813); // 5000 的网络序字节
+    expect(readU16(memory, option + 14)).toBe(0x8813); // Network-order bytes for 5000
     expect(readU32(memory, optionLength)).toBe(16);
-    // IPX 头部选项（IPX_PTYPE 等）登记即成功。
+    // Registering IPX header options (IPX_PTYPE, etc.) succeeds.
     writeU32(memory, option, 4);
     expect(callShim(shim, 'WSOCK32.DLL!ord21', [socket, NSPROTO_IPX, 0x4000, option, 4]).eax).toBe(0);
 
-    // 广播需要 SO_BROADCAST；授权后扇出到子网定向广播并回本机。
+    // Broadcast requires SO_BROADCAST; once enabled, fan out to the subnet-directed broadcast and loop back locally.
     const payload = 0x3100;
     memory.write_memory([0xde, 0xad, 0xbe, 0xef], payload);
     writeSockaddrIpx(address, [0xff, 0xff, 0xff, 0xff, 0xff, 0xff], 5000);
@@ -307,7 +307,7 @@ describe('RA2 Winsock dispatch', () => {
     expect(callShim(shim, 'WSOCK32.DLL!ord20', [socket, payload, 4, 0, address, 14]).eax).toBe(4);
     expect(fixture.sent.at(-1)).toMatchObject({ destAddr: 0x0af7_ffff, destPort: 5000, srcPort: 5000 });
 
-    // 回本机的广播可直接 recvfrom，来源地址是 sockaddr_ipx 布局。
+    // Looped-back broadcasts can be read directly with recvfrom; the source uses sockaddr_ipx layout.
     const receive = 0x3200;
     const from = 0x3300;
     expect(callShim(shim, 'WSOCK32.DLL!ord17', [socket, receive, 4, 0, from, optionLength]).eax).toBe(4);
@@ -317,7 +317,7 @@ describe('RA2 Winsock dispatch', () => {
     expect(readU16(memory, from + 12)).toBe(0x8813);
     expect(readU32(memory, optionLength)).toBe(14);
 
-    // 单播按 nodenum 前 4 字节解码虚拟地址，不经回本机路径。
+    // Unicast decodes the virtual address from nodenum's first four bytes and bypasses local loopback.
     const peerNode = [0x0a, 0xf7, 0x02, 0x02, 0x0a, 0xf7];
     writeSockaddrIpx(address, peerNode, 5000);
     expect(callShim(shim, 'WSOCK32.DLL!ord20', [socket, payload, 4, 0, address, 14]).eax).toBe(4);

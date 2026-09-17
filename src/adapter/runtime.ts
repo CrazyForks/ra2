@@ -46,13 +46,13 @@ export async function resolveRa2NetworkConfig(source: GameSource): Promise<Ra2Ne
   if (!['ra2', 'yr'].includes(source.game.id) || typeof window === 'undefined') return undefined;
   const query = new URLSearchParams(window.location.search);
   if (query.get('network') === '0' || !(query.get('network') === '1' || query.has('relay'))) return undefined;
-  // 房间只来自 URL 路径，避免页面配置与服务端实际房间分歧。
+  // Derive the room only from the URL path to keep page configuration aligned with the server's actual room.
   const relayUrl = parseRa2RelayUrl(query.get('relay'));
   const room = relayUrl ? relayRoomFromPath(new URL(relayAddressCandidates(relayUrl)[0]!).pathname) : 'ra2';
   return { room, exeHash: await hashRa2Executable(source.executableBytes), ...(relayUrl ? { relayUrl } : {}) };
 }
 
-/** 只识别会话来源，不枚举/压平资源字节；端口服务始终保留整个覆盖链。 */
+/** Identify session sources without enumerating/flattening resource bytes; the port service always preserves the full overlay chain. */
 function sessionFilesOf(provider: GameFileProvider): SessionGameFileProvider | null {
   let current: GameFileProvider = provider;
   while (current instanceof ScopedGameFileProvider || current instanceof OverlayGameFileProvider) {
@@ -62,8 +62,9 @@ function sessionFilesOf(provider: GameFileProvider): SessionGameFileProvider | n
   return current;
 }
 
-/** 逐文件复制出独立缓冲并登记 transfer：会话包文件通常是大解码缓冲的切片视图，
- *  直接 transfer 会带走整个底层缓冲，必须先复制成精确大小的独立缓冲。 */
+/**
+ * Copy each file into an independent buffer and register it for transfer. Session-package files usually view slices of a large decode buffer; direct transfer would detach the entire backing buffer, so copy to an exactly sized buffer first.
+ */
 function collectTransferEntries(files: ReadonlyMap<string, Uint8Array>, transfer: Transferable[]): GameFileEntry[] {
   return [...files].map(([path, bytes]) => {
     const copy = new Uint8Array(bytes.byteLength);
@@ -73,19 +74,19 @@ function collectTransferEntries(files: ReadonlyMap<string, Uint8Array>, transfer
   });
 }
 
-/** Worker 探测失败才回退主线程；探测在 VM 初始化前完成，不产生双 V86 实例。 */
+/** Fall back to the main thread only if Worker probing fails; probe before VM initialization to avoid creating two V86 instances. */
 export async function createVmShell(
   callbacks: GameVmCallbacks,
   source: GameSource,
   options: WorkerVmClientOptions = {},
 ): Promise<VmShell> {
-  // 必须显式携带到 Worker：仅在页面包一层 overlay，HTTP 后端会丢失它。
+  // Carry this explicitly into the Worker; an overlay added only on the page would be lost by the HTTP backend.
   const additionalFiles = source.additionalFiles;
   const mainThreadSource = additionalFiles ? mountCustomMapFiles(source, additionalFiles) : source;
   const ra2Network = await resolveRa2NetworkConfig(source);
-  // 在创建时只生成一次，Worker 初始化失败回退时也沿用同名；未来登录身份从选项传入。
+  // Generate the name once at creation and reuse it on Worker-init fallback; future authenticated identities come from options.
   const playerName = validateMultiplayerName(options.playerName ?? randomMultiplayerName());
-  // ?vm-worker=0 强制主线程模式：回退路径手测/对比基线用。
+  // ?vm-worker=0 forces main-thread mode for manual fallback checks and baseline comparisons.
   if (
     typeof Worker === 'undefined' ||
     (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('vm-worker') === '0')
@@ -105,15 +106,15 @@ export async function createVmShell(
   let closeFilePort: (() => void) | undefined;
   let provider: VmInitConfig['provider'];
   if (sessionFilesOf(source.files)) {
-    // 首次导入和缓存恢复统一按需读取，既不丢未解压文件，也不在 init 复制整包。
-    // 服务整个已选 source（含作用域及覆盖层），Worker 因而使用游戏根相对路径。
+    // Both first imports and restored caches use on-demand reads, preserving unextracted files without copying the entire package at init.
+    // Serve the entire selected source, including scopes and overlays, so the Worker uses game-root-relative paths.
     const names = (await source.files.list('')) ?? [];
     const channel = new MessageChannel();
     closeFilePort = serveFileProvider(source.files, channel.port1);
     provider = { kind: 'port', port: channel.port2, names, label: source.files.label };
     transfer.push(channel.port2);
   } else if (handle) {
-    // 目录后端：叠加层按最内层→最外层压平（后层覆盖前层，与 Overlay 链一致）。
+    // Directory backend: flatten overlays from innermost to outermost; later layers override earlier ones, matching the Overlay chain.
     const layers = collectDirectoryOverlays(source.files) ?? [];
     const flattened = new Map<string, Uint8Array>();
     for (const layer of layers) for (const [path, bytes] of layer) flattened.set(path, bytes);
@@ -121,13 +122,13 @@ export async function createVmShell(
       ? { kind: 'directory', handle, overlays: collectTransferEntries(flattened, transfer) }
       : { kind: 'directory', handle };
   } else {
-    // 非会话、非授权目录来源维持开发 HTTP 后端。
+    // Sources that are neither session-backed nor authorized directories retain the development HTTP backend.
     provider = { kind: 'http' };
   }
   const config: VmInitConfig = {
     provider,
-    // 页面 manifest 闸门已选择/校验 EXE。所有后端都带同一份启动字节，避免
-    // HTTP 丢 overlay、目录 parent-first 或重新发现时选回旧版；不改磁盘文件。
+    // The page manifest gate has selected and verified the EXE. Every backend carries the same startup bytes to prevent
+    // HTTP overlay loss, parent-first directory lookup, or rediscovery from selecting an old version; disk files stay unchanged.
     selectedExecutable: collectTransferEntries(
       new Map([
         [
@@ -196,7 +197,7 @@ export async function createVmShell(
   }
 }
 
-/** 主线程模式：v86 + shim 直接在页面线程运行。 */
+/** Main-thread mode: run v86 and the shim directly on the page thread. */
 export class Win32GameVm implements VmShell {
   private readonly audio = new WebAudioPcmSink({
     onError: (error) => console.warn('[VM audio]', error),
@@ -218,7 +219,7 @@ export class Win32GameVm implements VmShell {
       },
       packedRgb565Frames: true,
       audio: this.audio,
-      // 客体内高速 _lread 桩默认启用：?fast-files=0 可退回可观测的慢路径。
+      // Enable fast guest _lread stubs by default; ?fast-files=0 restores the observable slow path.
       fastFileRead:
         typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('fast-files') !== '0',
     };
@@ -226,7 +227,7 @@ export class Win32GameVm implements VmShell {
   }
 
   async start(): Promise<void> {
-    // 音频上下文必须由用户手势解锁；卸载路径无法 await，pagehide 尽力 flush 存档写入。
+    // A user gesture must unlock the audio context; unload cannot await, so pagehide makes a best-effort save flush.
     this.removeAudioUnlock = this.audio.installUserGestureUnlock(document);
     const flushOnPagehide = () => {
       void this.core.flushFiles();
@@ -275,7 +276,7 @@ export class Win32GameVm implements VmShell {
     return this.core.setGameClockRate(rate);
   }
 
-  /** 主音量：所有客体音频汇合后的线性增益 0..1。 */
+  /** Master volume: linear gain 0..1 after combining all guest audio. */
   setMasterVolume(linear: number): void {
     this.core.setMasterVolume(linear);
   }
@@ -301,7 +302,7 @@ export class Win32GameVm implements VmShell {
   }
 
   setCallTracing(_enabled: boolean): void {
-    // 主线程路径的 onCall 已在页面按 panelCreated 门控，无跨线程成本。
+    // The page already gates main-thread onCall using panelCreated; no cross-thread overhead is involved.
   }
 
   async destroy(): Promise<void> {

@@ -2,7 +2,7 @@ import { makeLanStartupTiming, lanTimingCall } from '../shared/lanStartupTiming'
 import type { GuestMemory } from '../../vm86/win32';
 import { YR_STARTUP_PAGE_HASH } from './startupPage';
 
-/** YR 1.001 独立验证的 LAN 开局路径；保留原生 Timing 和动态确认窗口。 */
+/** Independently verified YR 1.001 LAN startup paths; retain native Timing and dynamic acknowledgment windows. */
 const sites = [
   { address: 0x5b6546, expected: [185, 5, 0, 0, 0, 59, 198, 137, 13, 84, 181, 168, 0] },
   {
@@ -13,7 +13,7 @@ const sites = [
   { address: 0x5dd498, expected: [184, 5, 0, 0, 0, 59, 207, 163, 84, 181, 168, 0] },
 ] as const;
 
-// 缩短原生测量/协商的调度周期，仍等双方真实报告并按房间速度和 RTT 计算窗口。
+// Shorten native measurement/negotiation scheduling periods while awaiting real reports from both sides and calculating windows from room speed and RTT.
 // test cl,127 → test cl,31；mov al,[Frame]; test al,al → test al,63。
 const negotiationSites = [
   { address: 0x6476bf, expected: [246, 193, 127, 15, 133, 186, 4, 0, 0], offset: 2, replacement: [31] },
@@ -37,8 +37,8 @@ export function installYrLanTiming(
       throw new Error('YR LAN 时序：指令签名不匹配或重复安装');
     }
   }
-  // 初始间隔参与原版最小窗口计算，不能只改接收侧窗口或伪造帧确认。
-  // 所有签名通过后分配独占客体桩；每次开局按房间档位初始化，协商仍可降速。
+  // The initial interval participates in native minimum-window calculation; do not change only the receive window or fabricate frame acknowledgments.
+  // Allocate exclusively owned guest stubs after all signatures pass; initialize from room speed on every start, allowing negotiation to slow down later.
   const patches = sites.map(({ address, expected }) => ({
     address,
     bytes: lanTimingCall(address, allocateCode(makeLanStartupTiming(0xa8b268, 0xa8b558, expected[0], 2))),

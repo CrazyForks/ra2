@@ -1,3 +1,4 @@
+import '../helpers/chineseLocale';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { LiveModel } from '../../src/ui/pages/game/experiments/liveModel';
 import { decodeHalf, halfRgbTensor } from '../../src/ui/pages/game/experiments/halfFloat';
@@ -119,7 +120,7 @@ it.each(['nomos2x', 'nomos2x-fp16'] as const)('整帧传递 %s 身份并保持�
   const model = new LiveModel(vi.fn());
   const task = model.load({ size: 1, arrayBuffer: async () => new ArrayBuffer(1) } as File, id);
   await Promise.resolve();
-  expect(FakeWorker.last.postMessage.mock.calls[0]![0].modelId).toBe(id);
+  expect(FakeWorker.last.postMessage.mock.calls[0]![0]).toMatchObject({ modelId: id, locale: 'zh-CN' });
   FakeWorker.last.reply({ type: 'ready', adapter: 'test' });
   await task;
   const source = frame();

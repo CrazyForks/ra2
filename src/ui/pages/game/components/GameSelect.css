@@ -1,4 +1,4 @@
-/* 参照实际遭遇战：黑底细红框、黄字、亮红选中条，不用灰色金属皮肤。 */
+/* Match native skirmish styling: black backgrounds, thin red borders, yellow text, and bright red selection bars, without gray metallic skin. */
 .game-select {
   flex: 1;
   min-width: 0;
@@ -12,7 +12,7 @@
   border: 1px solid #f00;
   border-radius: 0;
   background: #080000;
-  color: #ff0;
+  color: var(--ra2-button-text);
   font: inherit;
   text-align: left;
   cursor: pointer;
@@ -68,7 +68,7 @@
   border: 1px solid #f00;
   padding-right: 20px;
   background: #080000;
-  color: #ff0;
+  color: var(--ra2-button-text);
 }
 .game-select-options::-webkit-scrollbar {
   display: none;
@@ -83,7 +83,7 @@
 }
 .game-select-option.active {
   background: #f00;
-  color: #ff0;
+  color: var(--ra2-button-text);
 }
 .game-scrollbar {
   position: absolute;
@@ -152,7 +152,7 @@
   background: #741010;
 }
 
-/* 对齐原生“游戏速度/资金”滑杆：黑色轨道、红色窄把手，保留原生 range 输入语义。 */
+/* Match native game-speed/funds sliders: black tracks and narrow red thumbs, preserving native range-input semantics. */
 #vm-volume {
   height: 24px;
   min-width: 0;
@@ -195,8 +195,8 @@
 #vm-volume-value {
   height: 24px;
   background: #130000;
-  color: #ff0;
-  -webkit-text-fill-color: #ff0;
+  color: var(--ra2-button-text);
+  -webkit-text-fill-color: var(--ra2-button-text);
   opacity: 1;
   border: 1px solid #f00;
   border-radius: 0;

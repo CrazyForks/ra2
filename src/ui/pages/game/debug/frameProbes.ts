@@ -2,8 +2,9 @@ import type { VmFrame } from '../../../../vm86/win32';
 import { RGB565_TO_RGBA32 as rgb565Colors } from '../../../../vm86/pixels';
 const RGB565_TO_RGBA32 = rgb565Colors;
 
-/** 调试/E2E 用的低成本帧探针。直接采 VM 帧，避免 Playwright 反复对 WebGL
- * ReadPixels（headless SwiftShader 长时间截图会引入明显停顿甚至 renderer 崩溃）。 */
+/**
+ * Low-cost debug/E2E frame probe reading VM frames directly, avoiding repeated Playwright WebGL ReadPixels. Prolonged screenshots with headless SwiftShader can cause substantial pauses or renderer crashes.
+ */
 export function measureRa2BattlefieldFrame(frame: VmFrame): { rightEdgeRatio: number; fieldRatio: number } {
   let rightEdgeLit = 0;
   let fieldLit = 0;
@@ -41,9 +42,9 @@ export function measureRa2BattlefieldFrame(frame: VmFrame): { rightEdgeRatio: nu
   };
 }
 
-/** 调试/E2E 的低成本画面变化探针。固定采 48×36 个颜色点做 FNV-1a，足以
- * 捕捉战役阵营 logo 的局部 hover 动画，同时避免
- * Playwright 对持续重绘的 WebGL canvas 截图时等待元素稳定，也避免 readPixels。 */
+/**
+ * Low-cost debug/E2E visual-change probe: hash 48x36 sampled colors with FNV-1a, enough to detect campaign-faction logo hover animation. Avoid both readPixels and Playwright waiting for a continuously redrawn WebGL canvas to stabilize for screenshots.
+ */
 export function sampleVmFrameHash(frame: VmFrame): string {
   let hash = 0x811c_9dc5;
   const absorb = (value: number) => {

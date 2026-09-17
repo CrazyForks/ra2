@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 import { WebSocket } from 'ws';
 import { expect, it } from 'vitest';
 
-// 刻意不用项目的编码器：独立客户端按公开规范构造帧，验证分发包无需仓库或游戏模块。
+// Deliberately avoid the project encoder: an independent client constructs frames from the public specification to verify distribution without the repository or game modules.
 function frame(header: Record<string, unknown>, payload = Buffer.alloc(0)): Buffer {
   const text = (value: unknown) => {
     const bytes = Buffer.from(String(value));
@@ -100,7 +100,7 @@ it.each([
       expect(await readFile(join(directory, 'LICENSE'), 'utf8')).toContain('GNU GENERAL PUBLIC LICENSE');
       expect(await readFile(join(directory, 'licenses/ws/LICENSE'), 'utf8')).toContain('Permission');
       expect(JSON.parse(await readFile(join(directory, 'licenses/ws/package.json'), 'utf8')).name).toBe('ws');
-      expect(await readFile(join(directory, 'RELAY_PROTOCOL.md'), 'utf8')).toContain('13 字节头');
+      expect(await readFile(join(directory, 'RELAY_PROTOCOL.md'), 'utf8')).toContain('13-byte header');
       const help = await promisify(execFile)(process.execPath, ['gameRelay.cjs', '--help'], { cwd: directory });
       expect(help.stdout).toContain('默认 0.0.0.0');
       for (const args of [

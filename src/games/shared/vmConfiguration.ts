@@ -4,8 +4,9 @@ import { Win32Shim } from '../win32Shim';
 import { RA2_YR_RESOURCE_POLICY } from './resourcePolicy';
 import { createRa2WebSocketTransport, type Ra2NetworkConfig } from '../ra2/networkTransport';
 
-/** 两种宿主模式共用游戏配置，不反向导入 VM 驱动或 UI。
- * 配置函数在各自线程本地执行，不把工厂函数放进 Worker 消息协议。
+/**
+ * Both host modes share game configuration without importing VM drivers or UI in reverse.
+ * Configuration functions execute locally in each thread; never include factories in Worker messages.
  */
 export function ra2YrVmConfiguration(
   onNetworkStatus?: (status: VmNetworkStatus) => void,

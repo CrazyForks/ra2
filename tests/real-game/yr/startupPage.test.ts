@@ -29,7 +29,7 @@ describeVmSmoke('YR 直达后选图并返回单人菜单和主菜单', {
   hoverOnly: false,
   finalHoverOnly: true,
   clickGapMessages: 1000,
-  // YR 设置页固定 800×600；不能复用 RA2 测试目录 1440×900 的绝对坐标。
+  // YR settings stay at 800x600; do not reuse absolute 1440x900 coordinates from the RA2 test directory.
   clicks: [
     [722, 304],
     [360, 215],

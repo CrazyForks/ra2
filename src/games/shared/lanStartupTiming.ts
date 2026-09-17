@@ -1,7 +1,7 @@
 import { le32 } from './bytes';
 
-// 原生速度档位：0 → 60，1 → 45，其余合法档位 → 60 / 档位（整数）。
-// 在 LAN 开局路径执行，读取本次房间设置；不改计时器、确认或后续 Timing 事件。
+// Native speed settings: 0 -> 60, 1 -> 45, other valid settings -> integer 60 / setting.
+// Run on the LAN startup path using this room's settings; preserve timers, acknowledgments, and later Timing events.
 
 export function makeLanStartupTiming(
   sessionSpeed: number,
@@ -13,12 +13,12 @@ export function makeLanStartupTiming(
     0x9c,
     0x50,
     0x51,
-    0x52, // pushfd; 保存临时寄存器
+    0x52, // pushfd; preserve temporary registers.
     0x8b,
     0x0d,
     ...le32(sessionSpeed),
     0xb8,
-    ...le32(30), // 非法档位保持原生保守起点，避免除零或异常加速
+    ...le32(30), // Keep the native conservative starting value for invalid settings, avoiding divide-by-zero or abnormal acceleration.
     0x83,
     0xf9,
     6,
@@ -49,7 +49,7 @@ export function makeLanStartupTiming(
     0x58,
     0x9d,
     moveOpcode,
-    ...le32(sendRate), // 重放被替换的 mov eax/ecx, FrameSendRate
+    ...le32(sendRate), // Replay the replaced mov eax/ecx, FrameSendRate.
     0xc3,
   ];
 }

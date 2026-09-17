@@ -5,23 +5,20 @@ import { DEFAULT_GAME, SUPPORTED_GAMES, type SupportedGame, type SupportedGameId
 import { peImportKeys } from '../../vm86/pe';
 import { ScopedGameFileProvider } from '../providers/scoped';
 import { OverlayGameFileProvider } from '../providers/overlay';
-/** 与原识别流程一致：这里只做 MZ 候选筛选，完整 PE 校验由装载器负责。 */
+/** Match the original discovery flow: filter MZ candidates here; the loader performs full PE validation. */
 function isPortableExecutable(bytes: Uint8Array | null): bytes is Uint8Array {
   return !!bytes && bytes.length >= 2 && bytes[0] === 0x4d && bytes[1] === 0x5a;
 }
 
-/** 不参与自动发现的 EXE 文件名标记（大小写无关子串）：卸载程序、联机客户端等。 */
+/** Case-insensitive filename substrings excluded from EXE auto-discovery, such as uninstallers and multiplayer clients. */
 const EXCLUDED_EXECUTABLE_MARKERS = ['uninst', 'listenclient'];
 
-/** 内存来源递归发现的目录深度/数量上限（防 zip 炸弹式目录树）。 */
+/** Depth/count limits for recursive discovery in memory sources, protecting against ZIP-bomb-style directory trees. */
 const DEEP_DISCOVERY_MAX_DEPTH = 12;
 const DEEP_DISCOVERY_MAX_SCOPES = 2000;
 
 /**
- * 自动发现目录中的游戏 EXE：根目录以及各已支持游戏的约定子目录各枚举一次，
- * 取全部 *.exe（大小写无关），排除 EXCLUDED_EXECUTABLE_MARKERS 中的杂项 EXE，
- * 用 MZ 魔数确认是 PE。已知游戏按文件名归类，未知 EXE 也可直接启动（按默认兼容层处理）。
- * 安装器/补丁壳由各游戏的 sourceTransform 自行识别并转换，通用文件层不含游戏名称或哈希。
+ * Discover game EXEs automatically: enumerate the root and each supported game's conventional subdirectory once, collect case-insensitive *.exe files, exclude EXCLUDED_EXECUTABLE_MARKERS, and check MZ magic as PE candidates. Classify known games by filename; unknown EXEs can also start with the default compatibility layer. Each game's sourceTransform identifies and unwraps installers/patches; the generic file layer contains no game names or hashes.
  */
 export async function discoverGameSources(provider: GameFileProvider): Promise<GameSource[]> {
   type Candidate = {
@@ -30,17 +27,17 @@ export async function discoverGameSources(provider: GameFileProvider): Promise<G
     bytes: Uint8Array;
     game: SupportedGame;
     known: boolean;
-    /** 游戏转换器生成的文件，覆盖底层目录里的旧版同名文件。 */
+    /** Files produced by game transformers override old same-named files in the underlying directory. */
     overlay?: ReadonlyMap<string, Uint8Array>;
     overlayLabel?: string;
   };
   const candidates: Candidate[] = [];
   const transformedByScope = new Map<string, { game: SupportedGame; result: GameSourceTransformResult }>();
-  // RA2 与 Yuri's Revenge 共用同一安装目录；目录只枚举一次，避免候选项重复。
+  // RA2 and Yuri's Revenge share an installation directory; enumerate it once to avoid duplicate candidates.
   const scopes = [...new Set(['', ...SUPPORTED_GAMES.map((game) => game.folder)])];
   if (provider.deepDiscovery) {
-    // 内存来源（ZIP/安装包解压）内目录结构不固定：递归枚举子目录作为候选 scope，
-    // 由文件名/导入表归类决定哪款游戏在哪一层。上限防 zip 炸弹式目录树。
+    // Memory sources extracted from ZIP/installers have variable layouts; recursively enumerate subdirectories as candidate scopes,
+    // then classify by filename/import table to locate each game. Limits guard against ZIP-bomb-style directory trees.
     const visited = new Set(scopes.map((scope) => scope.toLowerCase()));
     const pending = [...scopes];
     while (pending.length && visited.size < DEEP_DISCOVERY_MAX_SCOPES) {
@@ -51,8 +48,8 @@ export async function discoverGameSources(provider: GameFileProvider): Promise<G
         const key = child.toLowerCase();
         if (visited.has(key)) continue;
         visited.add(key);
-        // 内存后端对文件路径的 list 同样返回名字：用同步判定/读取区分文件与目录，
-        // 文件不需要递归枚举。
+        // Memory backends also return names when list receives a file path; distinguish files from directories using synchronous checks/reads,
+        // since files need no recursive enumeration.
         const isFile = provider.hasKnownFile?.(child) ?? (await provider.read(child)) !== null;
         if (isFile) continue;
         scopes.push(child);
@@ -109,9 +106,9 @@ export async function discoverGameSources(provider: GameFileProvider): Promise<G
       });
     }
   }
-  // 已知游戏排前；其余按文件名稳定排序。
-  // 同一目录同时存在主程序别名时只保留注册表指定的主文件。RA2 轻量包中的
-  // game.exe / ra2.exe / Red Alert 2.exe 字节完全相同，不应显示三次。
+  // Sort known games first, then remaining entries stably by filename.
+  // If executable aliases coexist in one directory, retain only the primary file specified by the registry. Lightweight RA2 packages contain
+  // identical game.exe / ra2.exe / Red Alert 2.exe bytes, which should not appear three times.
   const selectedCandidates = candidates.filter(
     (candidate) =>
       candidate.executable.toLowerCase() === candidate.game.executable.toLowerCase() ||
@@ -142,15 +139,15 @@ function matchesKnownExecutable(game: SupportedGame, lowerName: string): boolean
   return game.executable.toLowerCase() === lowerName;
 }
 
-/** 按文件名归类到已知游戏；无法归类时按导入表覆盖度选择，再退回 RA2。 */
+/** Classify known games by filename, then import-table coverage; finally fall back to RA2. */
 function gameForExecutable(name: string, scope: string, bytes: Uint8Array): SupportedGame {
   const lower = name.toLowerCase();
   const known = SUPPORTED_GAMES.find((game) => matchesKnownExecutable(game, lower));
   if (known) return known.executable.toLowerCase() === lower ? known : { ...known, executable: name };
   const scoped = SUPPORTED_GAMES.find((game) => game.folder.toLowerCase() === scope.toLowerCase());
   if (scoped) return { ...scoped, executable: name };
-  // 自定义命名的改版 EXE：用户直接选择游戏目录时 scope 退化为根目录，
-  // 文件名与目录都匹配不上时，按 RA2/YR ABI 对该 EXE 的导入覆盖度归类。
+  // Custom-named modified EXEs: directly selecting a game directory makes the scope the root;
+  // if neither filename nor directory matches, classify by RA2/YR ABI coverage of its imports.
   const imports = peImportKeys(bytes);
   const byImports =
     imports.length > 0
@@ -169,7 +166,7 @@ function gameForExecutable(name: string, scope: string, bytes: Uint8Array): Supp
   };
 }
 
-/** 兼容层 ABI 表是否覆盖该 EXE 的全部导入键。 */
+/** Whether the compatibility ABI table covers every import key in the EXE. */
 function coversAllImports(game: SupportedGame, imports: readonly string[]): boolean {
   return imports.every((key) => game.abi[key] !== undefined);
 }

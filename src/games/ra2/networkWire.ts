@@ -1,4 +1,4 @@
-/** RA2/YR 使用 单字节类型二进制线协议；兼容性哈希来自 EXE，元数据为客体玩家名。 */
+/** RA2/YR use the binary wire protocol with one-byte message types; the EXE supplies the compatibility hash and the guest player name supplies metadata. */
 export {
   RELAY_MAX_LAN_MEMBERS as RA2NET_MAX_LAN_MEMBERS,
   RELAY_MAX_FRAME_BYTES as RA2NET_MAX_FRAME_BYTES,

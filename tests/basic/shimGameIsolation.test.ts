@@ -1,4 +1,4 @@
-/** 游戏兼容能力必须显式开启，默认 shim 不继承任何已支持游戏的补丁。 */
+/** Game compatibility capabilities require explicit opt-in; the default shim inherits no supported game's patches. */
 import { describe, expect, it } from 'vitest';
 import { RA2_SHIM_PROFILE } from '../../src/games/ra2/profile';
 import { YR_SHIM_PROFILE } from '../../src/games/yr/profile';

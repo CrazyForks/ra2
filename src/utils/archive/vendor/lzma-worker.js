@@ -1,7 +1,7 @@
-// LZMA SDK JS 移植（lzma npm v2.3.2，MIT © 2015 Nathan Rugg <nmrugg@gmail.com>）。
-// 本地补丁：ByteArrayOutputStream/OutWindow 改用可增长的 Uint8Array，
-// 原版普通数组实现在 ~464MB 解压输出下会因数组增长抛 Invalid array length。
-// 详情见 src/utils/archive/nsis.ts 头部注释。
+// JS port of LZMA SDK (lzma npm v2.3.2, MIT, copyright 2015 Nathan Rugg <nmrugg@gmail.com>).
+// Local patch: use growable Uint8Array buffers in ByteArrayOutputStream/OutWindow;
+// the original plain-array implementation throws Invalid array length while growing for about 464MB of decoded output.
+// See the header comment in src/utils/archive/nsis.ts for details.
 /// © 2015 Nathan Rugg <nmrugg@gmail.com> | MIT
 /// See lzma-worker.LICENSE.txt for the complete MIT license.
 
@@ -357,7 +357,7 @@ var LZMA = (function () {
     
     function $LZMAByteArrayDecompressor(this$static, data) {
         this$static.output = $ByteArrayOutputStream({});
-        // 本地补丁：保留输入流引用，供解压后读取消耗的输入偏移（NSIS 两段流定位第二段起点）。
+        // Local patch: retain the input stream to inspect consumed offsets after decoding, locating the second stage in NSIS two-stage streams.
         this$static.input = $ByteArrayInputStream({}, data);
         $init_0(this$static, this$static.input, this$static.output);
         return this$static;
@@ -2536,8 +2536,8 @@ var LZMA = (function () {
     }
     /** ce */
     /** ds */
-    // 本地补丁：最近一次 decompress 使用的字节数组解压器，经 getLastInputConsumed 暴露
-    // 输入流消耗偏移（含 SDK 补的 13 字节 LZMA-Alone 头），NSIS 两段流靠它定位第二段。
+    // Local patch: retain the most recent decompress byte-array decoder; getLastInputConsumed exposes
+    // consumed input offsets, including the SDK-added 13-byte LZMA-Alone header, to locate the second NSIS stage.
     var lastDecompressor = null;
     function decompress(byte_arr, on_finish, on_progress) {
         var this$static = {},
@@ -2679,7 +2679,7 @@ var LZMA = (function () {
         /** xs */
         compress:   compress,
         decompress: decompress,
-        /** 本地补丁：读取上次 decompress 消耗的输入字节数（含 13 字节 LZMA-Alone 头）。 */
+        /** Local patch: read bytes consumed by the last decompress call, including the 13-byte LZMA-Alone header. */
         getLastInputConsumed: function () {
             return lastDecompressor && lastDecompressor.input ? lastDecompressor.input.pos : 0;
         },
@@ -2690,8 +2690,8 @@ var LZMA = (function () {
 }());
 
 /// This is used by browsers that do not support web workers (and possibly Node.js).
-// 本地补丁：原版 `this.LZMA = this.LZMA_WORKER = LZMA` 在 ESM（Vite/vitest）
-// 里 this 为 undefined 会抛错且没有导出；改为显式 ESM 导出 + 全局回退。
+// Local patch: original this.LZMA = this.LZMA_WORKER = LZMA fails in ESM (Vite/vitest)
+// because this is undefined and exports are absent; use explicit ESM exports plus a global fallback.
 const _LZMA_WORKER = LZMA;
 if (typeof self !== 'undefined' && typeof self.postMessage === 'function') {
   self.LZMA = self.LZMA_WORKER = LZMA;

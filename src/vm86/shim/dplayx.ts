@@ -8,8 +8,10 @@ import type { DplayWire } from './dplayWire';
 
 type DirectxChain = InstanceType<ReturnType<typeof withDirectx>>;
 
-/** 客体内存的 GUID 格式化为 {XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}。
- *  Data1/Data2/Data3 是小端 u32/u16/u16，Data4 按原始字节序原样输出。 */
+/**
+ * Format guest-memory GUIDs as {XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}.
+ * Data1/Data2/Data3 are little-endian u32/u16/u16; emit Data4 in original byte order.
+ */
 export function formatGuid(bytes: Uint8Array): string {
   const hex = (start: number, end: number) =>
     [...bytes.subarray(start, end)].map((b) => b.toString(16).padStart(2, '0')).join('');
@@ -21,18 +23,18 @@ export function formatGuid(bytes: Uint8Array): string {
   return `{${d1}-${d2}-${d3}-${hex(8, 10)}-${hex(10, 16)}}`;
 }
 
-/** CLSID_DirectPlay（Wine dplay.h 行 38，与游戏探测值一致）。 */
+/** CLSID_DirectPlay from Wine dplay.h line 38, matching the game's probe. */
 export const CLSID_DIRECTPLAY = '{d1eb6d20-8923-11d0-9d97-00a0c90a43cb}';
 
-/** DPSPGUID_TCPIP（Wine dplay.h 行 71）。 */
+/** DPSPGUID_TCPIP from Wine dplay.h line 71. */
 const DPSPGUID_TCPIP = '{36e95ee0-8577-11cf-960c-0080c7534e82}';
 
-/** DPSPGUID_TCPIP 的客体内存字节序（Data1/2/3 小端）。 */
+/** DPSPGUID_TCPIP in guest-memory byte order; Data1/2/3 are little-endian. */
 const DPSPGUID_TCPIP_BYTES = new Uint8Array([
   0xe0, 0x5e, 0xe9, 0x36, 0x77, 0x85, 0xcf, 0x11, 0x96, 0x0c, 0x00, 0x80, 0xc7, 0x53, 0x4e, 0x82,
 ]);
 
-/** 常见 SP GUID → 调试名（DPSPGUID_* 全表在 dplay.h）。 */
+/** Common SP GUIDs to debug names; see dplay.h for the full DPSPGUID_* table. */
 const SP_NAMES: Record<string, string> = {
   '{36e95ee0-8577-11cf-960c-0080c7534e82}': 'tcpip',
   '{685bc400-9d2c-11cf-a9cd-00aa006886e3}': 'ipx',
@@ -40,8 +42,10 @@ const SP_NAMES: Record<string, string> = {
   '{44eaa760-cb68-11cf-9c4e-00a0c905425e}': 'modem',
 };
 
-/** 同一 vtable 可应答的 DirectPlay 接口（3/3A 同布局，2/2A 是 3 的前缀）。
- *  IID_IDirectPlay4/4A 带额外方法，不在此列。 */
+/**
+ * DirectPlay interfaces served by one vtable: 3/3A share layout, and 2/2A are prefixes of 3.
+ * Exclude IID_IDirectPlay4/4A, which add methods.
+ */
 const DIRECTPLAY_IIDS = new Set([
   '{00000000-0000-0000-c000-000000000046}', // IID_IUnknown
   '{2b74f7c0-9154-11cf-a9cd-00aa006886e3}', // IID_IDirectPlay2
@@ -50,12 +54,12 @@ const DIRECTPLAY_IIDS = new Set([
   '{133efe41-32dc-11d0-9cfb-00a0c90a43cb}', // IID_IDirectPlay3A
 ]);
 
-/** 请求了 DP IID，但本兼容层还没有这个接口。 */
+/** A DP IID was requested, but this compatibility layer does not implement that interface. */
 export function isDirectPlayIid(iid: string): boolean {
   return DIRECTPLAY_IIDS.has(iid);
 }
 
-/** IDirectPlayLobby 系 IID（Wine dplobby.h 行 34-49）。 */
+/** IDirectPlayLobby IIDs from Wine dplobby.h lines 34-49. */
 const LOBBY_IIDS = new Set([
   '{00000000-0000-0000-c000-000000000046}', // IID_IUnknown
   '{af465c71-9588-11cf-a020-00aa006157ac}', // IID_IDirectPlayLobby
@@ -67,9 +71,7 @@ const LOBBY_IIDS = new Set([
 ]);
 
 /**
- * IDirectPlayLobby3 vtable：Lobby 11 + Lobby2 的 CreateCompoundAddress + Lobby3 的
- * ConnectEx/RegisterApplication/UnregisterApplication/WaitForConnectionSettings = 19 槽。
- * Lobby 1/2 布局是它的前缀，单一 vtable 可同时服务三代接口（Wine dplobby.c dpl3A_vt）。
+ * IDirectPlayLobby3 vtable: 11 Lobby slots + Lobby2 CreateCompoundAddress + Lobby3 ConnectEx/RegisterApplication/UnregisterApplication/WaitForConnectionSettings = 19 slots. Lobby 1/2 layouts are prefixes, so one table serves all three generations; see Wine dplobby.c dpl3A_vt.
  */
 const LOBBY3_METHODS: Array<[string, number]> = [
   ['QueryInterface', 12],
@@ -93,7 +95,7 @@ const LOBBY3_METHODS: Array<[string, number]> = [
   ['WaitForConnectionSettings', 8],
 ];
 
-/** DPAID_* 数据类型 GUID（Wine dplobby.h 行 205-246）。 */
+/** DPAID_* data-type GUIDs from Wine dplobby.h lines 205-246. */
 const DPAID_TOTAL_SIZE = '{1318f560-912c-11d0-9daa-00a0c90a43cb}';
 const DPAID_SERVICE_PROVIDER = '{07d916c0-e0af-11cf-9c4e-00a0c905425e}';
 const DPAID_LOBBY_PROVIDER = '{59b95640-9667-11d0-a77d-0000f803abfc}';
@@ -102,21 +104,21 @@ const DPAID_MODEM = '{f6dcc200-a2fe-11d0-9c4f-00a0c905425e}';
 const DPAID_INET = '{c4a54da0-e0af-11cf-9c4e-00a0c905425e}';
 const DPAID_INET_PORT = '{e4524541-8ea5-11d1-8a96-006097b01411}';
 const DPAID_COM_PORT = '{f2f0ce00-e0af-11cf-9c4e-00a0c905425e}';
-/** ANSI 接口收到 W 数据类型 → DPERR_INVALIDFLAGS（Wine dplobby.c）。 */
+/** ANSI interfaces receiving W data types return DPERR_INVALIDFLAGS; see Wine dplobby.c. */
 const DPAID_W_GUIDS = new Set([
   '{ba5a7a70-9dbf-11d0-9cc1-00a0c905425e}', // DPAID_PhoneW
   '{01fd92e0-a2ff-11d0-9c4f-00a0c905425e}', // DPAID_ModemW
   '{e63232a0-9dbf-11d0-9cc1-00a0c905425e}', // DPAID_INetW
 ]);
 
-/** DirectPlay 线上消息由 dplayTransport 负责承载，消息语义与 COM 层保持不变。 */
-/** 逐消息/逐泵传输日志开关（排查链路时置 true）。平时开会把双 tab 控制台刷爆：
- *  每条消息 2~4 行、泵每次排空 2 行、枚举每次 4 行——devtools 打开时每行都有渲染
- *  成本，高频收发下日志本身就把页面拖慢（「联机很慢」的第一嫌疑人）。 */
+/** dplayTransport carries DirectPlay wire messages while message semantics and the COM layer remain unchanged. */
+/**
+ * Per-message/per-pump transport logging; enable only for diagnostics. Normal use floods two-tab consoles: 2-4 lines per message, two per pump drain, four per enumeration. Every line incurs DevTools rendering cost, so logging itself can slow high-frequency networking and is a prime suspect in poor multiplayer performance.
+ */
 const DPLAY_VERBOSE_LOG = false;
 const DPLAY_DISCOVERY_TTL_MS = 30_000;
 
-/** 规范 GUID 字符串 → 客体内存 16 字节小端（Data1/2/3 翻转，Data4 原样）。 */
+/** Canonical GUID string to 16 guest-memory bytes: reverse Data1/2/3 for little-endian order and preserve Data4. */
 export function guidBytes(guid: string): Uint8Array {
   const hex = guid.replace(/[{}-]/g, '');
   const out = new Uint8Array(16);
@@ -143,9 +145,7 @@ const DPERR_INVALIDPLAYER = 0x8877_0096;
 const DPERR_NOMESSAGES = 0x8877_00be;
 
 /**
- * IDirectPlay3 vtable：IUnknown 3 + IDirectPlay2 段 29 + IDirectPlay3 段 15 = 47 槽。
- * 顺序与 Wine dplay.h / DirectX SDK 一致（游戏实际请求 IID_IDirectPlay3A，
- * ANSI 变体同布局）。数值是含 this 在内的 stdcall 参数字节数。
+ * IDirectPlay3 vtable: 3 IUnknown slots + 29 IDirectPlay2 slots + 15 IDirectPlay3 slots = 47. Order matches Wine dplay.h / DirectX SDK; the game requests layout-compatible ANSI IID_IDirectPlay3A. Values are stdcall argument bytes including this.
  */
 export const DP3_METHODS: Array<[string, number]> = [
   ['QueryInterface', 12],
@@ -198,10 +198,7 @@ export const DP3_METHODS: Array<[string, number]> = [
 ];
 
 /**
- * DirectPlay 兼容层。当前阶段只让 COM 对象「出生」：IUnknown 标准语义 +
- * 无网络时必然成立的答复（GetCaps 全零、EnumConnections 零连接、
- * EnumSessions 未初始化/无连接）；其余方法停在边界，等游戏逐个揭示。
- * DirectPlay 方法仍从这里进入，具体网络承载由 transport 抽象负责。
+ * DirectPlay compatibility layer. Initially supports COM object creation with standard IUnknown semantics and answers valid without networking: zero GetCaps, no EnumConnections, and uninitialized/disconnected EnumSessions. Other methods stop at their boundaries pending observed game usage. DirectPlay methods enter here; the transport abstraction carries networking.
  */
 export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase) {
   return class extends Base {
@@ -209,9 +206,9 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
       super(...args);
     }
 
-    /** InitializeConnection 是否已成功（成功即视为「网络栈就绪」，会话枚举返回空列表）。 */
+    /** Whether InitializeConnection succeeded; success means the network stack is ready and session enumeration returns an empty list. */
     private dplayConnectionInitialized = false;
-    /** 当前会话（Open(CREATE/JOIN) 建立）。JOIN 在房间服务落地前视为本地会话。 */
+    /** Current session established by Open(CREATE/JOIN); JOIN is local until room-service support exists. */
     private dplaySession: {
       nameBytes: Uint8Array;
       maxPlayers: number;
@@ -224,19 +221,19 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
       { name: number; event: number; data: number; dataSize: number; local: boolean; announced: boolean }
     >();
     private nextDpid = 1;
-    /** SetSessionDesc 存下的会话描述拷贝（InitializeConnection(NULL) 与枚举用到）。 */
+    /** Copied session description from SetSessionDesc, used by InitializeConnection(NULL) and enumeration. */
     private sessionDesc = 0;
-    /** DirectPlay transport 实例（懒开；浏览器默认 WebSocket）。 */
+    /** Lazily opened DirectPlay transport; browser default is WebSocket. */
     private dplayTransport: DplayTransport | null = null;
-    /** 当前会话的实例 GUID（建房时生成，加入时取自会话描述）。 */
+    /** Current session instance GUID, generated by hosts or copied from the description when joining. */
     private dplayInstance = '';
-    /** 本地玩家 DPID（CreatePlayer 时记下，收消息时定位）。 */
+    /** Local player DPID recorded by CreatePlayer for incoming-message routing. */
     private dplayLocal = 0;
-    /** 泵注入被拒诊断日志节流时间戳。 */
+    /** Timestamp throttling diagnostics for rejected pump injection. */
     protected lastInjectRejectAt = 0;
-    /** 收到的消息队列（Receive 弹出；数据在 shim 堆）。 */
+    /** Received-message queue consumed by Receive; data lives in the shim heap. */
     protected dplayQueue: Array<{ from: number; to: number; data: number; size: number }> = [];
-    /** 缓存的远端会话（EnumSessions 的数据源；announce 心跳刷新）。 */
+    /** Cached remote sessions for EnumSessions, refreshed by announce heartbeats. */
     private dplayRemoteSessions = new Map<
       string,
       {
@@ -248,19 +245,19 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
         lastSeen: number;
       }
     >();
-    /** 建房方上次 announce 时间（心跳 piggyback 在 dplayx 调用上）。 */
+    /** Host's last announce time; heartbeats piggyback on dplayx calls. */
     private dplayLastAnnounce = 0;
-    /** 建房方心跳定时器——等待房里游戏可能完全静默（泵线程未跑），不能只靠 hypercall 节奏。 */
+    /** Host heartbeat timer: waiting-room games may go entirely silent without the pump thread, so hypercall cadence alone is insufficient. */
     private dplayHeartbeatTimer: ReturnType<typeof globalThis.setInterval> | null = null;
-    /** 上次观察到的枚举回调 EAX（共享页 HYPERCALL_CALLBACK_RESULT，变化即打印）。 */
+    /** Last observed enumeration callback EAX from shared HYPERCALL_CALLBACK_RESULT; log changes. */
     private dplayLastCallbackResult = 0;
-    /** 伪造的 TCP/IP 连接（DPLCONNECTION 40 字节）与 DPNAME，首次枚举时建立、重复复用。 */
+    /** Synthesized TCP/IP connection, 40-byte DPLCONNECTION plus DPNAME; create on first enumeration and reuse. */
     private tcpipConnection = 0;
     private tcpipConnectionName = 0;
 
     private ensureTcpipConnection(): void {
       if (this.tcpipConnection) return;
-      // "TCP/IP\0" 纯 ASCII，GBK 逐字节兼容。
+      // TCP/IP with a trailing NUL is pure ASCII and byte-compatible with GBK.
       const shortName = this.alloc(8, true);
       this.memory.write_memory(new Uint8Array([0x54, 0x43, 0x50, 0x2f, 0x49, 0x50, 0]), shortName);
       const name = this.alloc(16, true); // DPNAME: dwSize, dwFlags, lpszShortNameA, lpszLongNameA
@@ -281,9 +278,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
     }
 
     /**
-     * 客体回调桥（WndProc 同款跳板）：每组 args 右到左压栈后 call 客体函数，
-     * 多组连续调用（枚举多个玩家/会话）；返回前把 EAX 设为 returnEax 再跳回
-     * 原返回地址。枚举类 API 的返回值与回调 BOOL 无关，固定回 DP_OK。
+     * Guest callback bridge using the same trampoline style as WndProc: push each argument group right-to-left, call the guest function, and repeat for multiple players/sessions. Before return, set EAX=returnEax and jump to the original return address. Enumeration APIs return DP_OK independently of callback BOOL results.
      */
     protected invokeGuestCallbacks(call: Win32Call, callback: number, argSets: number[][], returnEax = 0): void {
       if (argSets.length === 0) return;
@@ -304,7 +299,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
         code.push(0xb8);
         emit32(callback);
         code.push(0xff, 0xd0); // call eax
-        code.push(0x89, 0xec); // mov esp, ebp；兼容 stdcall/cdecl 清理差异
+        code.push(0x89, 0xec); // mov esp, ebp accommodates stdcall/cdecl cleanup differences.
         code.push(0xa3);
         emit32(HYPERCALL_CALLBACK_RESULT); // mov [result], eax
       }
@@ -316,12 +311,12 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
       this.writeU32(call.stack, trampoline);
     }
 
-    /** 单回调便捷形式。 */
+    /** Convenience wrapper for one callback. */
     protected invokeGuestCallback(call: Win32Call, callback: number, argsInOrder: number[], returnEax = 0): void {
       this.invokeGuestCallbacks(call, callback, [argsInOrder], returnEax);
     }
 
-    /** NUL 结尾窄字符串原样拷贝进 shim 堆（GBK 字节逐字保留，不做编解码）。 */
+    /** Copy NUL-terminated narrow strings into the shim heap unchanged, preserving GBK bytes without encoding/decoding. */
     private copyNarrowString(ptr: number, max = 256): number {
       if (!ptr) return 0;
       const bytes = this.memory.read_memory(ptr, max);
@@ -333,7 +328,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
       return copy;
     }
 
-    /** DPNAME（16 字节 + 两个字符串）拷贝进 shim 堆——游戏缓冲可能被复用，枚举回调必须用拷贝。 */
+    /** Copy 16-byte DPNAME plus two strings into the shim heap; enumeration callbacks need copies because game buffers may be reused. */
     private copyDpName(namePtr: number): number {
       if (!namePtr) return 0;
       if (this.readU32(namePtr) < 16) return 0;
@@ -345,14 +340,14 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
       return name;
     }
 
-    /** 任意字节块拷贝进 shim 堆。 */
+    /** Copy arbitrary bytes into the shim heap. */
     private copyGuestBytes(ptr: number, size: number): number {
       const copy = this.alloc(size, true);
       this.memory.write_memory(this.memory.read_memory(ptr, size), copy);
       return copy;
     }
 
-    /** 两遍调用的定长输出语义：缓冲不足回写所需尺寸 + DPERR_BUFFERTOOSMALL，否则拷贝并回写。 */
+    /** Two-call fixed-output semantics: insufficient capacity writes required size and returns DPERR_BUFFERTOOSMALL; otherwise copy and write back size. */
     private writeSized(srcPtr: number, size: number, outPtr: number, sizePtr: number): Win32Result {
       if (!sizePtr) return { eax: 0x8000_4003 }; // E_POINTER
       if (!outPtr || this.readU32(sizePtr) < size) {
@@ -364,7 +359,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
       return { eax: 0 }; // DP_OK
     }
 
-    /** NUL 前的原始字节（GBK 不做编解码）。 */
+    /** Raw bytes before NUL, without GBK encoding/decoding. */
     private rawBytesUpToNul(ptr: number, max: number): Uint8Array {
       if (!ptr) return new Uint8Array(0);
       const bytes = this.memory.read_memory(ptr, max);
@@ -373,7 +368,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
       return bytes.slice(0, end);
     }
 
-    /** 线上字节 → shim 堆字符串（附 NUL）。 */
+    /** Wire bytes to a shim-heap string with an appended NUL. */
     protected bytesToGuest(bytes: Uint8Array): number {
       const copy = this.alloc(bytes.length + 1, true);
       this.memory.write_memory(bytes, copy);
@@ -381,11 +376,9 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
       return copy;
     }
 
-    /** 合成 DPMSG_CREATEPLAYERORGROUP（48B，DirectPlay3A ASCII 布局照 Wine dplay.h）
-     *  进本地队列：泵体排空时游戏分派器 0x4483D0 按 [eax]-3==0 走 0x448050(dpId, shortName)
-     *  把玩家加进 UI——没有这条消息游戏会一直等对手出现（加入方卡死老症状）。
-     *  注意 from 必须为 0（DPID_SYSMSG）：泵体 0x448480 按 from 分路，from≠0 走
-     *  应用消息处理器 0x445B10，系统消息进不去分派器，泵体会卡死在游戏消息处理里。 */
+    /**
+     * Enqueue synthesized DPMSG_CREATEPLAYERORGROUP, 48 bytes following DirectPlay3A ANSI layout in Wine dplay.h. When the pump drains, game dispatcher 0x4483D0 checks [eax]-3==0 and calls 0x448050(dpId, shortName) to add the player to the UI. Without it, the game waits forever for opponents, the old joining-side hang. from must be 0 (DPID_SYSMSG): pump 0x448480 routes nonzero sources to application handler 0x445B10, preventing system dispatch and hanging in game-message processing.
+     */
     protected pushCreatePlayerMessage(dpid: number, nameBytes: Uint8Array, currentPlayers: number): void {
       const namePtr = this.bytesToGuest(nameBytes);
       const msg = this.alloc(48, true);
@@ -402,17 +395,17 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
       w(0x24, 0); // dpnName.lpszLongNameA
       w(0x28, 0); // dpIdParent
       w(0x2c, 0); // dwFlags
-      this.dplayQueue.push({ from: 0, to: 0, data: msg, size: 48 }); // from=0：系统消息（DPID_SYSMSG）
+      this.dplayQueue.push({ from: 0, to: 0, data: msg, size: 48 }); // from=0 means a DPID_SYSMSG system message.
       console.log(`[dplayx] 合成 DPMSG_CREATEPLAYERORGROUP dpid=${dpid}（队列 ${this.dplayQueue.length}）`);
     }
 
-    /** DPNAME 拷贝里的短名原始字节（pinfo 广播用）。 */
+    /** Raw short-name bytes from the DPNAME copy for pinfo broadcasts. */
     private nameBytesAt(namePtr: number): Uint8Array {
       if (!namePtr) return new Uint8Array(0);
       return this.rawBytesUpToNul(this.readU32(namePtr + 8), 256);
     }
 
-    /** 挂接 transport 收消息处理（announce 在无会话时也缓存，其余按实例过滤）。 */
+    /** Attach transport handlers; cache announce even without a session, and filter other messages by instance. */
     private handleDplayMessage(m: DplayWire): void {
       if (!m) return;
       if (DPLAY_VERBOSE_LOG && m.t !== 'announce' && m.t !== 'sclose') {
@@ -437,7 +430,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
         return;
       }
       if (m.t === 'sclose') {
-        // 建房方重新开房时旧实例立即失效（不等 10s 过期）。
+        // Invalidate old instances immediately when hosts reopen rooms, without waiting 10s for expiry.
         if (this.dplayRemoteSessions.delete(m.i)) {
           if (DPLAY_VERBOSE_LOG) {
             console.log(`[dplayx] 会话关闭通知：移除 ${m.i.slice(0, 8)}…（剩 ${this.dplayRemoteSessions.size}）`);
@@ -455,15 +448,15 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
       if (!this.dplaySession || m.i !== this.dplayInstance) return;
       switch (m.t) {
         case 'join': {
-          // 当前 dplayx 状态重播按双 VM/双 tab 流程设计：第一个加入者拿 DPID 2；
-          // relay 虽可容纳更多成员，但既有非房主玩家不会为第三个加入者全量重播，
-          // 多人 DPID 分配与状态重播仍需后续协商。
+          // Current dplayx state replay targets two-VM/two-tab flows: the first joiner gets DPID 2.
+          // Although relay capacity is larger, existing non-host players do not fully replay state for a third participant;
+          // multiplayer DPID allocation and state replay still require further negotiation.
           if (!this.dplaySession.hosting) return;
           if (!this.dplayPlayers.has(2)) {
             this.dplayPlayers.set(2, { name: 0, event: 0, data: 0, dataSize: 0, local: false, announced: false });
           }
           if (this.nextDpid < 3) this.nextDpid = 3;
-          // 重播本地玩家的 CREATE_PLAYER 消息，加入方才能看到房主。
+          // Replay local CREATE_PLAYER so the joiner can see the host.
           for (const [dpid, p] of this.dplayPlayers) {
             if (p.local) {
               this.dplayPost({
@@ -479,8 +472,8 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
           return;
         }
         case 'pinfo': {
-          // 名字同步。CREATE_PLAYER 合成统一走 newplayer（含创建者自己的回声），
-          // 这里不再合成——否则房主会先收到加入方 pinfo 又收到 newplayer，双份。
+          // Synchronize names only. Synthesize CREATE_PLAYER exclusively from newplayer, including creator echoes;
+          // doing it here too would duplicate notifications when hosts receive both joiner pinfo and newplayer.
           let p = this.dplayPlayers.get(m.d);
           if (!p) {
             p = { name: 0, event: 0, data: 0, dataSize: 0, local: false, announced: false };
@@ -492,10 +485,10 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
           return;
         }
         case 'newplayer': {
-          // DPMSG_CREATEPLAYERORGROUP 广播（CreatePlayer 与房主 join 重播都走这里）。
-          // 真实 DirectPlay 把这条消息发给包括创建者在内的所有人——创建者自己也
-          // 要等它才会把自己加进 UI（加入方卡死根源）。transport 回声与
-          // 重播可能重复到达，announced 标志保证每个玩家只合成一次。
+          // Broadcast DPMSG_CREATEPLAYERORGROUP for both CreatePlayer and host join replay.
+          // Real DirectPlay sends it to everyone, including the creator, who also
+          // waits for it before adding itself to the UI, causing the original joiner hang. Transport echoes and
+          // replays may duplicate arrivals; announced ensures one synthesized message per player.
           let p = this.dplayPlayers.get(m.d);
           if (!p) {
             p = { name: 0, event: 0, data: 0, dataSize: 0, local: false, announced: false };
@@ -521,7 +514,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
           return;
         }
         case 'msg': {
-          // DPID_ALLPLAYERS(0) 广播给本地玩家；定向消息核对接收者。
+          // DPID_ALLPLAYERS(0) broadcasts to local players; directed messages verify the recipient.
           const to = m.o === 0 ? this.dplayLocal : m.o;
           if (to !== this.dplayLocal) return;
           if (DPLAY_VERBOSE_LOG) {
@@ -569,7 +562,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
       transport?.close();
     }
 
-    /** 建房方心跳：借任一 dplayx 调用的节奏重发 announce（2s）。 */
+    /** Host heartbeat: reannounce every 2s, piggybacking on any dplayx call. */
     private sendDplayAnnounce(): boolean {
       if (!this.dplaySession?.hosting) return false;
       const sent = this.dplayPost({
@@ -618,19 +611,19 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
       }
     }
 
-    /** CoCreateInstance / DirectPlayCreate 共用的对象工厂。 */
+    /** Object factory shared by CoCreateInstance and DirectPlayCreate. */
     protected createDirectPlay(): number {
-      // 频道必须在对象创建时就打开（被动监听）：加入方浏览会话列表期间只收不发，
-      // 懒开会错过建房方的全部 announce（transport 不替 VM 缓存控制状态）。
+      // Open the channel at object creation for passive listening; joiners only receive while browsing sessions,
+      // so lazy opening misses all host announcements. The transport does not cache control state for the VM.
       this.ensureDplayTransport();
       this.dplayObjectsCreated++;
       return this.createComObject('IDirectPlay3', DP3_METHODS, 'DPLAYX.COM');
     }
 
-    /** 冒烟/菜单路线发现的探针信号：DP 对象已创建（游戏进入联机界面的标志）。 */
+    /** Smoke/menu-discovery probe: a DP object was created, indicating entry into multiplayer UI. */
     public dplayObjectsCreated = 0;
 
-    /** 冒烟/调试自检：DPlay 会话与玩家表（宿主侧断言联机是否达成）。 */
+    /** Smoke/debug snapshot of DPlay sessions and players for host-side connectivity assertions. */
     public inspectDplayState(): {
       created: number;
       initialized: boolean;
@@ -658,17 +651,17 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
       };
     }
 
-    /** DirectPlayLobbyCreateA 的 Lobby 对象工厂（Lobby3 布局兼容 1/2 代）。 */
+    /** Lobby factory for DirectPlayLobbyCreateA; Lobby3 layout supports generations 1/2. */
     protected createDirectPlayLobby(): number {
       return this.createComObject('IDirectPlayLobby3A', LOBBY3_METHODS, 'DPLAYX.COM');
     }
 
-    /** 复合地址里单个元素序列化后的尺寸（DPADDRESS 头 40 + 数据区）；未知类型跳过。 */
+    /** Serialized compound-address element size: 40-byte DPADDRESS header plus payload; skip unknown types. */
     private compoundAddressElementSize(guid: string, dataSize: number): number | null {
       switch (guid) {
         case DPAID_SERVICE_PROVIDER:
         case DPAID_LOBBY_PROVIDER:
-          return 40 + 16; // 数据固定是 16 字节 GUID
+          return 40 + 16; // Payload is always a 16-byte GUID.
         case DPAID_PHONE:
         case DPAID_MODEM:
         case DPAID_INET:
@@ -683,10 +676,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
     }
 
     /**
-     * IDirectPlayLobby3A.CreateCompoundAddress：把元素数组序列化成 dplayx 复合地址。
-     * 布局照 Wine dplobby.c——首块 DPAID_TotalSize 记录总长，其余每块
-     * GUID(16)+u32 尺寸+20 字节 union 空位+数据；两遍调用语义（容量不足返回
-     * DPERR_BUFFERTOOSMALL 并回写所需尺寸）。
+     * IDirectPlayLobby3A.CreateCompoundAddress serializes element arrays into dplayx compound addresses. Follow Wine dplobby.c: first DPAID_TotalSize block records total length; each later block contains GUID(16), u32 size, 20 unused union bytes, then payload. Two-call semantics return DPERR_BUFFERTOOSMALL and required size on insufficient capacity.
      */
     protected createCompoundAddress(a: number[]): Win32Result {
       const elementsPtr = a[1] ?? 0;
@@ -695,7 +685,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
       const sizePtr = a[4] ?? 0;
       if (!elementsPtr || !count) return { eax: 0x8007_0057 }; // DPERR_INVALIDPARAM
       if (!sizePtr) return { eax: 0x8000_4003 }; // E_POINTER
-      // DPCOMPOUNDADDRESSELEMENT = GUID(16) + dwDataSize + lpData = 24 字节。
+      // DPCOMPOUNDADDRESSELEMENT = GUID(16) + dwDataSize + lpData = 24 bytes.
       const elements: Array<{ guid: string; dataSize: number; data: number }> = [];
       for (let i = 0; i < count; i++) {
         const elem = elementsPtr + i * 24;
@@ -705,7 +695,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
           data: this.readU32(elem + 20),
         });
       }
-      let required = 44; // 首块 TotalSize：头 40 + 4 字节总长
+      let required = 44; // First TotalSize block: 40-byte header plus 4-byte total length.
       for (const e of elements) {
         if (DPAID_W_GUIDS.has(e.guid)) return { eax: 0x8877_0078 }; // DPERR_INVALIDFLAGS
         const size = this.compoundAddressElementSize(e.guid, e.dataSize);
@@ -727,7 +717,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
         out[pos + 2] = (size >>> 16) & 0xff;
         out[pos + 3] = size >>> 24;
         pos += 4;
-        pos += 20; // union 空位：Wine 不写这 20 字节，我们清零，布局一致
+        pos += 20; // Unused union space: Wine leaves these 20 bytes unwritten; zero them while preserving layout.
         out.set(data, pos);
         pos += size;
       };
@@ -751,14 +741,14 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
       return { eax: 0 }; // DP_OK
     }
 
-    /** DPLAYX.COM!IDirectPlay3.* 的 vtable 方法分派。 */
+    /** Vtable dispatch for DPLAYX.COM!IDirectPlay3.* methods. */
     protected dispatchDPlay(call: Win32Call): Win32Result | null {
-      this.dplayPump(); // 建房方心跳 piggyback 在 dplayx 调用节奏上
+      this.dplayPump(); // Host heartbeats piggyback on dplayx call cadence.
       const callbackResult = this.readU32(HYPERCALL_CALLBACK_RESULT);
       if (callbackResult !== this.dplayLastCallbackResult) {
         this.dplayLastCallbackResult = callbackResult;
         if (DPLAY_VERBOSE_LOG) {
-          // 枚举回调刚执行过：TRUE(1)=游戏接受该项并继续，FALSE(0)=游戏拒绝/停止。
+          // Enumeration callback just ran: TRUE(1) accepts the entry and continues; FALSE(0) rejects/stops.
           console.log(
             `[dplayx] 枚举回调返回 EAX=0x${callbackResult.toString(16)}（${callbackResult ? 'TRUE 接受' : 'FALSE 拒绝'}）`,
           );
@@ -772,7 +762,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
       if (method === 'QueryInterface') {
         const riid = a[1] ?? 0;
         const iid = riid ? formatGuid(this.readBytes(riid, 16)) : '(null)';
-        // Lobby 对象与 DP 对象各自支持自己的 IID 族。
+        // Lobby and DP objects support their respective IID families.
         const interfaceName = key.slice(key.indexOf('!') + 1, key.lastIndexOf('.'));
         const supported = interfaceName.includes('Lobby') ? LOBBY_IIDS : DIRECTPLAY_IIDS;
         if (!supported.has(iid)) {
@@ -797,10 +787,10 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
       if (key.startsWith('DPLAYX.COM!IDirectPlay3.')) {
         switch (method) {
           case 'Initialize':
-            // SP GUID 参数暂不落库；后续方法按需再记。
+            // Do not store the SP GUID yet; later methods may record it as needed.
             return { eax: 0 }; // DP_OK
           case 'GetCaps': {
-            // DPCAPS 40 字节；无网络时除 dwSize 外全零是真实状态。
+            // DPCAPS is 40 bytes; without networking, all-zero fields except dwSize represent actual state.
             const capsPtr = a[1] ?? 0;
             if (!capsPtr) return { eax: 0x8000_4003 }; // E_POINTER
             const requested = this.readU32(capsPtr);
@@ -810,11 +800,11 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
             return { eax: 0 }; // DP_OK
           }
           case 'GetSessionDesc':
-            // 返回 SetSessionDesc 存下的描述拷贝（80 字节，名字指针指向 shim 拷贝）。
+            // Return the copied 80-byte SetSessionDesc description, whose name pointers reference shim copies.
             return this.writeSized(this.sessionDesc, this.sessionDesc ? 80 : 0, a[1] ?? 0, a[2] ?? 0);
           case 'SetSessionDesc': {
-            // 建房前设置会话描述（InitializeConnection(NULL) 的「默认连接」也
-            // 关联这份描述）。拷贝 80 字节 + 名字/密码字符串进 shim 堆——游戏缓冲会被复用。
+            // Set the session description before hosting; InitializeConnection(NULL)'s default connection also
+            // uses it. Copy 80 bytes plus name/password strings to the shim heap because game buffers are reused.
             const sdesc = a[1] ?? 0;
             if (!sdesc) return { eax: 0x8000_4003 };
             if (this.readU32(sdesc) < 80) return { eax: 0x8007_0057 };
@@ -828,9 +818,9 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
             return { eax: 0 }; // DP_OK
           }
           case 'Open': {
-            // 建房（CREATE）：生成会话实例 GUID 并广播 announce；
-            // 加入（JOIN）：目标实例取自会话描述（由我们的 EnumSessions 写入），
-            // 广播 join 请求；具体承载由 transport 决定。
+            // CREATE generates a session-instance GUID and broadcasts announce;
+            // JOIN takes the target instance from the description populated by EnumSessions
+            // and broadcasts join; the transport determines delivery.
             const sdesc = a[1] ?? 0;
             const flags = a[2] ?? 0;
             if (!sdesc) return { eax: 0x8000_4003 }; // E_POINTER
@@ -842,11 +832,11 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
             }
             const namePtr = this.readU32(sdesc + 48);
             if (flags === 2) {
-              // 重新建房时让旧实例在加入方立即失效。
+              // Invalidate the old instance on joiners immediately when reopening a room.
               if (this.dplayInstance && this.dplaySession?.hosting) {
                 this.dplayPost({ t: 'sclose', i: this.dplayInstance });
               }
-              // 游戏对 CREATE 传 GUID_NULL 实例——会话身份由兼容层生成。
+              // The game passes GUID_NULL for CREATE; the compatibility layer generates session identity.
               const instanceBytes = new Uint8Array(16);
               for (let i = 0; i < 16; i++) instanceBytes[i] = Math.floor(Math.random() * 256);
               this.dplayInstance = formatGuid(instanceBytes);
@@ -874,7 +864,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
                 appGuid: formatGuid(this.readBytes(sdesc + 24, 16)),
                 hosting: false,
               };
-              // 两 tab 测试的确定性分配：房主恒为 DPID 1，加入者从 2 开始。
+              // Deterministic allocation for two-tab tests: host DPID 1, joiners from 2 onward.
               this.nextDpid = 2;
             }
             this.dplayPlayers.clear();
@@ -885,7 +875,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
             return { eax: 0 }; // DP_OK
           }
           case 'CreatePlayer': {
-            // (LPDPID, LPDPNAME, HANDLE, LPVOID, DWORD, DWORD)——本地玩家拿 DPID 1 起。
+            // (LPDPID, LPDPNAME, HANDLE, LPVOID, DWORD, DWORD): local DPIDs start at 1.
             const idPtr = a[1] ?? 0;
             if (!idPtr) return { eax: 0x8000_4003 };
             if (!this.dplaySession) return { eax: DPERR_UNINITIALIZED };
@@ -901,10 +891,10 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
               announced: false,
             });
             this.dplayLocal = dpid;
-            // 玩家信息广播给对端（对方尚未加入时会被丢弃；加入后由 join 应答重播房主）。
+            // Broadcast player information; peers not yet joined discard it, and join replies replay the host afterward.
             this.dplayPost({ t: 'pinfo', i: this.dplayInstance, d: dpid, n: this.nameBytesAt(name) });
-            // CREATE_PLAYER 系统消息发给包括创建者在内的所有人——创建者自己也靠
-            // 这条消息（经 transport 回声）把自己加进 UI，双方 UI 都等它。
+            // Send CREATE_PLAYER system messages to everyone including the creator; the creator also relies on
+            // its transport echo to add itself to the UI, and both UIs await this message.
             this.dplayPost({
               t: 'newplayer',
               i: this.dplayInstance,
@@ -986,8 +976,8 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
           }
           case 'Send': {
             // Send(this, DPID from, DPID to, DWORD flags, LPVOID data, DWORD size)：
-            // size 在 a[5]、数据在 a[4]（曾错读 a[4]/a[3]——把 lpData 指针值当长度、
-            // 从 flags 地址读 7MB 零页，真实报文从未送达，双方互等卡死）。
+            // Size is a[5], data is a[4]. Former a[4]/a[3] indexing treated lpData as length
+            // and read 7MB of zero pages from the flags address, delivering no actual packets and making both sides wait forever.
             const to = a[2] ?? 0;
             if (to !== 0 && !this.dplayPlayers.has(to)) return { eax: DPERR_INVALIDPLAYER };
             const size = a[5] ?? 0;
@@ -996,7 +986,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
             return { eax: 0 }; // DP_OK
           }
           case 'Receive': {
-            // 弹出 transport 队列；空队列 → DPERR_NOMESSAGES（网络泵常态）。
+            // Pop the transport queue; empty means DPERR_NOMESSAGES, normal for the network pump.
             this.dplayPump();
             const msg = this.dplayQueue[0];
             if (!msg) {
@@ -1018,7 +1008,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
             if (a[1]) this.writeU32(a[1], msg.from);
             if (a[2]) this.writeU32(a[2], msg.to);
             if (!((a[3] ?? 0) & 0x8)) {
-              // DPRECEIVE_PEEK=0x8 时不弹出
+              // Do not pop with DPRECEIVE_PEEK=0x8.
               this.dplayQueue.shift();
               this.freeAllocation(msg.data);
             }
@@ -1027,10 +1017,10 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
           case 'Close': {
             if (this.dplaySession) {
               if (this.dplaySession.hosting) {
-                // 房主关闭 DirectPlay 会话时必须销毁 relay 房间，不能只离开最后一个玩家。
+                // When the host closes DirectPlay, destroy the relay room rather than leaving only its last player.
                 this.dplayPost({ t: 'sclose', i: this.dplayInstance });
               } else {
-                // 加入方可能创建多个本地玩家；逐个退出，不能只发送最后一个 dplayLocal。
+                // Joiners may create multiple local players; leave each one instead of sending only the last dplayLocal.
                 for (const [dpid, player] of this.dplayPlayers) {
                   if (player.local) this.dplayPost({ t: 'leave', i: this.dplayInstance, d: dpid });
                 }
@@ -1048,19 +1038,19 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
             return { eax: 0 };
           }
           case 'EnumPlayers': {
-            // 本地 + 远端玩家逐个回调（多组回调共用一个跳板）。
+            // Call back for each local and remote player, sharing one trampoline across argument groups.
             // EnumPlayers(this, LPDPENUMPLAYERSCALLBACK2, LPVOID, DWORD)——
-            // callback=a[1]、context=a[2]、flags=a[3]（曾错读 a[2]/a[3]，游戏
-            // 枚举玩家永远 E_POINTER，玩家列表建不起来）。
+            // callback=a[1], context=a[2], flags=a[3]. Former a[2]/a[3] indexing made
+            // player enumeration always return E_POINTER, preventing player-list construction.
             const callback = a[1] ?? 0;
             if (!callback) return { eax: 0x8000_4003 };
             if (this.dplayPlayers.size === 0) return { eax: 0 };
             const argSets: number[][] = [];
             for (const [dpid, player] of this.dplayPlayers) {
-              // LPDPENUMPLAYERSCALLBACK2(DPID, 类型, DPNAME*, 标志, 上下文)
+              // LPDPENUMPLAYERSCALLBACK2(DPID, type, DPNAME*, flags, context).
               argSets.push([
                 dpid,
-                0, // 玩家（非组）
+                0, // Player, not group.
                 player.name,
                 player.local ? 0x0000_0008 : 0x0000_0010, // DPENUMPLAYERS_LOCAL/REMOTE
                 a[2] ?? 0,
@@ -1070,17 +1060,17 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
             return { eax: 0 };
           }
           case 'EnumGroups':
-            // 没有组：零回调。
+            // No groups: no callbacks.
             return { eax: 0 };
           case 'EnumConnections': {
-            // 伪造唯一连接：TCP/IP SP，回调客体枚举函数（跳板桥接）。
+            // Synthesize one TCP/IP SP connection and invoke the guest enumeration callback through a trampoline.
             const callback = a[2] ?? 0;
             const context = a[3] ?? 0;
             if (!callback) return { eax: 0x8000_4003 }; // E_POINTER
             this.ensureTcpipConnection();
-            // LPDPENUMCONNECTIONSCALLBACK(GUID*, 连接, 尺寸, DPNAME*, 标志, 上下文)
+            // LPDPENUMCONNECTIONSCALLBACK(GUID*, connection, size, DPNAME*, flags, context).
             this.invokeGuestCallback(call, callback, [
-              this.tcpipConnection + 16, // LPCGUID 指向连接内嵌的 guidSP
+              this.tcpipConnection + 16, // LPCGUID points to guidSP embedded in the connection.
               this.tcpipConnection,
               40,
               this.tcpipConnectionName,
@@ -1090,12 +1080,12 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
             return { eax: 0 };
           }
           case 'EnumSessions': {
-            // 从 transport 缓存的建房方 announce 构造会话列表；过期 30s 丢弃。
+            // Build session lists from cached host announcements; discard after 30s.
             const callback = a[3] ?? 0;
             const context = a[4] ?? 0;
             if (!callback) return { eax: 0x8000_4003 };
             if (!this.dplayConnectionInitialized) return { eax: DPERR_UNINITIALIZED };
-            // 现场诊断：游戏传入的模板（过滤依据）与回调地址（可反汇编其检查逻辑）。
+            // Runtime diagnostics: caller-supplied filtering template and callback address, whose checks can be disassembled.
             const templatePtr = a[1] ?? 0;
             const templateApp =
               templatePtr && this.readU32(templatePtr) >= 80
@@ -1106,7 +1096,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
                 `[dplayx] EnumSessions: 回调=0x${callback.toString(16)} ` +
                   `模板app=${templateApp} dwFlags=0x${(a[5] ?? 0).toString(16)} dwTimeout=${a[2] ?? 0}`,
               );
-              // 客体回调的早期拒绝检查依据由游戏模块登记，通用层不猜任何游戏的全局布局。
+              // Game modules register early-rejection checks in guest callbacks; the generic layer never guesses game-global layouts.
               const probe = this.gameProfile.directPlay?.enumSessionsProbeAddresses;
               if (probe) {
                 console.log(
@@ -1127,16 +1117,16 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
               const desc = this.alloc(80, true);
               this.memory.write_memory(new Uint8Array(80), desc);
               this.writeU32(desc, 80); // dwSize
-              this.writeU32(desc + 4, s.sessionFlags); // dwFlags（房主的会话旗标）
+              this.writeU32(desc + 4, s.sessionFlags); // dwFlags: host session flags.
               this.memory.write_memory(guidBytes(instance), desc + 8); // guidInstance
-              this.memory.write_memory(guidBytes(s.appGuid), desc + 24); // guidApplication（游戏按此过滤）
+              this.memory.write_memory(guidBytes(s.appGuid), desc + 24); // guidApplication: the game filters by this value.
               this.writeU32(desc + 40, s.maxPlayers); // dwMaxPlayers
               this.writeU32(desc + 44, s.currentPlayers); // dwCurrentPlayers
               this.writeU32(desc + 48, name); // lpszSessionNameA
               const timeout = this.alloc(4, true);
-              this.writeU32(timeout, a[2] ?? 0); // 回传游戏传入的枚举超时
-              // LPDPENUMSESSIONSCALLBACK2(DPSESSIONDESC2*, DWORD*, 标志, 上下文)；
-              // 标志取值与理由见游戏模块登记的 enumSessionsCallbackFlags。
+              this.writeU32(timeout, a[2] ?? 0); // Return the enumeration timeout supplied by the game.
+              // LPDPENUMSESSIONSCALLBACK2(DPSESSIONDESC2*, DWORD*, flags, context);
+              // see game-registered enumSessionsCallbackFlags for values and rationale.
               argSets.push([desc, timeout, callbackFlags, context]);
             }
             if (argSets.length === 0) {
@@ -1156,16 +1146,16 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
             return { eax: 0 };
           }
           case 'InitializeConnection': {
-            // conn=null 是「用默认连接初始化」——参考环境（有 TCP/IP 的 2001 PC）
-            // 上这会成功；兼容层的「默认连接」就是未来的浏览器传输。成功后记状态。
+            // conn=null initializes the default connection; this succeeds in the reference 2001 PC environment with TCP/IP.
+            // The compatibility layer's default connection is the prospective browser transport; record state after success.
             const connPtr = a[1] ?? 0;
             if (!connPtr) {
               this.dplayConnectionInitialized = true;
               return { eax: 0 }; // DP_OK
             }
-            // 带连接参数的形式：TCP/IP 默认连接（无地址）即视为就绪；已识别但
-            // 非 TCP/IP 的 SP 停在边界；解析不出标准 DPLCONNECTION 的按游戏
-            // 自带包装对象接受（见下）。
+            // With connection parameters, a default TCP/IP connection without an address is ready; recognized
+            // non-TCP/IP service providers stop at the boundary. Objects not parseable as standard DPLCONNECTION
+            // are accepted as game-owned wrappers, as described below.
             const flags = a[2] ?? 0;
             const size = this.readU32(connPtr);
             if (size < 40) {
@@ -1181,7 +1171,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
               return { eax: 0 }; // DP_OK
             }
             if (SP_NAMES[guidSp] !== undefined) {
-              // ipx/serial/modem 或带地址的 TCP/IP：未支持的传输，停在边界并报详情。
+              // IPX/serial/modem or addressed TCP/IP connections use unsupported transports; stop at the boundary with details.
               const addrText = !address
                 ? '(null)'
                 : guidSp === DPSPGUID_TCPIP
@@ -1192,9 +1182,9 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
               this.unimplementedDetail = `InitializeConnection(SP=${SP_NAMES[guidSp]}, connFlags=${connFlagText}, addr=${addrText}, dwFlags=0x${flags.toString(16)})`;
               return null;
             }
-            // 非标准 DPLCONNECTION：游戏用自带包装对象管理连接（拿到我们枚举的
-            // 连接后自己拷贝封装，连 this 都是它的对象而非我们的）。参考环境里
-            // 这条调用必然成功；真正的传输决策到 Open/Connect 才浮现。
+            // Nonstandard DPLCONNECTION: the game manages connections through its own wrappers, copying and wrapping
+            // enumerated connections; even this refers to its object rather than ours. This call succeeds
+            // in the reference environment; actual transport selection becomes observable at Open/Connect.
             this.dplayConnectionInitialized = true;
             return { eax: 0 }; // DP_OK
           }
@@ -1205,12 +1195,12 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
       return null;
     }
 
-    /** DPLAYX.DLL 序数导入（ord4 = DirectPlayLobbyCreateA，Wine dplayx.spec）。 */
+    /** DPLAYX.DLL ordinal imports; ord4 = DirectPlayLobbyCreateA per Wine dplayx.spec. */
     protected dispatchDplayx(key: string, _name: string, a: number[]): Win32Result | null {
       switch (key) {
         case 'DPLAYX.DLL!ord4': {
           // DirectPlayLobbyCreateA(GUID*, IDirectPlayLobbyA**, IUnknown*, LPVOID, DWORD)
-          // —— 官方要求 lpGUIDDSP/lpData 为 NULL、dwDataSize 为 0（Wine dplobby.c）。
+          // Official requirements: lpGUIDDSP/lpData must be NULL and dwDataSize zero; see Wine dplobby.c.
           if (a[0] || a[3] || a[4]) {
             if (a[1]) this.writeU32(a[1], 0);
             return { eax: 0x8007_0057 }; // DPERR_INVALIDPARAM = E_INVALIDARG

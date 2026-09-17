@@ -1,7 +1,6 @@
 /**
- * NSIS 安装包解析单元测试：合成容器（真实格式布局 + LZMA 压缩，由 Python
- * lzma 生成一次后内嵌）覆盖签名定位、solid 流解码、指令流文件枚举。
- * 真实联机包（206MB）的端到端校验见 tests/real-game/smoke/ra2NsisSmoke.mts。
+ * NSIS installer parsing unit tests: a synthetic container (real format layout and LZMA compression, generated once with Python lzma and embedded) covers signature discovery, solid-stream decoding, and instruction-stream file enumeration.
+ * End-to-end validation of the real 206 MB multiplayer package is in tests/real-game/smoke/ra2NsisSmoke.mts.
  */
 import { describe, expect, it } from 'vitest';
 import { decodeLzmaStream } from '../../src/utils/archive/lzmaDecode';
@@ -13,14 +12,13 @@ import {
 } from '../../src/utils/archive/nsis';
 
 /**
- * 合成容器内容（真实 NSIS 布局）：[MZ stub][16B 签名][u32 头长][u32 归档长][LZMA 流]。
- * 解码输出 = [u32 头长][头块][每文件 u32 长度 + 数据]；指令流含两条
- * SetOutPath（rmcache → 空）与三条 ExtractFile，覆盖目录前缀切换与嵌套路径。
+ * Synthetic container using the real NSIS layout: [MZ stub][16B signature][u32 header length][u32 archive length][LZMA stream].
+ * Decoded output = [u32 header length][header block][u32 length + data per file]. The instruction stream contains two SetOutPath operations (rmcache -> empty) and three ExtractFile operations, covering directory-prefix switching and nested paths.
  */
 const FIXTURE_BASE64 =
   'TVoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADvvq3eTnVsbHNvZnRJbnN0/wAAAH8AAABdAAAABAB/gDAQD4WorOPiHWz0K92CiLCUH5X1CmM3pCWksvr2jnsQVFtyaglX6+g0w5uS5ElD7VdCVl9qFdIfA0xt6YAle8QiYgsj02jjJHioRVvfj/Xp7OQkICZa+K9ThOgYUE/ggzn4mkjr8g97CHuzfAMoAo+iaf/81OqA';
 const FIXTURE = Uint8Array.from(atob(FIXTURE_BASE64), (char) => char.charCodeAt(0));
-/** 合成解码输出的总长度（4 头长 + 头 + 数据）。 */
+/** Total synthetic decoded length (4-byte header length + header + data). */
 const DECODED_LENGTH = 298;
 
 describe('NSIS 安装包解析', () => {
@@ -28,7 +26,7 @@ describe('NSIS 安装包解析', () => {
     const info = findNsisArchive(FIXTURE);
     expect(info).not.toBeNull();
     expect(info!.headerSize).toBe(255);
-    // stub 128 + 签名 16 + 头长 4 + 归档长 4
+    // 128-byte stub + 16-byte signature + 4-byte header length + 4-byte archive length
     expect(info!.streamStart).toBe(128 + 16 + 8);
   });
 
@@ -70,10 +68,9 @@ describe('NSIS 安装包解析', () => {
 
 describe('NSIS 两段流变体（重打包安装器）', () => {
   /**
-   * 合成容器（与 YR jb51 安装器同构，Python lzma 生成一次后内嵌）：
-   * [MZ stub][签名][u32 头长][4 字节 junk][头流 props 在 junk 后] + [00 80 分隔]
-   * + 每文件独立 LZMA 流。头块 = flags-first（u32 标志 + 8 块头），
-   * EW_EXTRACTFILE 的 params[2] = 各流相对首个数据流的偏移。
+   * Synthetic container matching the YR jb51 installer layout, generated once with Python lzma and embedded:
+   * [MZ stub][signature][u32 header length][4 junk bytes][header-stream properties after junk] + [00 80 separator] + independent LZMA streams per file.
+   * The header block is flags-first (u32 flags + 8 block headers); EW_EXTRACTFILE params[2] holds each stream's offset relative to the first data stream.
    */
   const SPLIT_BASE64 =
     'TVoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADvvq3eTnVsbHNvZnRJbnN0kQAAAAECAwRdAACAAABAgC9uRIQwFz4PbvEA4FcKUtnWsSRLtLM+u+RZyeK0Ur2TwzsFM0i74dj/v//mBYAAAIBdAACAAAAmloktFqDa2/6nDTo2Ig43peOxOf6ZEf/HxIAAAIBdAACAAAAoEsktFqDa2/6nDTo2JVjHpeOxOf6ZEf/HxIAA';
@@ -96,11 +93,8 @@ describe('NSIS 两段流变体（重打包安装器）', () => {
 
 describe('NSIS 两段流：单条损坏不中断后续文件', () => {
   /**
-   * 合成容器（与上例同构、python lzma 生成一次后内嵌）：firstheader 带
-   * flags/siginfo，三个 EW_EXTRACTFILE 指向三条独立流；file2 的流尾
-   * （含 EOS 结尾）被截掉，解码必报 corrupted input。对应共享提取器的
-   * 实际缺陷：YR jb51 安装器 movies01.mix 的桩流损坏，曾导致其后必需的
-   * ra2md.mix 整体没解出。
+   * Synthetic container matching the preceding layout, generated once with Python lzma and embedded: firstheader contains flags/siginfo, and three EW_EXTRACTFILE instructions reference independent streams.
+   * file2's stream tail (including EOS) is truncated, so decoding must report corrupted input. This reproduces a shared-extractor bug: the YR jb51 installer's corrupt movies01.mix stub stream previously prevented extraction of the later required ra2md.mix.
    */
   const BROKEN_SPLIT_BASE64 =
     'TVoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA776t3u++rd5OdWxsc29mdEluc3S3AAAAnQAAAF0AAIAAAABuAIx7HhLqHOJW+I3JgaBLjDwFh9Yg9Fe4MIJ8/aoYtAgL2FOVfOqkvy5CLmfZkCv//7OuAABdAACAAAAmloktFqDa2/6nDTo2Ig43peOxOf6ZEf/HxIAAXQAAgAAAKBLJLRag2tv+pw06NiVYx6XjsTn+mV0AAIAAACgSyS0WoNrb/qcNOjYoo1el47E5/pkR/8fEgAA=';

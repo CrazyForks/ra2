@@ -12,8 +12,9 @@ type Request = {
 type Result = Uint8Array | { bytes: Uint8Array; totalSize: number } | string[] | null | void;
 type Response = { id: number; value?: Result; error?: string };
 
-/** Worker 通过独立端口按需读取主线程 provider，不把未解压资源做成空文件，
- * 也不在 init 复制完整资源包。provider 的 read 返回独立缓冲，才能安全 transfer。 */
+/**
+ * The Worker reads the main-thread provider on demand through a dedicated port; unextracted resources must not become empty files, and init must not copy the entire package. Provider reads must return independently owned buffers for safe transfer.
+ */
 export function serveFileProvider(provider: GameFileProvider, port: MessagePort): () => void {
   let closed = false;
   port.onmessage = async (event: MessageEvent<Request>) => {

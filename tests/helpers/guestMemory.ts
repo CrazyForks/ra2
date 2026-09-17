@@ -1,6 +1,5 @@
 /**
- * 单测用假客体内存：一块普通 Uint8Array 实现 GuestMemory 接口，
- * 让 Win32Shim 可以脱离 v86 直接做 dispatch 级单元测试。
+ * Fake guest memory for unit tests: a plain Uint8Array implements GuestMemory so Win32Shim can run dispatch-level tests without v86.
  */
 import type { GuestMemory } from '../../src/vm86/win32';
 import type { PeImport, Win32Call, Win32Result } from '../../src/vm86/win32';
@@ -26,7 +25,7 @@ export function createGuestMemory(size = 16 * 1024 * 1024): FakeGuestMemory {
   };
 }
 
-/** 堆 arena 收窄的 shim 选项：默认 16MB 假内存即可容纳全部测试分配。 */
+/** Shim options with a smaller heap arena: the default 16 MB fake memory fits all test allocations. */
 export function createTestShim(
   memory: FakeGuestMemory,
   options: Win32ShimOptions & { gameId?: 'ra2' | 'yr' } = {},
@@ -44,7 +43,7 @@ export function createTestShim(
   });
 }
 
-/** 直接以导入 key 发起一次 dispatch（绕过 IAT/栈，只测语义层）。 */
+/** Dispatch directly by import key, bypassing the IAT/stack to test only semantics. */
 export function callShim(shim: Win32Shim, key: string, args: number[] = [], stack = 0): Win32Result {
   const bang = key.indexOf('!');
   const imported: PeImport = {

@@ -1,107 +1,80 @@
-# 架构要求
+# Architecture requirements
 
-通用机制独立复用，游戏差异显式注入，会话负责生命周期，依赖边界由测试验证。
+Keep generic mechanisms independently reusable, inject game differences explicitly, let sessions own lifecycles, and verify dependency boundaries with tests.
 
-本文展开 [仓库协作规范](../AGENTS.md) 中的架构约束，供功能设计、重构和其他游戏
-接入时审查。当前实现与数据流见 [架构设计](ARCHITECTURE.md)；这里不记录实验进度，
-也不表示所有游戏或渲染能力已经得到支持。
+This guide expands the architecture constraints in [Repository collaboration rules](../AGENTS.md) for feature design, refactoring, and integration of other games. See [Architecture](ARCHITECTURE.md) for current implementation and data flow. This document neither tracks experimental progress nor claims support for every game or rendering capability.
 
-## 1. 按职责分层，持续抽取通用能力
+## 1. Organize by responsibility and extract reusable capabilities
 
-新增或修改功能时，主动识别可供其他游戏复用的机制。模块归属同时考虑职责、依赖和
-生命周期；与具体游戏无关的代码，也可能属于资源、呈现或平台层。
+When adding or changing features, actively identify mechanisms reusable by other games. Module placement must consider responsibility, dependencies, and lifecycle. Code independent of a particular game may still belong to resources, presentation, or the platform.
 
-| 层级                    | 职责                                               |
-| ----------------------- | -------------------------------------------------- |
-| `src/utils/`            | 解压、摘要、路径处理、异步队列、内存比较等通用能力 |
-| `src/resources/`        | 文件契约、provider、覆盖层和资源发现               |
-| `src/platform/browser/` | 浏览器文件访问、存储和宿主设施                     |
-| `src/vm86/`             | CPU、PE、Win32/DirectX 等通用运行机制              |
-| `src/games/`            | 游戏识别、资源规则、ABI、固定地址和版本补丁        |
-| `src/adapter/`          | VM 编排、Worker 通信与能力组装                     |
-| `src/app/session/`      | 会话启动、停止、切换、失败处理与销毁               |
-| `src/graphics/`         | 帧呈现、后处理、显示调度与 GPU 资源                |
-| `src/ui/`               | 用户交互与状态展示                                 |
-| `packages/relay/`       | 独立、通用的联机中继及线协议                       |
+| Layer                   | Responsibility                                                                 |
+| ----------------------- | ------------------------------------------------------------------------------ |
+| `src/utils/`            | Generic extraction, hashing, paths, asynchronous queues, and memory comparison |
+| `src/resources/`        | File contracts, providers, overlays, and resource discovery                    |
+| `src/platform/browser/` | Browser file access, storage, and host facilities                              |
+| `src/vm86/`             | Generic CPU, PE, Win32, and DirectX runtime mechanisms                         |
+| `src/games/`            | Game detection, resource rules, ABI, fixed addresses, and version patches      |
+| `src/adapter/`          | VM orchestration, Worker communication, and capability composition             |
+| `src/app/session/`      | Session startup, shutdown, switching, failure handling, and destruction        |
+| `src/graphics/`         | Frame presentation, postprocessing, display scheduling, and GPU resources      |
+| `src/ui/`               | User interaction and status presentation                                       |
+| `packages/relay/`       | Independent generic multiplayer relay and wire protocol                        |
 
-`adapter` 和 `utils` 都不能成为无法归类代码的收容目录。工具按能力分组，例如
-`utils/archive/`；调用方直接导入具体模块，不通过大聚合入口拉入无关实现。
+Neither `adapter` nor `utils` is a dumping ground for unclassified code. Group utilities by capability, such as `utils/archive/`. Callers import specific modules directly instead of pulling unrelated implementations through a broad barrel entry point.
 
-## 2. 游戏差异通过配置或接口注入
+## 2. Inject game differences through configuration or interfaces
 
-通用层不得硬编码特定游戏的文件名、资源归位规则、地址或行为。游戏差异应集中到
-游戏模块，通过清单、配置或接口传给通用机制。
+Generic layers must not hardcode game-specific filenames, resource placement rules, addresses, or behavior. Keep differences in game modules and pass them to generic mechanisms through manifests, configuration, or interfaces.
 
-例如，解压器负责格式识别、提取和进度；资源白名单、启动层划分和红警嘲讽语音
-归位由游戏加载层提供。新增游戏时优先扩展游戏模块和能力组装；需要修改公共机制时，
-应说明新增能力的通用契约，而不是在内部增加游戏名称分支。
+For example, extractors own format detection, extraction, and progress. The game-loading layer supplies resource allowlists, startup-layer partitioning, and Red Alert taunt-audio placement. Prefer extending game modules and capability composition when adding a game. Changes to shared mechanisms must define a reusable contract instead of adding internal branches by game name.
 
-## 3. 依赖方向保持清晰
+## 3. Keep dependency direction explicit
 
-- `utils` 不反向依赖游戏、应用、UI 或其他业务模块。
-- 通用 VM 不依赖具体游戏或浏览器实现。
-- 纯文件 provider 不依赖浏览器存储与 VM 执行实现。
-- 呈现层不读取游戏固定地址，游戏策略不依赖 UI。
-- relay 不理解游戏事件、资源或单位，不导入应用和游戏模块。
+- `utils` must not depend back on games, the application, UI, or other business modules.
+- The generic VM must not depend on specific games or browser implementations.
+- Pure file providers must not depend on browser storage or VM execution implementations.
+- Presentation must not read fixed game addresses; game policies must not depend on UI.
+- The relay must not interpret game events, resources, or units, or import application/game modules.
 
-公共实现只有在契约一致时才共享。RA2/YR 的固定地址、ABI 和版本补丁保持隔离；
-不能通过扩大依赖测试白名单或转发入口隐藏越层依赖。
+Share implementations only when contracts match. Keep RA2/YR fixed addresses, ABI, and version patches separate. Do not hide boundary violations by widening dependency-test allowlists or adding forwarding entry points.
 
-## 4. 资源访问保留完整语义
+## 4. Preserve complete resource semantics
 
-必须区分未知、缺失、零字节、读取失败和仍在加载。覆盖顺序、目录作用域、写入目标
-及缓存所有权必须明确，主线程与 Worker 遵守同一契约。
+Distinguish unknown, missing, zero-byte, failed reads, and still-loading files. Make override order, directory scope, write destination, and cache ownership explicit. Main-thread and Worker paths must follow the same contract.
 
-会话设置通过 overlay 修改，原始素材和共享 EXE 缓存保持独立。后台解压失败必须
-传递给会话，不能发布不完整缓存或把尚未解出的文件当成空文件。缓冲转移必须使用
-明确移交所有权的独占副本。
+Apply session settings through overlays, keeping original assets and shared executable caches independent. Background extraction failures must reach the session. Never publish incomplete caches or treat unextracted files as empty. Buffer transfer requires exclusive copies with explicit ownership handoff.
 
-## 5. 主线程与 Worker 使用一致的业务策略
+## 5. Use the same game policies on the main thread and in Workers
 
-线程切换不能改变游戏识别、资源覆盖、设置或错误处理。跨线程只传递明确的数据、
-端口和独占缓冲，不传闭包，不 transfer 客体 WASM 内存或共享缓存。
+Changing threads must not change game detection, resource precedence, settings, or error handling. Transfer only explicit data, ports, and exclusive buffers across threads. Do not transfer closures, guest WASM memory, or shared caches.
 
-暂时仅支持主线程的实验必须显式限制入口并说明未验证范围；正式支持不能依赖
-某一条执行路径恰好表现正确。
+Experiments temporarily limited to the main thread must constrain their entry point explicitly and document unverified scope. Production support cannot depend on one execution path happening to behave correctly.
 
-## 6. 生命周期和资源所有权可追踪
+## 6. Make lifecycle and resource ownership traceable
 
-每个 Worker、端口、计时器、监听器、音频对象、位图和 GPU 资源，都必须明确创建者、
-持有者和释放者，并覆盖正常退出、取消、失败及重开的清理路径。
+Every Worker, port, timer, listener, audio object, bitmap, and GPU resource needs an explicit creator, holder, and disposer. Cover cleanup for normal exit, cancellation, failure, and reopening.
 
-会话控制器统筹 VM 和外围任务。工具可以拥有单次任务的 Worker，但应提供相应的
-取消和完成清理机制；迟到的异步结果不能复活旧会话或覆盖新会话。
+The session controller coordinates the VM and surrounding tasks. Utilities may own a Worker for one task but must support cancellation and completion cleanup. Late asynchronous results must not revive an old session or overwrite a new one.
 
-普通界面由单一 React 树管理。VM 内存、逐帧数据、高频输入和音频由专门控制器持有，
-不逐次写入 React state。
+A single React tree owns ordinary UI. Dedicated controllers own VM memory, per-frame data, frequent input, and audio; these must not be written repeatedly into React state.
 
-## 7. 原生兼容行为有证据
+## 7. Ground native compatibility behavior in evidence
 
-项目执行原版程序，兼容层应准确承接客体行为。未知调用不能猜测成功；补丁必须
-核对目标版本和指令签名，固定地址和解释放入对应游戏模块。
+The project executes original programs, so compatibility layers must accurately handle guest behavior. Unknown calls cannot be assumed successful. Patches must verify the target version and instruction signatures; fixed addresses and explanations belong in the corresponding game module.
 
-不能通过修改时钟、伪造资源、模拟输入或跳过判负让测试通过。逆向证据应保留，
-并说明适用版本和边界；局部兼容修复不能被表述为上游问题已彻底解决。
+Do not make tests pass by changing clocks, fabricating resources, simulating input, or skipping defeat checks. Preserve reverse-engineering evidence and identify applicable versions and limits. A local compatibility fix must not be described as a complete resolution of an upstream defect.
 
-## 8. 渲染增强与游戏模拟解耦
+## 8. Decouple rendering enhancements from game simulation
 
-高清素材提供更多源细节，超分重建或插值已有画面，后处理调整最终颜色；各自的
-输入、输出和支持范围应明确。显示分辨率可以提高，单位逻辑尺寸、坐标及模拟速度
-保持一致。
+High-resolution assets provide additional source detail, upscaling reconstructs or interpolates existing frames, and postprocessing adjusts final colors. Specify each feature's inputs, outputs, and support boundaries. Display resolution may increase while logical unit sizes, coordinates, and simulation speed stay consistent.
 
-通用渲染器消费明确的绘制数据，游戏层解释原生绘制信息。增强功能应有关闭路径，
-缺少完整动画、遮挡、队伍色或光照支持时明确实验边界。实验模型从开发入口加载，
-生产包不能引入 ORT 或实验模型 Worker。
+Generic renderers consume explicit drawing data; game layers interpret native drawing information. Enhancements need an off switch. Clearly describe experimental limits when animation, occlusion, team colors, or lighting are incomplete. Load experimental models through development entry points; production bundles must not include ORT or experimental model Workers.
 
-## 9. 架构约束落实到验证
+## 9. Enforce architecture through verification
 
-抽取能力时同步迁移导入、Worker URL、WASM 与第三方资源路径、测试和文档，保留
-许可及来源说明。目录移动后还要确认业务策略已分离，错误语义和销毁路径保持一致。
+When extracting capabilities, migrate imports, Worker URLs, WASM and third-party resource paths, tests, and documentation together. Preserve licenses and provenance. After directory moves, verify that game policies are separated and that error semantics and destruction paths remain consistent.
 
-依赖方向由 `tests/basic/architecture/dependencies.test.ts` 检查。代码改动至少运行
-`pnpm run check`，并按 [测试指南](TESTING.md) 补充对应回归；提交前执行全仓
-`pnpm run format:check`。格式通过不能替代行为验证。
+`tests/basic/architecture/dependencies.test.ts` checks dependency direction. Code changes require at least `pnpm run check` plus relevant regressions from [Testing](TESTING.md). Run repository-wide `pnpm run format:check` before committing. Formatting does not replace behavioral validation.
 
-公共准入不依赖私有素材或隐式下载 EXE，真实游戏验证单独执行。缺资源、跳过、崩溃
-和超时不算通过。性能结论需要同场景对照，微基准和短时截图不能证明整局性能或
-长局稳定性；真实游戏 CI 的信任边界见 [CI 配置](REAL_GAME_CI.md)。
+Public acceptance must not require private assets or implicitly download executables; run real-game validation separately. Missing resources, skips, crashes, and timeouts do not count as passes. Performance conclusions need comparisons in the same scenario. Microbenchmarks and brief screenshots cannot establish full-match performance or long-match stability. See [Real-game CI](REAL_GAME_CI.md) for trust boundaries.

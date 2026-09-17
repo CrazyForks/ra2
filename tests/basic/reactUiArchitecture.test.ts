@@ -2,7 +2,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, resolve, sep } from 'node:path';
 import { expect, it } from 'vitest';
 
-/** 防止后续功能退回“多个 root + 手动创建 UI”的桥接方式。 */
+/** Prevent future features from reverting to multiple roots and manually constructed UI bridges. */
 it('只有入口创建 React 根，普通 UI 与服务不拼 DOM', () => {
   const walk = (directory: string): string[] =>
     readdirSync(directory, { withFileTypes: true }).flatMap((entry) =>

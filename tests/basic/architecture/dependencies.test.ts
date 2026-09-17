@@ -3,7 +3,7 @@ import { dirname, relative, resolve } from 'node:path';
 import ts from 'typescript';
 import { expect, it } from 'vitest';
 
-/** AST 检查静态/动态导入、再导出与类型引用；不把注释和普通字符串误判为依赖。 */
+/** Use the AST to check static/dynamic imports, re-exports, and type references without mistaking comments or ordinary strings for dependencies. */
 function imports(source: string): string[] {
   const file = ts.createSourceFile('module.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const result: string[] = [];
@@ -33,7 +33,7 @@ function imports(source: string): string[] {
   visit(file);
   return result;
 }
-/** 代码中的字符串字面量。AST 不含注释，因此说明文字不会被当成硬编码。 */
+/** String literals in code. The AST excludes comments, so explanatory prose is not treated as hardcoding. */
 function stringLiterals(source: string): string[] {
   const file = ts.createSourceFile('module.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const result: string[] = [];
@@ -81,8 +81,8 @@ it('通用 VM 不反向依赖游戏、应用、浏览器实现或 UI', () => {
 });
 
 it('通用层不按游戏资源键或 EXE 名分支', () => {
-  // 通用 shim 只消费 gameProfile 声明的能力：页标题键、EXE 名与专属 DLL 名
-  // 属于各游戏模块。字面量出现在 vm86 的代码里说明分层被绕过（注释不计入）。
+  // The generic shim only consumes capabilities declared by gameProfile: page-title keys, EXE names, and dedicated DLL names
+  // belong to individual game modules. Such literals in vm86 code indicate a layering bypass (comments are excluded).
   const forbidden = /^(?:campaignmenu|mainmenu|gui:[a-z]+|game\.exe|gamemd\.exe|ra2(?:md)?\.exe|xwis\.dll)$/i;
   for (const file of walk(resolve('src/vm86')))
     for (const literal of stringLiterals(readFileSync(file, 'utf8')))
@@ -90,16 +90,16 @@ it('通用层不按游戏资源键或 EXE 名分支', () => {
 });
 
 it('RA2 不引用 YR，YR 只按登记继承 RA2 的公共表', () => {
-  // YR = RA2 + 增量：yr 展开 ra2 的公共 ABI 与 shim profile 是登记过的继承，
-  // 反向引用会把 gamemd.exe 专属地址带回 game.exe 的补丁与页面直达路径。
+  // YR = RA2 + additions: spreading RA2's shared ABI and shim profile into YR is registered inheritance.
+  // A reverse dependency would bring gamemd.exe-specific addresses into game.exe patches and direct-page startup paths.
   for (const file of walk(resolve('src/games/ra2')))
     for (const specifier of imports(readFileSync(file, 'utf8')))
       expect(dependency(file, specifier), `${relative('.', file)} → ${specifier}`).not.toMatch(/^src\/games\/yr\//);
   for (const file of walk(resolve('src/games/yr')))
     for (const specifier of imports(readFileSync(file, 'utf8'))) {
       const target = dependency(file, specifier);
-      // yr 只允许继承 ra2 的公共 ABI 与 shim profile；其余 ra2 路径（页面直达、
-      // 补丁、探针）都属于 game.exe 的实现，不能被 gamemd.exe 直接复用。
+      // YR may inherit only RA2's shared ABI and shim profile. Other RA2 paths (direct-page startup,
+      // patches, and probes) implement game.exe behavior and cannot be reused directly by gamemd.exe.
       if (target === 'src/games/ra2' || target.startsWith('src/games/ra2/'))
         expect(['src/games/ra2/abi', 'src/games/ra2/profile'], `${relative('.', file)} → ${specifier}`).toContain(
           target,
@@ -111,7 +111,7 @@ it('纯文件 provider 不依赖游戏识别、浏览器存储、VM 实现或 Re
   for (const file of walk(resolve('src/resources/providers')))
     for (const specifier of imports(readFileSync(file, 'utf8'))) {
       const target = dependency(file, specifier);
-      // 客体路径算法是纯函数；provider 不应为它导入 Win32 门面和 shim 状态。
+      // Guest path algorithms are pure functions; providers should not import the Win32 facade or shim state to use them.
       expect(target, `${relative('.', file)} → ${specifier}`).toMatch(
         /^src\/(?:resources\/(?:contracts$|providers\/)|vm86\/paths$)/,
       );

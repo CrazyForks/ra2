@@ -7,7 +7,7 @@ interface KeyboardLock {
 
 let controllerGeneration = 0;
 
-/** 只在游戏全屏时捕获真实 Esc；解锁事件没有按键来源信息，绝不能据此伪造 Esc。 */
+/** Capture real Esc only during game fullscreen; unlock events do not identify a source key and must never synthesize Esc. */
 export function installFullscreenKeyboardLock(
   canvas: HTMLCanvasElement,
   report: (state: KeyboardLockState) => void,
@@ -33,10 +33,10 @@ export function installFullscreenKeyboardLock(
     void (async () => {
       try {
         await keyboard.lock(['Escape']);
-        // 换游戏后旧 VM 的权限结果不得解除新 VM 的键盘锁。
+        // A previous VM's permission result must not unlock the new VM's keyboard after switching games.
         if (generation !== controllerGeneration) return;
-        // 权限弹窗可能在退出全屏或销毁 VM 后才结束；不得遗留键盘锁。
-        // 旧请求也不能 unlock 后来进入全屏的新请求。
+        // Permission dialogs may finish after fullscreen exit or VM destruction; leave no keyboard lock behind.
+        // Old requests must not unlock newer fullscreen requests either.
         if (disposed || !isFullscreen()) keyboard.unlock();
         else if (revision === request) report('active');
       } catch {

@@ -22,7 +22,7 @@ describe('启动用户名 INI 内存覆盖', () => {
     expect(validateMultiplayerName(' HostOne ')).toBe('HostOne');
     expect(validateMultiplayerName('中国')).toBe('中国');
     expect(validateMultiplayerName('中国玩家')).toBe('中国玩家');
-    // 15 字节上限：16 个 ASCII 或 8 个汉字（16 字节）都超长；emoji 不在 GBK 代码页。
+    // 15-byte limit: 16 ASCII characters or 8 Chinese characters (16 bytes) are too long; emoji are outside the GBK code page.
     for (const value of ['', 'a'.repeat(16), '汉'.repeat(8), 'x\n[Video]', '\t', '😀']) {
       expect(() => validateMultiplayerName(value)).toThrow();
     }

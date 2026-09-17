@@ -1,4 +1,4 @@
-/** 只收回页面已替换的独立帧，绝不接收客体 WASM 内存。限制数量与尺寸，避免分辨率切换积压。 */
+/** Reclaim only independent frames already replaced by the page, never guest WASM memory. Bound count and size to avoid backlog when resolution changes. */
 export class FrameBufferPool {
   private buffers: ArrayBuffer[] = [];
   release(buffer: ArrayBuffer): void {

@@ -324,7 +324,7 @@ export class VmWorkerController {
     this.inFlightFrameId = 0;
   }
 
-  /** 按 init 消息重建文件后端：目录句柄（可带在线包叠加层）、会话包内存文件或 dev HTTP。 */
+  /** Rebuild the file backend from init: directory handles with optional online overlays, session-package memory files, or development HTTP. */
   private buildProvider(config: VmInitConfig): GameFileProvider {
     if (config.provider.kind === 'port') {
       return (this.portFiles = new PortGameFileProvider(
@@ -334,8 +334,8 @@ export class VmWorkerController {
       ));
     }
     if (config.provider.kind === 'memory') {
-      // 会话包（在线 ZIP）文件随 init 消息 transfer 进 worker：直接重建内存
-      // provider（deepDiscovery），存档写回同源 IndexedDB（与页面侧同库）。
+      // Session-package (online ZIP) files transfer into the Worker with init; directly rebuild the memory
+      // provider with deepDiscovery and persist saves to the same-origin IndexedDB shared with the page.
       return new SessionGameFileProvider(
         config.provider.label,
         new Map(config.provider.files.map((entry) => [entry.path, entry.bytes])),
@@ -345,7 +345,7 @@ export class VmWorkerController {
       const base = new DirectoryGameFileProvider(config.provider.handle);
       const overlays = config.provider.overlays ?? [];
       if (!overlays.length) return base;
-      // 在线包叠加层只补缺：已授权本地目录优先（中文资源等），写入仍落目录后端。
+      // Online-package overlays only fill gaps: authorized local directories take precedence, including Chinese resources; writes still use the directory backend.
       return new OverlayGameFileProvider(
         base,
         new Map(overlays.map((entry) => [entry.path, entry.bytes])),
@@ -368,8 +368,8 @@ export class VmWorkerController {
       ? this.dependencies.createProvider(config)
       : this.buildProvider(config);
     if (config.selectedExecutable) {
-      // 必须在 discover 前覆盖，而不是仅替换 executableBytes：发现、PE 装载和
-      // 客体以后读自己的 EXE 都需要一致。禁止 parent-first 退回旧版文件。
+      // Overlay before discovery, not merely by replacing executableBytes: discovery, PE loading,
+      // and later guest reads of its own EXE must agree. Never fall back to old files through parent-first lookup.
       provider = new OverlayGameFileProvider(
         provider,
         new Map([[config.selectedExecutable.path, config.selectedExecutable.bytes]]),

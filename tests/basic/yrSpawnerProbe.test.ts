@@ -10,7 +10,7 @@ import { rvaToOff } from '../../src/vm86/pe';
 import { createGuestMemory } from '../helpers/guestMemory';
 import { withGuestMachine, PROGRAM, le32, finish } from '../helpers/guestMachine';
 
-// 单测夹具不依赖游戏文件；有本地主程序缓存时另行核验真实 EXE 的指令。
+// Unit fixtures require no game files; separately verify real EXE instructions when a local executable cache exists.
 const original = [
   0x8b, 0x35, 0xd0, 0xc1, 0x81, 0, 0xb9, 0xfe, 0xff, 0xff, 0xff, 0xe8, 0xdb, 0xb8, 0xdb, 0xff, 0x6a, 0x28, 0xe8, 0x3b,
   0xb6, 0x10, 0, 0x83,
@@ -44,7 +44,7 @@ describe('YR Spawner 客体探针', () => {
       const probe = installYrSpawnerProbe(m.memory, hash, () => scratch);
       m.write(0x81c1d0, 0x12345678);
       const result = 0x310000;
-      // continuation 保存完整 pushfd/pushad 现场；复制期间的寄存器修改由 pop 恢复。
+      // The continuation saves the complete pushfd/pushad context; pops restore register changes made during copying.
       m.code(site + 6, [
         0x9c,
         0x60,
@@ -73,7 +73,7 @@ describe('YR Spawner 客体探针', () => {
       ]) {
         code.push(opcode!, ...le32(value!));
       }
-      code.push(0x39, 0xc0, 0xf9); // cmp eax,eax / stc：CF、ZF、PF 为 1
+      code.push(0x39, 0xc0, 0xf9); // cmp eax,eax / stc: CF, ZF, and PF are 1
       code.push(0x89, 0x25, ...le32(result + 40), 0x9c, 0x8f, 0x05, ...le32(result + 44));
       for (let i = 0; i < 2; i++) code.push(0xe8, ...le32(site - (PROGRAM + code.length + 5)));
       code.push(...finish);

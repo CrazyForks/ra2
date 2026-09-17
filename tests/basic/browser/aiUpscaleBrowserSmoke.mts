@@ -1,14 +1,14 @@
 import { preventThirdPartyDownloads } from '../../helpers/offlineBrowser';
-/** 真实 CNN shader 与独立 CPU 参考对照，不依赖游戏资源或模型 CDN。 */
+/** Compare real CNN shaders against an independent CPU reference without game assets or a model CDN. */
 import assert from 'node:assert/strict';
 import { chromium } from '@playwright/test';
 
 const browser = await chromium.launch({ args: ['--no-sandbox', '--enable-unsafe-swiftshader'] });
 try {
-  const page = await browser.newPage({ ignoreHTTPSErrors: true });
+  const page = await browser.newPage({ locale: 'zh-CN', ignoreHTTPSErrors: true });
   await preventThirdPartyDownloads(page);
   await page.goto(process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15174/');
-  // 等页面服务初始化完毕，再用独立渲染器发布测试状态，避免首屏状态覆盖测试值。
+  // Wait for page-service initialization before publishing test state through an independent renderer, so initial page state cannot overwrite it.
   await page.getByRole('button', { name: '↓ 没有游戏文件？点击下载', exact: true }).waitFor();
   const result = await page.evaluate<{
     detail: string;
@@ -59,7 +59,7 @@ try {
       renderer.draw(other,14,10);const data=read();
       for(let i=0;i<data.length;i++)formatError=Math.max(formatError,Math.abs(actual[i]-data[i]));
     }
-    // 独立解释固定权重矩阵；CPU 图像为从上到下，GLSL mat4 常量按列排列。
+    // Interpret the fixed weight matrix independently; CPU images run top to bottom, while GLSL mat4 constants are column-major.
     let values=Float64Array.from(rgba,v=>v/255);
     for(const block of model.split('//!DESC ').slice(1,5)){
       const terms=[...block.matchAll(/mat4\\(([^)]+)\\) \\* go_([01])\\((-?[\\d.]+), (-?[\\d.]+)\\)/g)]
@@ -95,7 +95,7 @@ try {
         if(Math.abs(value-Math.round(source))>2)learnedDifferences++;
       }
     }
-    // 1:1 旁路必须回到原像素，不能混入缓存的 AI 输出。
+    // The 1:1 bypass must restore original pixels without mixing in cached AI output.
     canvas.width=width;canvas.height=height;renderer.draw(frame,width,height);const bypass=read();
     await updateUpscaleIndicator(renderer.upscaleStatus);
     const waitingIndicator=!indicator.hidden&&indicator.textContent.includes('放大不足');
@@ -105,7 +105,7 @@ try {
     }
     canvas.width=14;canvas.height=10;renderer.draw(frame,14,10);
     draws=0;renderer.draw(frame,14,10,{x:3,y:2,visible:true});const pointerDraws=draws;
-    // 计时包含同步回读，强制消费 GPU 结果，避免浏览器丢弃未观察的绘制。
+    // Include synchronous readback in timing to consume GPU results and prevent the browser from discarding unobserved draws.
     const perf={width:320,height:240,pixels:new Uint8Array(),palette:new Uint8Array(),rgb565:new Uint16Array(320*240)};
     for(let i=0;i<perf.rgb565.length;i++)perf.rgb565[i]=(i*31)&65535;
     canvas.width=640;canvas.height=480;
@@ -114,7 +114,7 @@ try {
     for(let i=0;i<5;i++){
       const start=performance.now();renderer.draw({...perf},640,480);read();samples.push(performance.now()-start);
     }
-    // 同一帧、同一上下文反复切模型，验证真实 shader 不残留旧纹理或缓存。
+    // Repeatedly switch models for the same frame/context, verifying real shaders retain no stale textures or caches.
     canvas.width=14;canvas.height=10;
     const switches=[];
     for(const mode of ['off','bicubic','gan','fast','off','fast']) {

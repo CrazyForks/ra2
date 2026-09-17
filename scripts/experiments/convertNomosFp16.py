@@ -1,4 +1,4 @@
-"""把已验证的 Nomos ONNX 转为 FP16；末端重排保留 FP32 以兼容 WASM。"""
+"""Convert verified Nomos ONNX to FP16; keep the final rearrangement in FP32 for WASM compatibility."""
 import argparse
 import hashlib
 from pathlib import Path

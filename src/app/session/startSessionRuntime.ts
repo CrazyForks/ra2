@@ -1,6 +1,6 @@
 import type { SessionRuntime } from './runtime';
 
-/** 统一处理启动失败与清理；不依赖页面、React 或具体 VM 工厂。 */
+/** Centralize startup-failure handling and cleanup without depending on pages, React, or a specific VM factory. */
 export async function startSessionRuntime<T extends SessionRuntime>(
   start: () => Promise<T | null>,
   onStartupError: (error: unknown, detail: string) => void,

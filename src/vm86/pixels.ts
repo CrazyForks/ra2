@@ -1,4 +1,4 @@
-/** 小端 RGBA 查表；位复制与原有帧输出一致，避免 CPU/GPU 路径出现色差。 */
+/** Little-endian RGBA lookup; bit replication matches existing frame output to prevent CPU/GPU color differences. */
 export const RGB565_TO_RGBA32 = new Uint32Array(0x10000);
 for (let i = 0; i < 0x10000; i++) {
   const r = (i >>> 11) & 31,

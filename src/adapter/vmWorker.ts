@@ -6,7 +6,7 @@ interface WorkerScope {
   onmessage: ((event: MessageEvent<MainToWorkerMessage>) => void) | null;
 }
 
-// `self` 只在真正运行于 Dedicated Worker 时存在，避免在 Node 测试环境误触。
+// self exists only in an actual Dedicated Worker; avoid activating this in Node tests.
 if (typeof self !== 'undefined') {
   installVmWorker(self as unknown as WorkerScope);
 }

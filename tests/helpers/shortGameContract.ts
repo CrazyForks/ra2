@@ -4,7 +4,7 @@ import { YR_RUNTIME_HOOKS } from '../../src/games/yr/runtimeHooks';
 import { createGuestMemory } from './guestMemory';
 import { call32, finish, le32, PROGRAM, store32, withGuestMachine } from './guestMachine';
 
-/** 单元与真实 EXE 共用断言，差别只在指令来源；公共 CI 不读取或下载游戏。 */
+/** Unit tests and real EXE tests share assertions, differing only in instruction sources; public CI neither reads nor downloads games. */
 export function describeShortGameContract(readBytes: (address: number, size: number) => Uint8Array): void {
   const address = 0x4e4a9c;
   const original = Uint8Array.from(readBytes(address, 55));
@@ -36,7 +36,7 @@ export function describeShortGameContract(readBytes: (address: number, size: num
           m.write(type + 0xb90, index);
           m.write(counters + index * 4, value);
         });
-        // 执行补丁及调用方提供的后续建筑/判负分支；仅在两个分支终点落测试哨兵。
+        // Execute the patch and caller-provided continuation for building/defeat branches; place test sentinels only at the two branch endpoints.
         m.code(address, readBytes(address, 0x4e4aeb - address));
         expect(patchRa2ShortGame(m.memory)).toBe(true);
         m.code(0x4e4b72, [...store32(result, 1), 0xc3]);

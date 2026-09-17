@@ -1,4 +1,4 @@
-/** 原生 ScrollBar 的逻辑范围与像素几何；位置范围包含 nMax，页长占用末端。 */
+/** Native ScrollBar logical ranges and pixel geometry; position includes nMax, with page size consuming the trailing range. */
 export interface ScrollbarState {
   min: number;
   max: number;

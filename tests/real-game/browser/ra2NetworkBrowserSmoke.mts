@@ -2,8 +2,10 @@ import { selectDevelopmentGame } from '../../helpers/selectDevelopmentGame';
 import type { DeployQueueEntry } from '../../../src/games/shared/commandQueue';
 import type { GamePerformanceSample } from '../../../src/games/performance';
 import { summarizeGamePerformance } from '../../helpers/gamePerformance';
-/** 两个独立浏览器会话运行真实 RA2/YR：验证发现、建房、开局和基地车展开同步。
- * 先 pnpm run dev，资源位于 game/ra2；不能把传输握手当作游戏开局成功。 */
+/**
+ * Two independent browser sessions run real RA2/YR to verify discovery, room creation, game startup, and synchronized MCV deployment.
+ * Start pnpm run dev first, with resources in game/ra2; a transport handshake does not prove game startup.
+ */
 import { startLatencyProxy } from '../../helpers/latencyProxy';
 import { chromium, firefox, expect } from '@playwright/test';
 import { decodeRelayFrame } from 'relay-package/wire';
@@ -42,7 +44,7 @@ if (baselineRef)
   for (const id of ['ra2', 'yr']) {
     const path = `src/games/${id}/networkTiming.ts`;
     const source = execFileSync('git', ['show', `${baselineRef}:${path}`], { encoding: 'utf8' });
-    // 只对照提交中的原版补丁模块；不替换 EXE、资源或游戏状态。
+    // Compare only the committed original-game patch modules; do not replace the EXE, resources, or game state.
     const compiled = ts.transpileModule(source, {
       compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
     }).outputText;
@@ -77,7 +79,7 @@ function hostMemory() {
   try {
     oomKills = Number(readFileSync('/sys/fs/cgroup/memory.events', 'utf8').match(/^oom_kill (\d+)/m)?.[1]);
   } catch {
-    /* 没有 cgroup v2 时仍保留宿主可用内存。 */
+    /* Retain host available-memory data even without cgroup v2. */
   }
   return { totalMiB, availableMiB, oomKills };
 }
@@ -85,11 +87,11 @@ const memoryStart = hostMemory();
 writeFileSync(join(output, 'host-memory-start.json'), JSON.stringify(memoryStart, null, 2));
 if (memoryStart) {
   console.log('双端测试内存预检', memoryStart);
-  // 真实浏览器的 renderer（含 640 MiB 客体）约占 1.1 GiB；还需浏览器和宿主余量。
-  // 双 VM 也必须检查；准入不能防止共享机器上的其他任务稍后争用内存。
+  // A real browser renderer, including the 640 MiB guest, uses about 1.1 GiB; allow additional browser and host headroom.
+  // Check even for two VMs; admission cannot prevent other jobs on a shared machine from competing for memory later.
   const requiredMiB = playerCount * 1200 + 1024;
   if (!Number.isFinite(memoryStart.availableMiB) || memoryStart.availableMiB < requiredMiB) {
-    // CI 容器退出后本地报告会丢失；日志保留进程名和 RSS，不输出可能含凭据的参数。
+    // Local reports vanish when CI containers exit; log process names and RSS, omitting arguments that may contain credentials.
     try {
       console.error(
         execFileSync('ps', ['-eo', 'pid,ppid,rss,comm', '--sort=-rss'], { encoding: 'utf8', timeout: 2000 })
@@ -98,7 +100,7 @@ if (memoryStart) {
           .join('\n'),
       );
     } catch {
-      /* 诊断不可用仍按原内存门槛失败。 */
+      /* If diagnostics are unavailable, still fail under the original memory threshold. */
     }
     throw new Error(
       `${playerCount} VM 同机测试预估需要至少 ${requiredMiB} MiB 可用内存，当前 ${Math.round(memoryStart.availableMiB)} MiB；未运行，不算通过`,
@@ -106,7 +108,7 @@ if (memoryStart) {
   }
 }
 const chooseEightPlayerMap = playerCount > 2 || process.env.RA2_BROWSER_MAP_PLAYERS === '8';
-// 故障只在双方进入战场后启用，只影响一个玩家的下行，其他玩家链路保持正常。
+// Enable faults only after both players reach the battlefield, affecting one player's downlink while leaving other links normal.
 const faultScenario = process.env.RA2_BROWSER_FAULT_SCENARIO;
 if (relayUrl && faultScenario) throw new Error('自建 relay 回归与测试专属弱网注入须分开运行');
 const faultScenarios: Record<string, RelayFaultConfig> = {
@@ -174,7 +176,7 @@ const click = async (index: number, x: number, y: number) => {
     await page.waitForTimeout(100);
     await moveLocked(page, x, y);
     await page.waitForTimeout(300);
-    // 无头 Chromium 的锁定指针需显式相对量；保持锁定，避免中途改变输入坐标模式。
+    // Headless Chromium's locked pointer requires explicit relative deltas; retain the lock to avoid changing coordinate modes mid-test.
     for (const type of ['pointerdown', 'pointerup']) {
       await page.locator('#screen').dispatchEvent(type, {
         pointerType: 'mouse',
@@ -190,7 +192,7 @@ const click = async (index: number, x: number, y: number) => {
   const box = (await page.locator('#screen').boundingBox())!;
   const { width, height } = await snapshot(page);
   await page.mouse.move(box.x + box.width * 0.25, box.y + (y / 900) * box.height);
-  // 原版控件需要 hover 迁移和跨逻辑帧的按下，瞬时 click 可能被吞掉。
+  // Native controls need hover transitions and presses spanning logic frames; instantaneous clicks may be swallowed.
   await page.waitForTimeout(100);
   await page.mouse.move(
     box.x + ((x - 720 + width / 2) / width) * box.width,
@@ -215,7 +217,7 @@ async function moveLocked(page: import('@playwright/test').Page, x: number, y: n
     ({ x, y, width, height }) => {
       const c = document.querySelector<HTMLCanvasElement>('#screen')!,
         b = c.getBoundingClientRect();
-      // 同一任务内先钳到边界再回到目标，不留下边缘滚屏，也不依赖调试 URL。
+      // Within one task, clamp to the edge and return to the target, leaving no edge scrolling and requiring no debug URL.
       for (const [dx, dy] of [
         [10000, 10000],
         [((x - 720 - width / 2 + 1) * b.width) / width, ((y - 450 - height / 2 + 1) * b.height) / height],
@@ -234,9 +236,9 @@ async function moveLocked(page: import('@playwright/test').Page, x: number, y: n
     { x, y, width, height },
   );
 }
-// 只在测试拦截的 Worker 入口附加只读探针，不发布可变 VM 调试对象。
-// RA2 1.006 / YR 1.001 独立 House ABI。YR 菜单为 800×600，战场才切换
-// 所选分辨率；用只读 surface 尺寸转换坐标，不要求用户开启 debug URL。
+// Attach read-only probes only to the test-intercepted Worker entry; do not expose mutable VM debug objects.
+// Separate House ABIs for RA2 1.006 and YR 1.001. YR menus stay at 800x600 until the battlefield
+// switches to the selected resolution; convert coordinates using read-only surface dimensions, without requiring a debug URL.
 const abi =
   game === 'yr'
     ? { vector: 0xa8022c, count: 0xa80238, local: 0xa83d4c, human: 0x1ec, units: 0x5518, size: 0x551c, dead: 0x1f5 }
@@ -311,7 +313,7 @@ async function snapshot(page: import('@playwright/test').Page, includeCommands =
         timer = setTimeout(() => reject(new Error('读取客体快照超时（10 秒）')), 10000);
       }),
     ]);
-    // 从首次可操作战场开始记录原生目标变化；不等展开命令之后才观察开局协商。
+    // Record native target changes from the first playable battlefield; do not wait until after deployment to observe startup negotiation.
     if (
       state?.phase === 'running' &&
       !state.shell &&
@@ -433,8 +435,12 @@ async function runScenario() {
     relayUrl = latencyProxy.url;
   }
   for (let i = 0; i < playerCount; i++) {
-    const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1440, height: 1000 } });
-    // 验证已授权的游戏联机，不把 Chromium 的权限提示当作游戏故障或拒绝权限测试。
+    const context = await browser.newContext({
+      locale: 'zh-CN',
+      ignoreHTTPSErrors: true,
+      viewport: { width: 1440, height: 1000 },
+    });
+    // Verify authorized multiplayer connectivity; Chromium permission prompts are neither game failures nor permission-denial tests.
     if (engine === 'chromium')
       await context.grantPermissions(['local-network-access'], { origin: new URL(origin).origin });
     await context.addInitScript((game) => localStorage.setItem(`vm-resolution-${game}`, '1440x900'), game);
@@ -454,7 +460,7 @@ async function runScenario() {
       await context.route('**/src/games/ra2/networkTransport.ts*', async (route) => {
         const response = await route.fetch(),
           source = await response.text();
-        // 仅改 WS 目的地以接入测试专属真实中继；不替换游戏 EXE 或游戏状态。
+        // Change only the WS destination to use a dedicated real test relay; do not replace the game EXE or game state.
         expect(source).toContain('"/ra2"');
         await route.fulfill({ response, body: source.replace('"/ra2"', JSON.stringify(faultEndpoint)) });
       });
@@ -508,14 +514,14 @@ async function runScenario() {
       { timeout: 30000 },
     );
     await expect(page.locator('#vm-network-status')).toHaveAttribute('data-phase', 'connected', { timeout: 20000 });
-    // 保留启动默认随机名，避免测试手动改名掩盖普通双标签页的身份冲突。
+    // Keep default random startup names so manual test renaming cannot hide identity collisions in ordinary two-tab usage.
   }
   await expect
     .poll(() => observed.every((state) => state.ready && state.peers >= playerCount - 1 && state.datagrams > 1), {
       timeout: 20000,
     })
     .toBe(true);
-  // 为游戏消费已收到的数据报留出时间；截图便于核对原生玩家列表。
+  // Allow time for the game to consume received datagrams; screenshots help verify native player lists.
   await pages[0]!.waitForTimeout(2000);
   for (let i = 0; i < pages.length; i++) await pages[i]!.screenshot({ path: join(output, `peer-${i}.png`) });
   console.log(game, '双浏览器 LAN 发现通过（尚未开局）', observed, '大厅截图：', output);
@@ -606,7 +612,7 @@ async function runScenario() {
   console.log('房主已创建房间，等待大厅传播');
   await pages[1]!.waitForTimeout(5000);
   for (let i = 0; i < pages.length; i++) await pages[i]!.screenshot({ path: join(output, `created-${i}.png`) });
-  // 原生列表首项是大厅，第二项为刚创建的房间；加入被拒绝必须让测试失败。
+  // The first native list item is the lobby; the second is the newly created room. A rejected join must fail the test.
   for (let i = 1; i < playerCount; i++) {
     await click(i, 735, game === 'yr' ? 252 : 312);
     await click(i, 1034, 413);
@@ -617,7 +623,7 @@ async function runScenario() {
     );
   }
   console.log('所有玩家已进入房间，等待原生地图校验');
-  // 加入页出现时地图校验/传输仍可能在进行，不能立即把「开始」当成已开局。
+  // Map verification/transfer may still be running when the join page appears; do not immediately treat Start as a completed game start.
   await pages[1]!.waitForTimeout(10000);
   for (let i = 1; i < playerCount; i++) await click(i, 1034, 413);
   await pages[0]!.waitForTimeout(2000);
@@ -646,7 +652,7 @@ async function runScenario() {
     )
     .toBe(true);
   console.log('所有玩家已进入战场，原生 House 与侧栏检查通过');
-  // House 在读条期间就已创建；右侧建造栏出现后才允许发送战场指令。
+  // Houses exist during loading; send battlefield commands only after the construction sidebar appears.
   await pages[0]!.waitForTimeout(2000);
   for (const page of pages) {
     await moveLocked(page, 720, 450);
@@ -692,8 +698,8 @@ async function runScenario() {
     faultRelay.setFaults({ ...faultScenarios[faultScenario], toClientId: relayClients[1] });
     console.log('已在战场启用单玩家下行弱网', faultScenario, relayClients[1]);
   }
-  // YR 的 H 在尚无建造厂时不居中基地车，不能沿用 RA2 的固定点击点。
-  // 框选当前可见部队再展开，全部操作仍经原生鼠标/键盘，不写客体状态。
+  // YR's H key does not center the MCV before a construction yard exists, so RA2's fixed click point cannot be reused.
+  // Box-select currently visible units and deploy them through native mouse/keyboard input, without writing guest state.
   await deploy(1);
   await expect
     .poll(
@@ -704,7 +710,7 @@ async function runScenario() {
       { timeout: 30000 },
     )
     .toBe(true);
-  // 弱网期间第一条命令同步后，由另一个玩家再发一条新命令，排除只有旧状态看似正常。
+  // After the first command synchronizes under poor network conditions, another player sends a new command to rule out merely stale state looking correct.
   for (const index of playerCount > 2 ? [...pages.keys()].filter((i) => i !== 1) : faultRelay ? [0] : []) {
     const hostIndex = before[index]!.players.find((p) => p.local)!.index;
     await deploy(index);
@@ -727,7 +733,7 @@ async function runScenario() {
   const packets = observed.map((s) => s.datagrams);
   const timeline: Snapshot[][] = [perfStart];
   const lastProgressAt = perfStart.map((state) => state.sampleAt);
-  // 显式 5 秒黑洞场景允许恢复余量；正常 LAN 不容许用故障预算掩盖停滞。
+  // The explicit five-second blackhole scenario allows recovery headroom; normal LAN tests must not hide stalls behind the fault budget.
   const maxLogicStallMs = faultScenario === 'blackhole5000' ? 10000 : 5000;
   for (let second = 0; second < stabilitySeconds; second++) {
     await pages[0]!.waitForTimeout(1000);
@@ -751,7 +757,7 @@ async function runScenario() {
       }
     }
     timeline.push(sample);
-    // 逐秒落盘，超时或崩溃仍保留失败前的证据。
+    // Write samples every second so evidence preceding a timeout or crash survives.
     writeFileSync(join(output, 'performance-timeline.json'), JSON.stringify(timeline, null, 2));
   }
   const after = await Promise.all(pages.map((page) => snapshot(page)));

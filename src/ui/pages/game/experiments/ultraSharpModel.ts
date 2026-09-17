@@ -1,3 +1,4 @@
+import { t } from '../../../shared/i18n/translate';
 interface Field {
   number: number;
   wire: number;
@@ -5,12 +6,13 @@ interface Field {
   end: number;
 }
 
-/** 官方 DepthToSpace shader 在 Metal 上把不同 indices 类型传给 perm。
- * 仅把末端像素重排交给 CPU，卷积仍使用 WebGPU；节点名来自已校验模型，不猜名字。
+/**
+ * The official DepthToSpace shader passes inconsistent indices types to perm on Metal.
+ * Move only final pixel shuffling to the CPU while retaining WebGPU convolutions; node names come from the verified model, never guesses.
  */
 export function ultraSharpCompatibilityNodes(bytes: Uint8Array): string[] {
   const graph = fields(bytes, 0, bytes.length).find((field) => field.number === 7 && field.wire === 2);
-  if (!graph) throw new Error('UltraSharp ONNX 缺少计算图');
+  if (!graph) throw new Error(t('UltraSharp ONNX 缺少计算图'));
   const decoder = new TextDecoder();
   const names: string[] = [];
   for (const node of fields(bytes, graph.start, graph.end).filter((field) => field.number === 1 && field.wire === 2)) {
@@ -21,15 +23,15 @@ export function ultraSharpCompatibilityNodes(bytes: Uint8Array): string[] {
     };
     if (text(4) === 'DepthToSpace') {
       const name = text(3);
-      if (!name) throw new Error('UltraSharp 像素重排节点缺少名称');
+      if (!name) throw new Error(t('UltraSharp 像素重排节点缺少名称'));
       names.push(name);
     }
   }
-  if (names.length !== 1) throw new Error('UltraSharp 像素重排节点数量不匹配');
+  if (names.length !== 1) throw new Error(t('UltraSharp 像素重排节点数量不匹配'));
   return names;
 }
 
-/** 只遍历 protobuf 字段边界，跳过大块权重；不反序列化/重编码整个 ONNX。 */
+/** Walk only protobuf field boundaries, skipping large weight blocks; do not deserialize/re-encode the whole ONNX file. */
 function fields(bytes: Uint8Array, start: number, end: number): Field[] {
   const result: Field[] = [];
   let offset = start;
@@ -42,7 +44,7 @@ function fields(bytes: Uint8Array, start: number, end: number): Field[] {
       if (!(byte & 128)) return value;
       shift += 7;
     }
-    throw new Error('ONNX 元数据 varint 越界');
+    throw new Error(t('ONNX 元数据 varint 越界'));
   };
   while (offset < end) {
     const tag = varint(),
@@ -56,16 +58,15 @@ function fields(bytes: Uint8Array, start: number, end: number): Field[] {
     } else if (wire === 0) varint();
     else if (wire === 1) offset += 8;
     else if (wire === 5) offset += 4;
-    else throw new Error('ONNX 元数据 wire 类型不支持');
-    if (number === 0 || offset > end) throw new Error('ONNX 元数据字段越界');
+    else throw new Error(t('ONNX 元数据 wire 类型不支持'));
+    if (number === 0 || offset > end) throw new Error(t('ONNX 元数据字段越界'));
     result.push({ number, wire, start: payload, end: offset });
   }
   return result;
 }
 
-/** 仅在官方 Lite FP32 原始哈希校验成功后调用：修正 output 的两个错误符号。
- * 官方输入/输出同名 width/height 会让 WebGPU NHWC 内存规划把 1× 和 4× 误认为同形。
- * 等长改名，不改权重、算子、输入形状或用户磁盘文件。找不到预期结构必须拒绝。
+/**
+ * Call only after verifying the original official Lite FP32 hash; fix two incorrect output dimension symbols. Identical input/output width/height names make WebGPU NHWC memory planning treat 1x and 4x as the same shape. Rename with equal-length text without changing weights, operators, input shapes, or disk files. Reject if the expected structure is absent.
  */
 export function normalizeUltraSharpOutputShape(
   original: Uint8Array,
@@ -76,7 +77,7 @@ export function normalizeUltraSharpOutputShape(
     const found = fields(bytes, parent.start, parent.end).filter(
       (field) => field.number === number && field.wire === 2,
     );
-    if (found.length !== 1) throw new Error('UltraSharp ONNX 元数据结构不匹配');
+    if (found.length !== 1) throw new Error(t('UltraSharp ONNX 元数据结构不匹配'));
     return found[0]!;
   };
   const graph = child({ start: 0, end: bytes.length, number: 0, wire: 2 }, 7);
@@ -84,11 +85,11 @@ export function normalizeUltraSharpOutputShape(
   const decoder = new TextDecoder();
   const name = child(output, 1);
   if (decoder.decode(bytes.subarray(name.start, name.end)) !== (profile === 'ultra4x' ? 'output' : 'reconstruction'))
-    throw new Error('超分 ONNX 输出名不匹配');
+    throw new Error(t('超分 ONNX 输出名不匹配'));
   const shape = child(child(child(output, 2), 1), 2);
   const dims = fields(bytes, shape.start, shape.end).filter((field) => field.number === 1 && field.wire === 2);
-  if (dims.length !== 4) throw new Error('UltraSharp ONNX 输出维数不匹配');
-  // APISR 的导出也复用了输入尺寸符号，但 H/W 顺序与 UltraSharp 不同。
+  if (dims.length !== 4) throw new Error(t('UltraSharp ONNX 输出维数不匹配'));
+  // APISR exports also reuse input dimension symbols, but H/W order differs from UltraSharp.
   const symbols =
     profile === 'ultra4x'
       ? ([
@@ -102,7 +103,7 @@ export function normalizeUltraSharpOutputShape(
   for (const [index, oldName, newName] of symbols) {
     const symbol = child(dims[index]!, 2);
     if (decoder.decode(bytes.subarray(symbol.start, symbol.end)) !== oldName)
-      throw new Error('UltraSharp ONNX 输出尺寸符号不匹配');
+      throw new Error(t('UltraSharp ONNX 输出尺寸符号不匹配'));
     bytes.set(new TextEncoder().encode(newName), symbol.start);
   }
   return bytes;

@@ -3,20 +3,24 @@ import { type GameSource } from './source';
 import { gameResolutionIni } from './resolution';
 import { gbkBytesOf } from './gbk';
 
-/** 每次创建 VM 重新生成，不从共享缓存/存储复用，避免两个 tab 默认同名。
- * 前缀标识 ra2.games 玩家；总长与原版 15 字节限制一致（前缀 10 字节 + 5 位 base36）。 */
+/**
+ * Generate afresh for each VM instead of reusing shared caches/storage, preventing duplicate default names across tabs.
+ * The prefix identifies site players; total length matches the original 15-byte limit: a 10-byte prefix plus 5 base36 digits.
+ */
 export function randomMultiplayerName(): string {
   let suffix = '';
   while (suffix.length < 5) {
-    // 252 = 36 × 7，拒绝采样消除取模偏差。
+    // 252 = 36 x 7; rejection sampling removes modulo bias.
     const value = crypto.getRandomValues(new Uint8Array(1))[0]!;
     if (value < 252) suffix += (value % 36).toString(36);
   }
   return `ra2.games-${suffix}`;
 }
 
-/** 原版 Handle 缓冲只有 15 字节（结尾 NUL 共 16）；长度按 GBK 编码后的字节数计。
- * 中文每字 2 字节，故上限约 7 个汉字；环境不支持 gbk 时中文名被拒绝、英文不受影响。 */
+/**
+ * The native Handle buffer holds 15 bytes, or 16 including NUL; measure length after GBK encoding.
+ * Each Chinese character takes 2 bytes, allowing about 7 characters. Without GBK support, reject Chinese names while retaining English support.
+ */
 export function validateMultiplayerName(value: string): string {
   const name = value.trim();
   if (!name) throw new Error('联机用户名不能为空');
@@ -35,7 +39,7 @@ export function patchMultiplayerNameIni(bytes: Uint8Array, value: string): Uint8
   let text = '';
   for (let i = 0; i < bytes.length; i += 4096) text += String.fromCharCode(...bytes.subarray(i, i + 4096));
   const newline = text.includes('\r\n') ? '\r\n' : '\n';
-  // Handle 使用逗号分隔的十六进制字节（GBK 代码页）：中文按 2 字节写入，不能误写 UTF-8。
+  // Handle uses comma-separated hexadecimal GBK bytes; encode Chinese characters in 2 bytes, never UTF-8.
   const encoded =
     [...name]
       .map((c) => gbkBytesOf(c)!)
@@ -57,7 +61,7 @@ export function patchMultiplayerNameIni(bytes: Uint8Array, value: string): Uint8
       sectionFound ||= inSection;
     }
     if (inSection && /^\s*Handle\s*=/i.test(line)) {
-      // 清理重复 Handle，避免读取旧值；其余字段和字节保持原样。
+      // Remove duplicate Handle entries to avoid old values; preserve all other fields and bytes.
       if (!written) {
         result.push(`Handle=${encoded}`);
         written = true;
@@ -70,7 +74,7 @@ export function patchMultiplayerNameIni(bytes: Uint8Array, value: string): Uint8
   return Uint8Array.from(result.join(newline), (c) => c.charCodeAt(0));
 }
 
-/** 分辨率覆盖之后叠加；不写磁盘，也不把本标签页名字写进共享资源缓存。 */
+/** Apply after the resolution overlay; write neither to disk nor this tab's name into shared resource caches. */
 export async function withMultiplayerNameOverride(source: GameSource, name?: string): Promise<GameSource> {
   if (name === undefined) return source;
   const path = gameResolutionIni(source.game.id);

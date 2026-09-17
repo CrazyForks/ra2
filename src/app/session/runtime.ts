@@ -1,4 +1,4 @@
-/** 会话只拥有启动与销毁；输入、调试和游戏控制能力由各自消费者使用。 */
+/** The session owns only startup and destruction; input, debugging, and game controls belong to their respective consumers. */
 export interface SessionRuntime {
   start(): Promise<void>;
   destroy(): Promise<void>;

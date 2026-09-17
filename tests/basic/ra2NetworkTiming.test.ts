@@ -4,7 +4,7 @@ import { RA2_STARTUP_PAGE_HASH } from '../../src/games/ra2/startupPage';
 import { YR_STARTUP_PAGE_HASH } from '../../src/games/yr/startupPage';
 import { createGuestMemory } from '../helpers/guestMemory';
 
-// 离线指令夹具来自 RA2 1.006；不依赖下载游戏文件。
+// Offline instruction fixtures from RA2 1.006; no game-file downloads required.
 const fixtures = [
   [0x597ba6, [185, 5, 0, 0, 0, 59, 198, 137, 13, 100, 213, 163, 0]],
   [0x59c4ef, [184, 5, 0, 0, 0, 137, 21, 24, 11, 164, 0, 139, 21, 172, 210, 163, 0, 59, 214, 163, 100, 213, 163, 0]],

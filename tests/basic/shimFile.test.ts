@@ -1,6 +1,5 @@
 /**
- * Win32Shim 文件层单元测试（假客体内存）：挂载/_lopen/_lread/_llseek/_lclose、
- * CreateFileA 各 disposition 与错误码、写回 onFileWrite、客体内快速镜像表。
+ * Win32Shim file-layer unit tests with fake guest memory: mounting/_lopen/_lread/_llseek/_lclose, CreateFileA dispositions and error codes, onFileWrite writeback, and guest fast-mirror tables.
  */
 import { describe, expect, it } from 'vitest';
 import { FAST_FILE_ENTRY_BYTES, FAST_FILE_HANDLE_BASE, FAST_FILE_TABLE } from '../../src/vm86/shim/state';
@@ -15,7 +14,7 @@ import {
 import type { Win32Shim } from '../../src/games/win32Shim';
 
 const INVALID = 0xffff_ffff;
-/** 测试字符串统一放这里（远离 shim 内部使用的低区）。 */
+/** Store test strings here, away from the low-address area used internally by the shim. */
 const STR = 0x0010_0000;
 const BUF = 0x0011_0000;
 
@@ -36,11 +35,11 @@ describe('_lopen/_lread/_llseek/_lclose', () => {
     expect(handle).not.toBe(INVALID);
     expect(lread(shim, handle, 3)).toBe(3);
     expect(memory.read_memory(BUF, 3)).toEqual(new Uint8Array([1, 2, 3]));
-    // FILE_BEGIN 回到 1 再读
+    // FILE_BEGIN seeks back to 1, then reads
     expect(callShim(shim, 'KERNEL32.DLL!_llseek', [handle, 1, 0]).eax).toBe(1);
     expect(lread(shim, handle, 2)).toBe(2);
     expect(memory.read_memory(BUF, 2)).toEqual(new Uint8Array([2, 3]));
-    // FILE_END 到末尾 → EOF
+    // FILE_END seeks to the end -> EOF
     expect(callShim(shim, 'KERNEL32.DLL!_llseek', [handle, 0, 2]).eax).toBe(5);
     expect(lread(shim, handle, 1)).toBe(0);
     expect(callShim(shim, 'KERNEL32.DLL!_lclose', [handle]).eax).toBe(0);
@@ -115,7 +114,7 @@ describe('_lopen/_lread/_llseek/_lclose', () => {
     shim.mountFile('C:\\GAME\\ro.bin', new Uint8Array([1]));
     const handle = lopen(shim, memory, 'C:\\GAME\\ro.bin', 0); // OF_READ
     memory.write_memory([2], BUF);
-    // writeFile 失败返回 -1（dispatch 层尚未按 u32 截断）。
+    // writeFile failure returns -1 (dispatch has not yet truncated to u32).
     expect(callShim(shim, 'KERNEL32.DLL!_lwrite', [handle, BUF, 1]).eax).toBe(-1);
     expect(callShim(shim, 'KERNEL32.DLL!GetLastError').eax).toBe(5);
   });
@@ -194,17 +193,17 @@ describe('客体内快速镜像（fast _lread 表）', () => {
     const handle = lopen(shim, memory, 'C:\\GAME\\fast.bin');
     const entry = FAST_FILE_TABLE + (handle - FAST_FILE_HANDLE_BASE) * FAST_FILE_ENTRY_BYTES;
     const mirror = readU32(memory, entry);
-    expect(mirror).toBeGreaterThanOrEqual(0x0070_0000); // 镜像从 shim 堆分配
-    expect(readU32(memory, entry + 4)).toBe(5); // 大小
-    expect(readU32(memory, entry + 8)).toBe(0); // 位置
-    expect(readU32(memory, entry + 12)).toBe(1); // 就绪
+    expect(mirror).toBeGreaterThanOrEqual(0x0070_0000); // Mirror allocated from the shim heap
+    expect(readU32(memory, entry + 4)).toBe(5); // Size
+    expect(readU32(memory, entry + 8)).toBe(0); // Position
+    expect(readU32(memory, entry + 12)).toBe(1); // Ready
     expect(memory.read_memory(mirror, 5)).toEqual(new Uint8Array([1, 2, 3, 4, 5]));
 
-    // host 侧 _lread 与客体快速桩共用表内位置。
+    // Host _lread and guest fast stubs share the table's position.
     expect(lread(shim, handle, 2)).toBe(2);
     expect(readU32(memory, entry + 8)).toBe(2);
 
-    // 关闭归还镜像并清表项。
+    // Closing releases the mirror and clears the table entry.
     expect(callShim(shim, 'KERNEL32.DLL!_lclose', [handle]).eax).toBe(0);
     expect(readU32(memory, entry + 12)).toBe(0);
   });
@@ -216,10 +215,10 @@ describe('客体内快速镜像（fast _lread 表）', () => {
     writeAsciiZ(memory, STR, 'C:\\GAME\\rw.bin');
     const handle = callShim(shim, 'KERNEL32.DLL!_lopen', [STR, 2]).eax; // OF_READWRITE
     const entry = FAST_FILE_TABLE + (handle - FAST_FILE_HANDLE_BASE) * FAST_FILE_ENTRY_BYTES;
-    expect(readU32(memory, entry + 12)).toBe(1); // 已镜像
+    expect(readU32(memory, entry + 12)).toBe(1); // Mirrored
     memory.write_memory([9], BUF);
     expect(callShim(shim, 'KERNEL32.DLL!_lwrite', [handle, BUF, 1]).eax).toBe(1);
-    expect(readU32(memory, entry + 12)).toBe(0); // 镜像已拆除
+    expect(readU32(memory, entry + 12)).toBe(0); // Mirror removed
     expect(shim.getMountedFileBytes('C:\\GAME\\rw.bin')).toEqual(new Uint8Array([9, 2, 3, 4]));
   });
 

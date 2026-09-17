@@ -1,3 +1,4 @@
+import { t } from '../../shared/i18n/translate';
 import type { FramePostProcess } from '../../../graphics/framePostProcess';
 import type { VmFrame } from '../../../vm86/win32';
 import { spatialUpscaleShader } from './spatialUpscale';
@@ -5,7 +6,7 @@ import { fsrRcasShader, fsrUpscaleShader } from './fsrUpscale';
 import { ScalefxUpscale } from './scalefxUpscale';
 import { AiUpscale, type AiModel } from './aiUpscale';
 import { RGB565_TO_RGBA32 as rgb565Colors } from '../../../vm86/pixels';
-// 像素循环使用本地引用，避免开发模式逐像素访问 ESM getter。
+// Use local references in pixel loops to avoid per-pixel ESM getter access in development.
 const RGB565_TO_RGBA32 = rgb565Colors;
 
 export interface VmCursorPresentation {
@@ -14,18 +15,18 @@ export interface VmCursorPresentation {
   visible: boolean;
 }
 
-/** FSR 1.0 三档：EASU 柔和、+RCAS 锐化、+RCAS 轻锐化。 */
+/** Three FSR 1.0 modes: soft EASU, RCAS sharpening, and gentle RCAS sharpening. */
 export type FsrMode = 'fsr' | 'fsr-rcas' | 'fsr-rcas-soft';
 
 export type UpscaleMode = 'off' | 'bicubic' | FsrMode | 'scalefx' | 'fast' | 'gan';
 
 const FSR_LABEL: Record<FsrMode, string> = {
   fsr: 'FSR 1.0（AMD FidelityFX EASU）',
-  'fsr-rcas': 'FSR 1.0 + RCAS（AMD FidelityFX，锐化）',
-  'fsr-rcas-soft': 'FSR 1.0 + RCAS（AMD FidelityFX，轻锐化）',
+  'fsr-rcas': t('FSR 1.0 + RCAS（AMD FidelityFX，锐化）'),
+  'fsr-rcas-soft': t('FSR 1.0 + RCAS（AMD FidelityFX，轻锐化）'),
 };
 
-/** 官方 RCAS 锐度语义：0 = 最大锐化，数值为衰减档数（2^-n）。 */
+/** Official RCAS sharpness semantics: 0 is maximum sharpening; values are attenuation stops, 2^-n. */
 const FSR_RCAS_SHARPNESS: Record<'fsr-rcas' | 'fsr-rcas-soft', number> = {
   'fsr-rcas': 0,
   'fsr-rcas-soft': 1,
@@ -37,15 +38,15 @@ const isFsrMode = (mode: UpscaleMode): FsrMode | null =>
 export interface VmFrameRenderer extends FrameBackend {
   readonly upscaleMode: UpscaleMode;
   setUpscaleMode(mode: UpscaleMode): void;
-  /** 调用方提供效果，渲染器拥有其 GPU 资源；null 关闭并释放。 */
+  /** The caller supplies the effect; the renderer owns its GPU resources. null disables and releases it. */
   setPostProcess(factory: ((gl: WebGL2RenderingContext) => FramePostProcess) | null): void;
 }
 
 interface FrameBackend {
-  /** 给前端性能栏显示的实际后端；detail 含浏览器暴露的 GPU renderer。 */
+  /** Actual backend shown in the frontend performance panel; detail includes the browser-reported GPU renderer. */
   readonly backend: 'WebGL2' | 'Canvas 2D';
   readonly detail: string;
-  /** 实际状态而非 URL 请求；null 表示未请求超分，界面不展示徽标。 */
+  /** Actual state rather than URL intent; null means no upscaling requested and no UI badge. */
   readonly upscaleStatus: string | null;
   clear(): void;
   destroy(): void;
@@ -59,8 +60,7 @@ interface FrameBackend {
 }
 
 /**
- * RA2/YR 的主表面主要是 8-bit 索引色。优先让 GPU 按 256 色调色板查色，避免主线程
- * 每帧把 800×600 个索引逐个展开成 RGBA；WebGL2 不可用时保留原 Canvas 2D 路径。
+ * RA2/YR primary surfaces are mostly 8-bit indexed color. Prefer GPU lookup through the 256-color palette rather than expanding 800x600 indexes into RGBA on the main thread every frame. Retain Canvas 2D when WebGL2 is unavailable.
  */
 export function createVmFrameRenderer(
   canvas: HTMLCanvasElement,
@@ -81,7 +81,7 @@ export function createVmFrameRenderer(
       })
     : null;
   const context = gl ? null : canvas.getContext('2d');
-  if (!gl && !context) throw new Error('浏览器无法创建游戏画面渲染上下文');
+  if (!gl && !context) throw new Error(t('浏览器无法创建游戏画面渲染上下文'));
   let postProcess: FramePostProcess | null = null;
   const applyPostProcess = (width: number, height: number) => postProcess?.draw(width, height);
   const createBackend = (mode: UpscaleMode): FrameBackend =>
@@ -115,15 +115,15 @@ export function createVmFrameRenderer(
     },
     setPostProcess(factory) {
       if (destroyed) return;
-      if (factory && !gl) throw new Error('后处理需要 WebGL2');
+      if (factory && !gl) throw new Error(t('后处理需要 WebGL2'));
       const replacement = factory ? factory(gl!) : null;
       postProcess?.destroy();
       postProcess = replacement;
     },
     setUpscaleMode(next) {
       if (destroyed || next === mode) return;
-      // 复用同一个浏览器上下文，仅替换显示管线；不重启 VM、不改变游戏帧。
-      // 释放旧模型显存与帧缓存，避免多次切换累积资源或显示上一模型的结果。
+      // Reuse one browser context, replacing only the display pipeline without restarting the VM or changing game frames.
+      // Release old model GPU memory and frame caches to avoid accumulated resources or stale results after repeated switches.
       const replacement = createBackend(next);
       backend.destroy();
       backend = replacement;
@@ -142,8 +142,8 @@ export function createVmFrameRenderer(
       postProcess?.destroy();
       postProcess = null;
       backend.destroy();
-      // 上下文由本闭包持有并被各后端共用（换档只替换显示管线），因此只能在这里释放：
-      // 后端自己的 destroy() 不能调用 loseContext，否则换档后新建的后端会拿到已丢失的上下文。
+      // This closure owns the context shared across backends; changing modes replaces only the pipeline, so release the context only here.
+      // Backend destroy() must not call loseContext, or the next backend would receive an already lost context.
       gl?.getExtension('WEBGL_lose_context')?.loseContext();
     },
   };
@@ -155,8 +155,8 @@ class WebGlIndexedFrameRenderer implements FrameBackend {
   private readonly program: WebGLProgram;
   private readonly indexTexture: WebGLTexture;
   private readonly paletteTexture: WebGLTexture;
-  // RA2 的 16-bit shell 帧由 shim 侧展开成 RGBA（frame.rgba），不走调色板；
-  // 需要独立的直传 program/texture，与索引路径并存。
+  // The shim expands RA2's 16-bit shell frames into RGBA (frame.rgba), bypassing palettes;
+  // use a separate direct-upload program/texture alongside the indexed path.
   private readonly rgbaProgram: WebGLProgram;
   private readonly rgb565Program: WebGLProgram;
   private readonly rgbaTexture: WebGLTexture;
@@ -175,7 +175,7 @@ class WebGlIndexedFrameRenderer implements FrameBackend {
   private cursorHeight = 0;
   private destroyed = false;
   private readonly upscaleLocations = new Map<WebGLProgram, WebGLUniformLocation | null>();
-  /** RCAS 档位的中间通道：EASU 先渲染到 RGBA 纹理，RCAS 再输出到画布。 */
+  /** RCAS intermediate pass: EASU renders into an RGBA texture, then RCAS outputs to the canvas. */
   private readonly rcas: {
     program: WebGLProgram;
     texture: WebGLTexture;
@@ -185,7 +185,7 @@ class WebGlIndexedFrameRenderer implements FrameBackend {
   private rcasHeight = 0;
   private readonly ai: AiUpscale | null;
   private readonly scalefx: ScalefxUpscale | null;
-  private spatialStatus = '插值放大：等待游戏画面（非 AI）';
+  private spatialStatus = t('插值放大：等待游戏画面（非 AI）');
 
   get upscaleStatus(): string | null {
     return this.ai?.status ?? (this.spatialUpscale || this.fsr || this.scalefx ? this.spatialStatus : null);
@@ -206,11 +206,11 @@ class WebGlIndexedFrameRenderer implements FrameBackend {
       ? (gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL) as string)
       : (gl.getParameter(gl.RENDERER) as string);
     this.detail = renderer ? `WebGL2 · ${renderer}` : 'WebGL2';
-    if (spatialUpscale) this.detail += ' · 实验空间重建（抗振铃 bicubic）';
+    if (spatialUpscale) this.detail += t(' · 实验空间重建（抗振铃 bicubic）');
     if (fsr) this.detail += ` · ${FSR_LABEL[fsr]}`;
-    if (scalefx) this.detail += ' · ScaleFX 3×（像素画）';
+    if (scalefx) this.detail += t(' · ScaleFX 3×（像素画）');
     this.ai = aiUpscale ? new AiUpscale(gl, aiModel) : null;
-    if (aiUpscale) this.detail += aiModel === 'gan' ? ' · AI GAN 2×（实验）' : ' · AI CNN 2×（快速）';
+    if (aiUpscale) this.detail += aiModel === 'gan' ? t(' · AI GAN 2×（实验）') : t(' · AI CNN 2×（快速）');
     this.scalefx = scalefx ? new ScalefxUpscale(gl) : null;
     this.program = linkProgram(
       gl,
@@ -264,8 +264,8 @@ class WebGlIndexedFrameRenderer implements FrameBackend {
       }
     `,
     );
-    // 整数纹理保留全部 16 位，用同样的位复制转色，和 CPU 查表逐像素一致。
-    // 复用 RGBA 纹理槽；格式切换时重新分配，稳态只更新像素。
+    // Integer textures preserve all 16 bits and use the same bit-replication color conversion, matching CPU lookup pixel for pixel.
+    // Reuse the RGBA texture slot; reallocate on format changes and only update pixels in steady state.
     this.rgb565Program = linkProgram(
       gl,
       `#version 300 es
@@ -327,9 +327,9 @@ class WebGlIndexedFrameRenderer implements FrameBackend {
     const cursorTexture = gl.createTexture();
     const vertices = gl.createBuffer();
     if (!indexTexture || !paletteTexture || !rgbaTexture || !cursorTexture || !vertices) {
-      // 实例不会交付给调用方；先回收前面已建的 program/texture，避免半初始化实例泄漏 GPU 对象。
+      // This instance will not reach the caller; reclaim already created programs/textures to avoid GPU leaks from partial initialization.
       this.destroy();
-      throw new Error('WebGL 游戏画面资源创建失败');
+      throw new Error(t('WebGL 游戏画面资源创建失败'));
     }
     this.indexTexture = indexTexture;
     this.paletteTexture = paletteTexture;
@@ -388,16 +388,16 @@ class WebGlIndexedFrameRenderer implements FrameBackend {
       const rcasFramebuffer = gl.createFramebuffer();
       if (!rcasTexture || !rcasFramebuffer) {
         this.destroy();
-        throw new Error('RCAS 纹理/帧缓冲分配失败');
+        throw new Error(t('RCAS 纹理/帧缓冲分配失败'));
       }
       configureTexture(gl, rcasTexture, 4);
-      // 先分配 1×1 使附件完整（未定尺寸的纹理会让 FBO 不完整），首帧再按目标尺寸重分配。
+      // Allocate 1x1 first to complete attachments, since unsized textures make FBOs incomplete; resize to target dimensions on the first frame.
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
       gl.bindFramebuffer(gl.FRAMEBUFFER, rcasFramebuffer);
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, rcasTexture, 0);
       if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
         this.destroy();
-        throw new Error('RCAS 帧缓冲不可用');
+        throw new Error(t('RCAS 帧缓冲不可用'));
       }
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       this.rcas = { program: rcasProgram, texture: rcasTexture, framebuffer: rcasFramebuffer };
@@ -431,16 +431,20 @@ class WebGlIndexedFrameRenderer implements FrameBackend {
       (targetWidth > frame.width || targetHeight > frame.height);
     if (this.spatialUpscale || this.fsr || this.scalefx)
       this.spatialStatus = upscaling
-        ? `插值放大已启动 · ${
-            this.scalefx ? 'ScaleFX 3×（像素画）' : this.fsr ? FSR_LABEL[this.fsr] : 'bicubic（非 AI）'
-          }`
-        : `插值放大未启动：当前没有放大（${this.scalefx ? 'ScaleFX 3×' : this.fsr ? FSR_LABEL[this.fsr] : '非 AI'}）`;
+        ? t(
+            '插值放大已启动 · {0}',
+            this.scalefx ? t('ScaleFX 3×（像素画）') : this.fsr ? FSR_LABEL[this.fsr] : t('bicubic（非 AI）'),
+          )
+        : t(
+            '插值放大未启动：当前没有放大（{0}）',
+            this.scalefx ? 'ScaleFX 3×' : this.fsr ? FSR_LABEL[this.fsr] : t('非 AI'),
+          );
     if ((this.fsr || this.scalefx) && this.canvas.dataset && this.canvas.dataset.upscale !== this.spatialStatus)
       this.canvas.dataset.upscale = this.spatialStatus;
     if (this.ai && this.canvas.dataset && this.canvas.dataset.upscale !== this.ai.status)
       this.canvas.dataset.upscale = this.ai.status;
     if (useAi && this.ai!.hasFrame(frame)) {
-      // 重绘鼠标或调整窗口只复用推理结果，不重复跑 CNN，不延迟独立光标。
+      // Cursor redraws/window resizing reuse inference results without rerunning CNN or delaying the independent cursor.
       this.ai!.draw(targetWidth, targetHeight);
       this.postProcess(targetWidth, targetHeight);
       this.drawCursor(frameCursor(cursorFrame), cursorFrame, cursorPresentation);
@@ -448,7 +452,7 @@ class WebGlIndexedFrameRenderer implements FrameBackend {
     }
     gl.viewport(0, 0, targetWidth, targetHeight);
     if (useAi) this.ai!.bindInput();
-    // RCAS 档位：EASU 先渲染进中间纹理，随后 RCAS 输出到画布；1:1/缩小不启用。
+    // RCAS modes: EASU renders to an intermediate texture, then RCAS to the canvas; disabled at 1:1 and when downscaling.
     const useRcas = this.rcas !== null && upscaling;
     if (useRcas) {
       this.ensureRcasTarget(targetWidth, targetHeight);
@@ -541,8 +545,9 @@ class WebGlIndexedFrameRenderer implements FrameBackend {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
   }
 
-  /** 只回收本后端的 GPU 对象。上下文由 createVmFrameRenderer 持有并在多个后端间共用，
-   *  这里不得调用 WEBGL_lose_context：换档后新建的后端仍要使用同一个上下文。 */
+  /**
+   * Reclaim only this backend's GPU objects. createVmFrameRenderer owns the context shared by backends; do not call WEBGL_lose_context because subsequent backends need the same context.
+   */
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
@@ -610,7 +615,7 @@ class WebGlIndexedFrameRenderer implements FrameBackend {
   }
 
   private setUpscale(program: WebGLProgram, upscaling: boolean): void {
-    // 关闭时不增加 GPU 状态调用；光标走原来的独立 pass，避免重建滤镜增加鼠标模糊。
+    // When disabled, add no GPU-state calls; retain the independent cursor pass so reconstruction filters cannot blur mouse rendering.
     if (!this.spatialUpscale && !this.fsr) return;
     this.gl.uniform1i(this.upscaleLocations.get(program) ?? null, upscaling ? 1 : 0);
   }
@@ -618,7 +623,7 @@ class WebGlIndexedFrameRenderer implements FrameBackend {
 
 class CanvasFrameRenderer implements FrameBackend {
   readonly backend = 'Canvas 2D' as const;
-  readonly detail = 'Canvas 2D（WebGL2 不可用或由 ?webgl=0 强制回退）';
+  readonly detail = t('Canvas 2D（WebGL2 不可用或由 ?webgl=0 强制回退）');
   private cache: VmFrameCache | null = null;
   private cursorCache: VmCursorCache | null = null;
   private destroyed = false;
@@ -628,7 +633,7 @@ class CanvasFrameRenderer implements FrameBackend {
     private readonly context: CanvasRenderingContext2D,
     requestedUpscale = false,
   ) {
-    this.upscaleStatus = requestedUpscale ? '超分未启动：当前使用 Canvas 2D，已回退原图' : null;
+    this.upscaleStatus = requestedUpscale ? t('超分未启动：当前使用 Canvas 2D，已回退原图') : null;
   }
 
   clear(): void {
@@ -654,7 +659,7 @@ class CanvasFrameRenderer implements FrameBackend {
       base.width = frame.width;
       base.height = frame.height;
       const baseContext = base.getContext('2d');
-      if (!baseContext) throw new Error('浏览器无法创建游戏画面缓存上下文');
+      if (!baseContext) throw new Error(t('浏览器无法创建游戏画面缓存上下文'));
       cache = {
         frame: null,
         image,
@@ -670,7 +675,7 @@ class CanvasFrameRenderer implements FrameBackend {
       if (frame.rgba) {
         image.data.set(frame.rgba);
       } else if (frame.rgb565) {
-        // 无 WebGL 的浏览器仍可显示紧凑帧；复用 ImageData，光标移动不重复转色。
+        // Browsers without WebGL can still display compact frames; reuse ImageData and avoid repeated color conversion on cursor moves.
         for (let i = 0; i < frame.rgb565.length; i++) pixels32[i] = RGB565_TO_RGBA32[frame.rgb565[i]!]!;
       } else {
         for (let index = 0; index < 256; index++) {
@@ -728,7 +733,7 @@ class CanvasFrameRenderer implements FrameBackend {
         canvas.width = cursor.width;
         canvas.height = cursor.height;
         const context = canvas.getContext('2d');
-        if (!context) throw new Error('浏览器无法创建鼠标光标缓存上下文');
+        if (!context) throw new Error(t('浏览器无法创建鼠标光标缓存上下文'));
         cache = { cursor, canvas, context };
         this.cursorCache = cache;
       } else {
@@ -754,15 +759,15 @@ function configureTexture(gl: WebGL2RenderingContext, texture: WebGLTexture, uni
 function linkProgram(gl: WebGL2RenderingContext, vertexSource: string, fragmentSource: string): WebGLProgram {
   const shaders: WebGLShader[] = [];
   const program = gl.createProgram();
-  if (!program) throw new Error('WebGL program 创建失败');
+  if (!program) throw new Error(t('WebGL program 创建失败'));
   try {
     const compile = (type: number, source: string): WebGLShader => {
       const shader = gl.createShader(type);
-      if (!shader) throw new Error('WebGL shader 创建失败');
+      if (!shader) throw new Error(t('WebGL shader 创建失败'));
       gl.shaderSource(shader, source);
       gl.compileShader(shader);
       if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-        throw new Error(`WebGL shader 编译失败：${gl.getShaderInfoLog(shader) ?? '未知错误'}`);
+        throw new Error(t('WebGL shader 编译失败：{0}', gl.getShaderInfoLog(shader) ?? t('未知错误')));
       }
       return shader;
     };
@@ -776,15 +781,15 @@ function linkProgram(gl: WebGL2RenderingContext, vertexSource: string, fragmentS
     }
     gl.linkProgram(program);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      throw new Error(`WebGL program 链接失败：${gl.getProgramInfoLog(program) ?? '未知错误'}`);
+      throw new Error(t('WebGL program 链接失败：{0}', gl.getProgramInfoLog(program) ?? t('未知错误')));
     }
     return program;
   } catch (error) {
-    // 编译/链接失败时回收半成品 program：构造函数会把它留在上下文里，实例却不再交付。
+    // Reclaim partially built programs on compile/link failure; constructors leave them in the context even though no instance is returned.
     gl.deleteProgram(program);
     throw error;
   } finally {
-    // 已附加到 program 的 shader 由 program 持有，句柄在成功与失败路径都不再需要。
+    // The program owns attached shaders; their handles are no longer needed on either success or failure.
     for (const shader of shaders) gl.deleteShader(shader);
   }
 }

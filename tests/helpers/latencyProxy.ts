@@ -1,7 +1,7 @@
 import { createServer, connect, type AddressInfo, type Socket } from 'node:net';
 import { Transform, type TransformCallback } from 'node:stream';
 
-/** 测试用固定单程延迟：每块按到达时间排队，不能逐块串行 sleep 而误变成限速。 */
+/** Fixed one-way test latency: queue each chunk by arrival time; serial sleeps per chunk would incorrectly impose a bandwidth limit. */
 export class DelayedStream extends Transform {
   private readonly timers = new Set<ReturnType<typeof setTimeout>>();
   private pendingBytes = 0;
@@ -29,7 +29,7 @@ export class DelayedStream extends Transform {
       }
     }, this.delayMs);
     this.timers.add(timer);
-    // 把反压传回源 socket；不无限缓存暂停读取的连接。
+    // Propagate backpressure to the source socket; do not buffer indefinitely for connections that stop reading.
     if (this.pendingBytes >= this.writableHighWaterMark || this.readableLength >= this.readableHighWaterMark)
       this.releaseWriter = callback;
     else callback();
@@ -64,7 +64,7 @@ export class DelayedStream extends Transform {
   }
 }
 
-/** 只代理显式测试目标；包含 WS 握手、心跳和数据，原始字节保持顺序。 */
+/** Proxy only explicit test targets, including WS handshakes, heartbeats, and data, preserving raw-byte order. */
 export async function startLatencyProxy(targetUrl: string, delayMs: number) {
   const target = new URL(targetUrl);
   if (target.protocol !== 'ws:') throw new Error('延迟对照需要显式 ws:// relay');

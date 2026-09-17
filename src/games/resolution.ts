@@ -44,14 +44,14 @@ const latin1ToBytes = (text: string): Uint8Array => {
   return bytes;
 };
 
-/** 保留原 INI 的字节编码和其余设置，只在 [Video] 内覆盖分辨率相关键。 */
+/** Preserve the original INI byte encoding and other settings; override only resolution keys in [Video]. */
 export function patchGameResolutionIni(bytes: Uint8Array, resolution: GameResolution): Uint8Array {
   const text = bytesToLatin1(bytes);
   const newline = text.includes('\r\n') ? '\r\n' : '\n';
   if (!text.trim()) {
-    // 原稿为空（在线包内没有 ra2.ini）：直接生成格式规范的配置。前导空行/
-    // 缺失行尾换行会让游戏的 INI 解析器跳过 [Video] 段——实测退回 640×400
-    // 开场并卡死（0 字节 movies01.mix 的过场路径无法退出）。
+    // If no source INI exists in the online package, generate properly formatted configuration. Leading blank lines or
+    // missing trailing newlines make the native INI parser skip [Video], observed to fall back to a 640x400 intro
+    // and hang because the transition path cannot exit with a zero-byte movies01.mix.
     return latin1ToBytes(
       `[Video]${newline}AllowHiResModes=yes${newline}` +
         `ScreenWidth=${resolution.width}${newline}ScreenHeight=${resolution.height}${newline}`,
@@ -96,20 +96,20 @@ export function patchGameResolutionIni(bytes: Uint8Array, resolution: GameResolu
   return latin1ToBytes(lines.join(newline) + (trailingNewline ? newline : ''));
 }
 
-/** 在线包内没有 INI 时的默认菜单分辨率（RA2 标准菜单档）。 */
+/** Default menu resolution when an online package has no INI: the standard RA2 menu setting. */
 const FALLBACK_RESOLUTION: GameResolution = { width: 800, height: 600 };
 
-/** 从 provider 读取游戏实际使用的 INI，再用只读内存层覆盖；读不到时提供可打开的空配置。 */
+/** Read the INI actually used by the game, then overlay a read-only memory layer; if unreadable, provide an openable empty configuration. */
 export async function withGameResolutionOverride(
   source: GameSource,
   resolution: GameResolution | null | undefined,
 ): Promise<GameSource> {
   const iniPath = gameResolutionIni(source.game.id);
   const original = await source.files.read(iniPath);
-  // 目录里已有 INI 且未请求修改：原样使用（玩家自己的配置，含其分辨率）。
+  // Use an existing INI unchanged if no modification was requested, preserving the player's settings and resolution.
   if (!resolution && original !== null) return source;
-  // 在线包没有 INI：无分辨率请求时也要提供格式规范的默认配置——游戏读到
-  // 缺失/空/前导空行的 INI 会退回 640×400 开场并卡死（实测）。
+  // Without an INI in the online package, supply a properly formatted default even without a resolution request; missing,
+  // empty, or leading-blank-line INIs cause an observed 640x400 intro fallback and hang.
   const applied = resolution ?? FALLBACK_RESOLUTION;
   const patched = patchGameResolutionIni(original ?? new Uint8Array(), applied);
   return {

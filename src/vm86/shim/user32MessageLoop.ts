@@ -8,10 +8,11 @@ type User32WindowingChain = InstanceType<ReturnType<typeof withUser32Windowing>>
 export function withUser32MessageLoop<TBase extends Constructor<User32WindowingChain>>(Base: TBase) {
   return class extends Base {
     protected lastPointerDown: { hwnd: number; message: number; time: number; x: number; y: number } | null = null;
-    /** ComboDropWin 可能在 WM_LBUTTONDOWN 期间隐藏；保留这一轮左键的目标，
-     * 避免后续 WM_LBUTTONUP 重新命中弹窗下方的兄弟 ComboBox。 */
+    /**
+     * ComboDropWin may hide during WM_LBUTTONDOWN; retain the click target so later WM_LBUTTONUP cannot hit a sibling ComboBox beneath the popup.
+     */
     protected hostPointerCapture = 0;
-    /** 最近一次合成 WM_NCHITTEST 时命中的子窗口；子窗口变化才重新合成。 */
+    /** Child hit by the latest synthesized WM_NCHITTEST; synthesize again only when the child changes. */
     protected lastHitTestChild = 0;
     protected sendMessageSequence(
       call: Win32Call,
@@ -57,7 +58,7 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
         code.push(0xb8);
         emit32(callback);
         code.push(0xff, 0xd0); // call eax
-        code.push(0x89, 0xec); // mov esp,ebp，兼容 stdcall/cdecl
+        code.push(0x89, 0xec); // mov esp,ebp accommodates stdcall/cdecl.
       }
       code.push(0x89, 0xec, 0x5d); // mov esp,ebp; pop ebp
       code.push(0xb8);
@@ -84,7 +85,7 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
         if (message === 0x0806 && !mci.playing) {
           // MCI_PLAY
           mci.playing = true;
-          // MCIWnd 的异步播放完成后通知 owner；游戏自己的 WndProc 决定如何推进状态。
+          // Notify the owner when asynchronous MCIWnd playback finishes; the game's WndProc decides how state advances.
           this.queueMessage(0x03b9, 1, hwnd, mci.parent); // MM_MCINOTIFY / MCI_NOTIFY_SUCCESSFUL
         } else if (message === 0x0808) {
           // MCI_STOP
@@ -100,14 +101,14 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
       if (callback === undefined) return { eax: 0 };
       const selectionMessage = !!callback && this.syncListBoxSelectionMessage(hwnd, message, wParam, lParam);
       if (selectionMessage) this.invalidateWindow(hwnd);
-      // 系统控件的默认 WndProc 属于 USER32，因此没有客体 callback 地址；
-      // SendMessage 仍须同步执行它，不能吞掉 CB_ADDSTRING/BM_SETCHECK 等协议。
+      // Default system-control WndProcs belong to USER32 and have no guest callback address;
+      // SendMessage must still execute them synchronously, preserving protocols such as CB_ADDSTRING/BM_SETCHECK.
       if (!callback) {
         const result = this.dispatchDefaultControl(call, hwnd, message, wParam, lParam);
         return forcedReturn === undefined ? result : { eax: forcedReturn };
       }
-      // 同步分发：真实 Win32 的 SendMessageA 直接进入 WndProc。用与消息泵相同的
-      // 跳板改写返回地址——WndProc 的返回值留在 EAX，恰好成为 SendMessageA 的结果。
+      // Synchronous dispatch: real SendMessageA enters WndProc directly. Rewrite return addresses with the message-pump
+      // trampoline; WndProc's EAX naturally becomes SendMessageA's result.
       if (message === 0x000f) this.pendingPaintValidations.add(hwnd);
       const originalReturn = this.readU32(call.stack);
       const frame = reservedFrame ?? this.reserveGuestCallback();
@@ -118,7 +119,7 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
         code.push(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, value >>> 24);
       };
       code.push(0x55); // push ebp
-      code.push(0x89, 0xe5); // mov ebp, esp；保存回调前的栈顶
+      code.push(0x89, 0xe5); // mov ebp, esp saves the pre-callback stack top.
       const push = (value: number) => {
         code.push(0x68, value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, value >>> 24);
       };
@@ -129,11 +130,11 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
       code.push(0xb8);
       emit32(callback);
       code.push(0xff, 0xd0); // call eax
-      code.push(0x89, 0xec); // mov esp, ebp；兼容 stdcall/cdecl 回调的参数清理差异
+      code.push(0x89, 0xec); // mov esp, ebp accommodates stdcall/cdecl callback cleanup differences.
       code.push(0x5d); // pop ebp
       if (forcedReturn !== undefined) {
         code.push(0xb8);
-        emit32(forcedReturn); // ShowWindow 等 API 的返回值不等于 WndProc 返回值
+        emit32(forcedReturn); // API results such as ShowWindow are independent of WndProc results.
       }
       this.appendGuestCallbackReturn(code, frame, originalReturn);
       this.memory.write_memory(code, trampoline);
@@ -142,10 +143,7 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
     }
 
     /**
-     * RA2 shell 的内层循环调用 PeekMessageA，却不一定再调用 DispatchMessageA。
-     * 浏览器在一个事件批次内也可能已经产生 move/down/up。将当前批次串成一段
-     * 客体桥，依序进入原版控件 WndProc；所有回调完成后强制以 FALSE 返回
-     * PeekMessageA，不能把最后一个 WndProc 的 EAX 当成“取得了一条 MSG”。
+     * RA2 shell inner loops call PeekMessageA without necessarily calling DispatchMessageA; one browser event batch may already contain move/down/up. Chain the batch into a guest bridge that invokes native control WndProcs in order. After all callbacks, force PeekMessageA to return FALSE; the last WndProc EAX must not masquerade as a retrieved MSG.
      */
     protected dispatchPendingHostInput(call: Win32Call): Win32Result {
       const pending = this.pendingHostDispatches.splice(0, 12);
@@ -198,7 +196,7 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
               }
               this.setComboDropped(hwnd, false);
               if (this.captureWindow === hwnd) this.captureWindow = 0;
-            } else if (clientY < selectionTop) {
+            } else if (clientY < selectionTop && this.isComboDropButtonHit(hwnd, message.lParam)) {
               const dropped = !combo.dropped;
               this.setComboDropped(hwnd, dropped);
               this.focusWindow = hwnd;
@@ -285,7 +283,7 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
         code.push(0xff, 0xd0); // call eax
         code.push(0x89, 0xec); // mov esp,ebp
       }
-      code.push(0x31, 0xc0); // xor eax,eax：PeekMessageA 返回 FALSE
+      code.push(0x31, 0xc0); // xor eax,eax makes PeekMessageA return FALSE.
       code.push(0x89, 0xec, 0x5d); // mov esp,ebp; pop ebp
       this.appendGuestCallbackReturn(code, frame, originalReturn);
       if (code.length > CALLBACK_STRIDE) throw new Error(`鼠标批量桥超出槽位: ${code.length}`);
@@ -325,7 +323,7 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
     }
     protected enqueueMessage(queue: MessageState[], message: MessageState): void {
       this.invalidateFastPeek();
-      // 鼠标移动可能比客体消息泵快，只保留最新一条 WM_MOUSEMOVE。
+      // Mouse movement may outpace the guest pump; retain only the latest WM_MOUSEMOVE.
       const tail = queue.at(-1);
       if (message.message === 0x0200 && tail?.message === message.message && tail.hwnd === message.hwnd) {
         queue[queue.length - 1] = message;
@@ -335,11 +333,11 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
     }
     protected markInputReady(): void {
       if (this.inputReady) return;
-      // 片头 MCIWnd 有自己的内层泵；窗口关闭后遇到的第一个消息 API 才是主消息泵。
+      // Intro MCIWnd runs an inner pump; the first message API after its closure belongs to the main pump.
       if (this.mciWindows.size) return;
       this.inputReady = true;
-      // CreateWindow/ShowWindow 在真实 Win32 上会先产生初始位置与客户区尺寸消息。
-      // 原版 WndProc 用它们建立最终 Blt 的目标 RECT（0x4af0fc）。
+      // Real CreateWindow/ShowWindow first produce initial position and client-size messages.
+      // The native WndProc uses them to establish the final Blt destination RECT at 0x4af0fc.
       this.queueMessage(0x0003, 0, 0, this.primaryWindow); // WM_MOVE: (0, 0)
       this.queueMessage(
         0x0005,
@@ -347,7 +345,7 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
         ((this.displayHeight & 0xffff) << 16) | (this.displayWidth & 0xffff),
         this.primaryWindow,
       ); // WM_SIZE: SIZE_RESTORED, 800×600
-      // Win32 顶层窗口激活时会收到这条消息；原版用它打开输入门控。
+      // Win32 top-level windows receive this on activation; native code uses it to enable input.
       this.queueMessage(0x001c, 1, 0, this.primaryWindow); // WM_ACTIVATEAPP
       for (const message of this.pendingHostMessages.splice(0)) this.enqueueMessage(this.messages, message);
     }
@@ -458,10 +456,7 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
       );
     }
     /**
-     * Win32 的键态与消息队列按同一时间线推进。浏览器/worker 可能在客体取出
-     * WM_MOUSE* 前已收到后续 pointerup/keyup；以当前宿主键态回答
-     * GetAsyncKeyState 会让快速单击或 Ctrl+点击丢失。消息出队时恢复该消息
-     * 携带的鼠标键与修饰键，再由后续消息清除。
+     * Win32 key state and queued messages advance on one timeline. Browser/Worker code may receive pointerup/keyup before the guest consumes WM_MOUSE*. Answering GetAsyncKeyState from current host state loses quick clicks or Ctrl+clicks. Restore each message's mouse/modifier state on dequeue and let subsequent messages clear it.
      */
     protected applyQueuedInputState(
       message: Pick<MessageState, 'message' | 'wParam'> & Partial<Pick<MessageState, 'lParam' | 'modifierKeyState'>>,
@@ -530,7 +525,7 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
           this.queueMessage(0x0113, timer.id, timer.callback, 0);
         }
         if (timer.periodic) {
-          // 如果页面曾经挂起，不追补成千上万个过期 tick。
+          // After page suspension, do not replay thousands of expired ticks.
           timer.next = now + timer.interval;
         } else {
           timer.next = Number.POSITIVE_INFINITY;
@@ -554,12 +549,12 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
       const wParam = this.readU32(messagePtr + 8);
       const lParam = this.readU32(messagePtr + 12);
       if (message === 0x000f && this.discardInactivePaint(hwnd)) return 0;
-      // 客体可能在真正 Dispatch 前继续查看队列；WndProc 内查询的键态应与
-      // 当前 MSG 一致，而不是后续物理 keyup 的状态。RA2 强制攻击依赖此顺序。
+      // The guest may inspect more queued messages before Dispatch; key-state queries inside WndProc must match
+      // the current MSG rather than later physical keyup state. RA2 force attack relies on this order.
       this.applyQueuedInputState({ message, wParam });
-      // 标准控件通常由 BeginPaint 清除更新区；RA2 的自绘控件绕过 GDI，直接
-      // 写 DirectDraw。把已取出的 WM_PAINT 视为本轮验证边界，保证下一次布局
-      // 或动画失效能重新产生 WM_PAINT，而不是被永久合并。
+      // Standard controls clear update regions via BeginPaint, but RA2 custom controls write DirectDraw directly.
+      // Treat dequeued WM_PAINT as this cycle's validation boundary so later layout
+      // or animation invalidations can generate another WM_PAINT instead of being coalesced forever.
       const multimediaTimer = message === 0x0113 && hwnd === 0 ? this.multimediaTimers.get(wParam) : undefined;
       const callback =
         multimediaTimer?.callback === lParam
@@ -583,7 +578,7 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
       if (multimediaTimer && !multimediaTimer.periodic) this.multimediaTimers.delete(multimediaTimer.id);
 
       const originalReturn = this.readU32(call.stack);
-      // 回调可能再次进入消息泵；每层使用独立桥，避免覆盖外层的返回地址。
+      // Callbacks may reenter the message pump; each level needs an independent bridge to preserve outer return addresses.
       const frame = this.reserveGuestCallback();
       const { depth, trampoline } = frame;
       this.lastCallbackState = { hwnd, message, callback, callStack: call.stack, originalReturn, trampoline, depth };
@@ -592,7 +587,7 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
         code.push(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, value >>> 24);
       };
       code.push(0x55); // push ebp
-      code.push(0x89, 0xe5); // mov ebp, esp；保存回调前的栈顶
+      code.push(0x89, 0xe5); // mov ebp, esp saves the pre-callback stack top.
       const push = (value: number) => {
         code.push(0x68, value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, value >>> 24);
       };
@@ -600,19 +595,19 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
       code.push(0xb8);
       emit32(callback);
       code.push(0xff, 0xd0); // call eax
-      code.push(0x89, 0xec); // mov esp, ebp；兼容 stdcall/cdecl 回调的参数清理差异
+      code.push(0x89, 0xec); // mov esp, ebp accommodates stdcall/cdecl callback cleanup differences.
       code.push(0x5d); // pop ebp
       this.appendGuestCallbackReturn(code, frame, originalReturn);
       this.memory.write_memory(code, trampoline);
       this.writeU32(call.stack, trampoline);
       return 0;
     }
-    /** 浏览器输入和 host 事件通过同一条 Win32 消息队列进入原版 WndProc。 */
+    /** Browser input and host events enter native WndProc through one Win32 message queue. */
     getHostInputDispatchCount(): number {
       return this.hostInputDispatchCount;
     }
 
-    /** 返回 false 表示宿主输入已直接消费，无需等待客体派发（如弹窗关闭后的抬起）。 */
+    /** false means host input was consumed directly and need not await guest dispatch, such as an up after popup closure. */
     postMessage(message: number, wParam = 0, lParam = 0, hwnd = this.primaryWindow): void | false {
       if (message >= 0x0100 && message <= 0x0108) {
         this.lastHostKeyMessage = message;
@@ -634,10 +629,10 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
           hwnd = this.focusWindow;
         } else this.focusWindow = 0;
       }
-      // 真实 Windows 在投递 WM_MOUSEMOVE 前先向命中窗口同步发送 WM_NCHITTEST
-      // （屏幕坐标）。Westwood 菜单对话框在该分支用 ChildWindowFromPointEx 追踪
-      // 子控件 enter/leave——Campaign 徽标 hover 动画与音效由此驱动；只投
-      // WM_MOUSEMOVE 时该分支永远不会执行。
+      // Real Windows sends synchronous WM_NCHITTEST with screen coordinates to the hit window before WM_MOUSEMOVE.
+      // Westwood menu dialogs use ChildWindowFromPointEx in this branch to track child enter/leave,
+      // driving Campaign logo hover animation and sound. Sending only
+      // WM_MOUSEMOVE never executes that branch.
       let hitTest: { hwnd: number; lParam: number } | null = null;
       if (message >= 0x0200 && message <= 0x020e && hwnd === this.primaryWindow) {
         const screenX = (lParam << 16) >> 16;
@@ -647,8 +642,8 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
         if (latchedTarget) {
           this.hostPointerCapture = 0;
           if (!this.windows.has(latchedTarget) || !this.isActiveShellWindow(latchedTarget)) {
-            // 对应弹窗已在按下期间消失；不能把这次抬起重新命中到底层控件，
-            // 但必须同步释放宿主的 VK_LBUTTON，避免后续输入被视为拖动。
+            // The popup disappeared during down; do not retarget this up to an underlying control,
+            // but release host VK_LBUTTON synchronously so later input is not mistaken for dragging.
             this.applyQueuedInputState({ message, wParam });
             return false;
           }
@@ -656,7 +651,18 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
         if (this.captureWindow && !this.isWindowTreeEnabled(this.captureWindow)) this.captureWindow = 0;
         // 可见标准控件保持原生窗口命中；落在 DirectDraw 容器上的 RA2 输入统一
         // 到当前 shell 页坐标系，避免嵌套对话框让 Gadget 把 lParam 解释错位。
-        const nativeTarget = latchedTarget || this.hitTestWindow(screenX, screenY, this.primaryWindow, true);
+        let nativeTarget = latchedTarget || this.hitTestWindow(screenX, screenY, this.primaryWindow, true);
+        // RA2 的自绘下拉把原生 ComboBox 隐藏起来，只让 Gadget 画出选择框。
+        // 文字区不能再交给 Gadget（它会误把整块矩形当成展开按钮）；右侧
+        // 三角区仍保留 shell 页目标，由客体的自绘下拉逻辑负责展开。
+        if (
+          !latchedTarget &&
+          (message === 0x0201 || message === 0x0202) &&
+          this.gameProfile.shell?.initializeComboDropWindow &&
+          this.windowClassNames.get(nativeTarget)?.toLowerCase() === '#32770'
+        ) {
+          nativeTarget = this.hitTestDrawnComboText(screenX, screenY, nativeTarget) || nativeTarget;
+        }
         // Westwood 的弹层与滚动条是同一父窗口下相邻的两个 HWND。
         // 弹层持续捕获鼠标；滚动条区域仍须交给原生控件，否则按箭头会选中末行。
         const dropScrollbar =
@@ -665,6 +671,10 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
           this.scrollbarOwner(nativeTarget) === this.captureWindow
             ? nativeTarget
             : 0;
+        // ComboBox 会在展开时保留自身的 capture，但真实 ComboDropWin 是浮在
+        // 同级控件之上的弹层；点击弹层时必须优先把消息交给弹层，不能让下方
+        // 的虚拟 ComboBox 再次处理一次展开/收起。
+        const dropWindow = this.windowClassNames.get(nativeTarget)?.toLowerCase() === 'combodropwin' ? nativeTarget : 0;
         // Campaign 的 owner-draw Static 与真实 Win32 一样保持 HTTRANSPARENT。
         // 父对话框在 WM_NCHITTEST 分支用 ChildWindowFromPointEx 判断 1770..1772，
         // 并启动徽标动画和 hover 音效；直接改投 Static 会绕开该分支。
@@ -672,6 +682,7 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
           latchedTarget ||
           this.scrollbarDrag?.hwnd ||
           dropScrollbar ||
+          dropWindow ||
           this.captureWindow ||
           (this.gameProfile.shell?.retargetDialogChrome &&
           this.windowClassNames.get(nativeTarget)?.toLowerCase() === '#32770'
@@ -680,8 +691,14 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
         if (target) {
           if (
             message === 0x0201 &&
-            ['combodropwin', 'scrollbar'].includes(this.windowClassNames.get(target)?.toLowerCase() ?? '')
+            (['combobox', 'combodropwin', 'scrollbar'].includes(
+              this.windowClassNames.get(target)?.toLowerCase() ?? '',
+            ) ||
+              (this.gameProfile.shell?.initializeComboDropWindow === true &&
+                this.windowClassNames.get(target)?.toLowerCase() === '#32770'))
           ) {
+            // ComboBox/自绘 shell 页的按下处理可能同步显示 ComboDropWin；抬起仍应
+            // 投给本次按下命中的窗口，不能因为弹层刚出现就把一次点击拆给两个 HWND。
             this.hostPointerCapture = target;
           }
           hwnd = target;
@@ -694,10 +711,10 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
             );
           }
           lParam = (((clientY & 0xffff) << 16) | (clientX & 0xffff)) >>> 0;
-          // 子窗口变化才合成 WM_NCHITTEST，与对话框内部的 last-id 去重一致，
-          // 也保住同一子窗口内移动消息的合并。NCHITTEST 的 lParam 是屏幕坐标。
-          // 输入未就绪（MCI 内层泵）时不合成：缓存的移动并入主队列后，就绪后的
-          // 第一次移动会重新识别边沿并补发。
+          // Synthesize WM_NCHITTEST only when the child changes, matching dialog last-ID deduplication
+          // and preserving movement coalescing within one child. NCHITTEST lParam uses screen coordinates.
+          // Do not synthesize before input readiness during the MCI inner pump; after cached movement joins the main queue,
+          // the first ready movement detects the edge and sends the missing notification.
           if (message === 0x0200 && this.inputReady) {
             const child = this.childWindowFromPoint(target, clientX, clientY, 1); // CWP_SKIPINVISIBLE
             if (child !== this.lastHitTestChild) {
@@ -706,7 +723,7 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
                 hwnd: target,
                 lParam: (((screenY & 0xffff) << 16) | (screenX & 0xffff)) >>> 0,
               };
-              // 诊断计数：Campaign 页徽标 enter-edge（浏览器冒烟断言 hover 只触发一次）。
+              // Count Campaign-logo enter edges so browser smoke tests can assert a single hover trigger.
               const menu = this.campaignMenu();
               const childId = this.controlIds.get(child) ?? 0;
               if (menu && childId >= menu.badgeControlIdRange[0] && childId <= menu.badgeControlIdRange[1]) {
@@ -746,8 +763,8 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
         });
         if (this.hostInputTrace.length > 24) this.hostInputTrace.splice(0, this.hostInputTrace.length - 24);
       }
-      // WM_NCHITTEST 是同步语义（send 而非 post）：先于本次移动在下一 API 边界
-      // 送入命中窗口，保证对话框先记录 hover 子控件、再处理随后的 WM_MOUSEMOVE。
+      // WM_NCHITTEST is synchronous send, not post: deliver it to the hit window at the next API boundary before this movement,
+      // letting the dialog record the hovered child before handling WM_MOUSEMOVE.
       const enqueueInput = (queue: MessageState[]) => {
         if (hitTest) {
           this.enqueueMessage(this.pendingHostDispatches, {
@@ -762,27 +779,27 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
         }
         this.enqueueMessage(queue, queued);
       };
-      // RA2 在 PeekMessageA 取出 MSG 后先交给 Westwood Gadget 预处理器，只有
-      // 未消费的消息才会 DispatchMessageA。直接调用命中 HWND 的 WndProc 会绕过
-      // 国家下拉、玩家名等 Gadget；RA2 必须保留真实消息队列路径。
+      // After PeekMessageA retrieves MSG, RA2 first runs Westwood Gadget preprocessing and dispatches only
+      // unconsumed messages. Directly calling the hit HWND's WndProc bypasses country dropdowns,
+      // player names, and other Gadgets; RA2 must retain the actual message-queue path.
       if (this.inputReady && this.gameProfile.shell?.mouseViaMessageQueue && message >= 0x0200 && message <= 0x020e) {
         enqueueInput(this.messages);
         return;
       }
-      // 其他现有游戏的 shell 内层泵只 Peek 不 Dispatch，继续在下一 API 边界
-      // 同步送入命中的控件过程。
+      // Other existing games' shell inner pumps Peek without Dispatch; keep synchronously invoking
+      // the hit control procedure at the next API boundary.
       if (this.inputReady && message >= 0x0200 && message <= 0x020e) {
         enqueueInput(this.pendingHostDispatches);
         return;
       }
-      // MCI 初始化期间也有内层消息泵。在原版主消息泵就绪前缓存 host 输入，
-      // 否则用户加载时移动鼠标就会让 MCI 提前调用主 WndProc。
+      // MCI initialization also has an inner pump. Cache host input until the native main pump is ready,
+      // or mouse movement during loading could make MCI call the main WndProc prematurely.
       enqueueInput(this.inputReady ? this.messages : this.pendingHostMessages);
     }
 
     /**
-     * 双击由 USER32 按目标窗口类的 CS_DBLCLKS 生成；浏览器只上报两次物理按下。
-     * 未声明该类样式的 DirectDraw/Gadget 窗口必须继续收到第二个 WM_*BUTTONDOWN。
+     * USER32 generates double-clicks from the target class's CS_DBLCLKS; browsers report only two physical downs.
+     * DirectDraw/Gadget windows without that style must still receive the second WM_*BUTTONDOWN.
      */
     protected translatePointerDoubleClick(hwnd: number, message: number, lParam: number): number {
       if (message !== 0x0201 && message !== 0x0204 && message !== 0x0207) return message;
@@ -802,7 +819,7 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
       return isDouble ? message + 2 : message;
     }
 
-    /** 当前最上层、可见且包含坐标的 shell 页；叶子控件由客体 Gadget 自己命中。 */
+    /** Topmost visible shell page containing the coordinates; guest Gadgets hit-test leaf controls themselves. */
     protected hitTestShellPage(x: number, y: number, root: number): number {
       let page = 0;
       for (const hwnd of this.windowZOrder) {
@@ -827,6 +844,31 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
       return page || root;
     }
 
+    /** 找到 RA2 隐藏的 owner-draw ComboBox 文字区；三角区返回 0，继续走 Gadget。 */
+    protected hitTestDrawnComboText(x: number, y: number, dialog: number): number {
+      if (!this.gameProfile.shell?.initializeComboDropWindow || !dialog) return 0;
+      let best = 0;
+      for (const hwnd of this.windowZOrder) {
+        if (this.windowClassNames.get(hwnd)?.toLowerCase() !== 'combobox') continue;
+        if (this.isWindowVisible(hwnd) || !this.isWindowTreeEnabled(hwnd)) continue;
+        const style = this.windowLongs.get(`${hwnd}:-16`) ?? 0;
+        if ((style & 0x3) !== 0x3 || !this.isWindowInTree(hwnd, dialog)) continue;
+        const rect = this.screenRect(hwnd);
+        if (
+          rect.width <= 0 ||
+          rect.height <= 0 ||
+          x < rect.x ||
+          y < rect.y ||
+          x >= rect.x + rect.width ||
+          y >= rect.y + rect.height
+        )
+          continue;
+        const point = ((((y - rect.y) & 0xffff) << 16) | ((x - rect.x) & 0xffff)) >>> 0;
+        if (!this.isComboDropButtonHit(hwnd, point)) best = hwnd;
+      }
+      return best;
+    }
+
     /** Win32 ChildWindowFromPoint[Ex] 只检查 parent 的直接子窗口，不递归。
      * 非 Ex 版本不会自动忽略隐藏或禁用子窗口；Ex 版本由 CWP_* flags 决定。 */
     protected childWindowFromPoint(parent: number, x: number, y: number, flags: number): number {
@@ -845,8 +887,9 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
       return parent;
     }
 
-    /** 原生窗口管理器会在入队前对子窗口做命中；Button/编辑框等吃鼠标，
-     * Static 背景按 HTTRANSPARENT 处理，避免盖住整张主菜单。 */
+    /**
+     * Native window managers hit-test children before queueing. Buttons/edits consume mouse input; Static backgrounds use HTTRANSPARENT so they cannot cover the whole menu.
+     */
     protected hitTestWindow(x: number, y: number, root: number, interactiveOnly: boolean): number {
       let best = root;
       let bestRank = -1;
@@ -854,9 +897,12 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
         if (hwnd === root) continue;
         const className = this.windowClassNames.get(hwnd)?.toLowerCase() ?? '';
         if (!this.isWindowVisible(hwnd) || !this.isActiveShellWindow(hwnd)) continue;
+        const isComboDropWindow =
+          this.gameProfile.shell?.initializeComboDropWindow === true && className === 'combodropwin';
         let parent = this.windowParents.get(hwnd) ?? 0;
         let depth = 0;
         let descendant = false;
+        let comboDropAncestor = isComboDropWindow ? hwnd : 0;
         const seen = new Set<number>();
         while (parent && !seen.has(parent)) {
           seen.add(parent);
@@ -865,14 +911,24 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
             descendant = true;
             break;
           }
+          if (
+            !comboDropAncestor &&
+            this.gameProfile.shell?.initializeComboDropWindow === true &&
+            this.windowClassNames.get(parent)?.toLowerCase() === 'combodropwin'
+          ) {
+            comboDropAncestor = parent;
+          }
           parent = this.windowParents.get(parent) ?? 0;
         }
-        if (!descendant) continue;
+        // WS_POPUP 的 ComboDropWin 不一定挂在 primary 的 child tree 上；它的
+        // 子控件仍应参加命中测试。普通顶层窗口继续被过滤，避免把桌面级窗口
+        // 误投进游戏消息队列。
+        if (!descendant && !comboDropAncestor) continue;
         if (interactiveOnly) {
-          // Static 在 Win32 命中测试中默认是 HTTRANSPARENT。Campaign 的父对话框
-          // 会在 WM_MOUSEMOVE/DOWN/UP 中用 ChildWindowFromPoint 找到盟军/苏军徽标；
-          // 如果提前把消息改投给 SS_OWNERDRAW Static，父过程永远收不到点击。
-          // #32770 对话框本身则必须作为空白区域的输入目标。
+          // Static defaults to HTTRANSPARENT in Win32 hit testing. Campaign parent dialogs
+          // use ChildWindowFromPoint on WM_MOUSEMOVE/DOWN/UP to locate Allied/Soviet logos;
+          // retargeting early to SS_OWNERDRAW Static would prevent the parent from ever receiving clicks.
+          // The #32770 dialog itself must remain the target for blank areas.
           if (
             ![
               '#32770',
@@ -891,9 +947,9 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
         const rect = this.screenRect(hwnd);
         const combo =
           this.windowClassNames.get(hwnd)?.toLowerCase() === 'combobox' ? this.comboStates.get(hwnd) : undefined;
-        // 展开中的下拉按弹出区域参与命中（真实 Win32 弹层浮于所有平级控件之上，
-        // 且优先于其下的兄弟行）。缺了这一步，点弹层条目会命中弹层底下的相邻行
-        // 控件——Skirmish 设置页"第 2 行下拉选完，第 4 行被误翻开"就由此而来。
+        // Expanded dropdowns participate in hit testing over their popup area, above sibling controls and rows
+        // as on real Win32. Without this, popup-item clicks hit underlying neighboring controls,
+        // causing the skirmish bug where selecting row 2 unexpectedly opens row 4.
         if (combo?.dropped) rect.height = Math.max(rect.height, combo.droppedHeight);
         if (
           rect.width <= 0 ||
@@ -904,7 +960,11 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
           y >= rect.y + rect.height
         )
           continue;
-        const rank = (depth << 1) | (combo?.dropped ? 1 : 0);
+        // 真实弹层优先于同级 ComboBox 的虚拟展开区域；弹层内部的滚动条/列表
+        // 仍由更深层级覆盖弹层本身。普通子窗口保留原有深度优先级。
+        const rank = comboDropAncestor
+          ? (0x1_0000 + (depth << 2)) | (className === 'combodropwin' ? 3 : 0)
+          : (depth << 2) | (combo?.dropped ? 2 : 0);
         if (rank >= bestRank) {
           best = hwnd;
           bestRank = rank;
@@ -913,7 +973,7 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
       return best;
     }
 
-    /** 禁用父窗口会隐式阻止全部后代接收输入，即使子 HWND 自身没有 WS_DISABLED。 */
+    /** Disabling a parent implicitly blocks input to all descendants, even without WS_DISABLED on child HWNDs. */
     protected isWindowTreeEnabled(hwnd: number): boolean {
       const seen = new Set<number>();
       while (hwnd && !seen.has(hwnd)) {

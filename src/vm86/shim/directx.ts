@@ -139,10 +139,7 @@ const SOUND_BUFFER_METHODS: Array<[string, number]> = [
 ];
 
 /**
- * 无副作用、host 分支只返回常量的 COM 方法。这些方法的 vtable 槽直接生成客体内
- * 常量桩（见 createComObject），消除战场渲染循环里每帧数万次的 VM↔JS 往返。
- * 只收录「返回常量且无任何 host 状态读写」的方法；Lock/Unlock/Blt 等会触碰
- * surface.dirty / emitFrame 的方法必须保留完整 hypercall 桩。
+ * Side-effect-free COM methods whose host branches return only constants. Generate guest constant stubs directly in their vtable slots (see createComObject), eliminating tens of thousands of VM/JS round trips per battlefield frame. Include only methods with no host-state reads/writes; Lock/Unlock/Blt and others touching surface.dirty / emitFrame retain full hypercall stubs.
  */
 const CONSTANT_COM_METHODS: ReadonlyMap<string, number> = new Map([
   ['IDirectDrawSurface.IsLost', 0],
@@ -154,14 +151,14 @@ const CONSTANT_COM_METHODS: ReadonlyMap<string, number> = new Map([
 
 const DIRECTDRAW_VBLANK_MS = 1000 / 60;
 const DDSCAPS_PRIMARYSURFACE = 0x0000_0200;
-/** IDirectSoundBuffer 客体对象尾部的播放游标缓存。vtable/refcount 仍占前 8 字节。 */
+/** Playback-cursor cache at the tail of guest IDirectSoundBuffer objects; vtable/refcount still occupy the first eight bytes. */
 const SOUND_POSITION_CACHE = 8;
 const SOUND_POSITION_BUDGET = 12;
-// Bink 会在解码线程中极高频轮询播放游标。63 次缓存命中仍会造成约
-// 2,300 次/秒的 Worker→主线程查询；1023 次对应约 140 次/秒，游标刷新
-// 间隔仍低于一帧，但能避免 WebAudio 消息队列被轮询淹没而偶发断音。
+// Bink polls playback cursors heavily in its decoding thread. A 63-hit cache still causes about
+// 2,300 Worker-to-main-thread queries per second; 1023 hits reduce that to about 140 per second while refreshing
+// within a frame, avoiding WebAudio-message flooding and intermittent audio dropouts.
 const SOUND_POSITION_FAST_BUDGET = 1023;
-/** RA2 surface 对象尾部缓存完整 DDSURFACEDESC，供 Lock 客体桩直接复制。 */
+/** Cache the full DDSURFACEDESC at the RA2 surface-object tail for direct copying by guest Lock stubs. */
 const SURFACE_DESC_CACHE = 8;
 const SURFACE_DESC_BYTES = 108;
 const SURFACE_UNLOCK_MODE = SURFACE_DESC_CACHE + SURFACE_DESC_BYTES;
@@ -172,8 +169,10 @@ const SURFACE_UNLOCK_GENERIC = 0;
 const SURFACE_UNLOCK_SHELL = 1;
 const SURFACE_UNLOCK_PRIMARY = 2;
 
-/** COM 接口数值标签：createComObject 时预计算进 PeImport.comTag，
- *  让 dispatch 按数值路由而不是每次调用的 startsWith 字符串链。 */
+/**
+ * Numeric COM interface tags precomputed into PeImport.comTag at createComObject time,
+ * letting dispatch use numeric routing instead of per-call startsWith chains.
+ */
 const COM_TAG_DIRECTDRAW = 1;
 const COM_TAG_SURFACE = 2;
 const COM_TAG_CLIPPER = 3;
@@ -201,9 +200,7 @@ function comTagOf(interfaceName: string): number | undefined {
 }
 
 /**
- * GetCurrentPosition 的缓存快速桩：大多数轮询直接回放最近一次 host 计算的游标，
- * 预算耗尽后回退 hypercall 刷新。这样仍以宿主单调时钟/WebAudio 状态为准，同时
- * 避免 RA2 音乐线程每秒数千次 VM↔JS 往返。
+ * Cached GetCurrentPosition fast stub: most polls replay the latest host-computed cursor; exhausted budgets fall back to hypercall refresh. Host monotonic time/WebAudio remains authoritative while avoiding thousands of RA2 music-thread VM/JS round trips per second.
  */
 function makeCachedSoundPositionStub(id: number, argBytes: number): Uint8Array {
   const code: number[] = [];
@@ -245,8 +242,7 @@ function makeCachedSoundPositionStub(id: number, argBytes: number): Uint8Array {
 }
 
 /**
- * RA2 的 Lock host 分支只写固定 DDSURFACEDESC。客体桩从 surface 对象尾部复制
- * 27 个 DWORD；Unlock 仍逐次进入 host，保留画面提交和输入/Worker 让步边界。
+ * RA2 Lock's host branch only writes a fixed DDSURFACEDESC. The guest stub copies 27 DWORDs from the surface-object tail; Unlock still enters the host each time, preserving presentation and input/Worker yield boundaries.
  */
 function makeCachedSurfaceLockStub(id: number, argBytes: number): Uint8Array {
   const code: number[] = [];
@@ -259,13 +255,13 @@ function makeCachedSurfaceLockStub(id: number, argBytes: number): Uint8Array {
   };
 
   code.push(0x56, 0x57); // push esi; push edi（callee-saved）
-  code.push(0x8b, 0x74, 0x24, 0x0c); // mov esi, [esp + 12]（原 this）
+  code.push(0x8b, 0x74, 0x24, 0x0c); // mov esi, [esp + 12]: original this.
   code.push(0x85, 0xf6); // test esi, esi
   fallbackBranch(0x84); // je fallback
   code.push(0x81, 0x7e, SURFACE_DESC_CACHE);
   emit32(SURFACE_DESC_BYTES); // cached dwSize == 108
   fallbackBranch(0x85); // jne fallback
-  code.push(0x8b, 0x7c, 0x24, 0x14); // mov edi, [esp + 20]（原 desc out）
+  code.push(0x8b, 0x7c, 0x24, 0x14); // mov edi, [esp + 20]: original desc output pointer.
   code.push(0x85, 0xff); // test edi, edi
   const noOutput = code.length;
   code.push(0x74, 0x00); // je success
@@ -280,7 +276,7 @@ function makeCachedSurfaceLockStub(id: number, argBytes: number): Uint8Array {
   code.push(0xc2, argBytes & 0xff, (argBytes >>> 8) & 0xff);
 
   const fallback = code.length;
-  code.push(0x5f, 0x5e); // 恢复寄存器后走普通 hypercall
+  code.push(0x5f, 0x5e); // Restore registers, then take the ordinary hypercall path.
   code.push(...makeImportStub(id, argBytes));
   for (const patch of fallbackPatches) {
     const relative = fallback - (patch + 4);
@@ -293,8 +289,7 @@ function makeCachedSurfaceLockStub(id: number, argBytes: number): Uint8Array {
 }
 
 /**
- * 非 primary surface 的 Unlock 最多连续 7 次留在客体，第 8 次强制回 host。
- * shell surface 还必须等于 host 当前活跃层，否则立即回 host 完成换层。
+ * Non-primary Unlock may stay inside the guest for at most seven consecutive calls; force the eighth back to the host. Shell surfaces must also match the active host layer, otherwise return immediately to switch layers.
  */
 function makeBudgetedSurfaceUnlockStub(id: number, argBytes: number): Uint8Array {
   const code: number[] = [];
@@ -321,14 +316,14 @@ function makeBudgetedSurfaceUnlockStub(id: number, argBytes: number): Uint8Array
   branch(0x84, fallbackPatches); // je fallback
   code.push(0x81, 0x79, SURFACE_DESC_CACHE);
   emit32(SURFACE_DESC_BYTES);
-  branch(0x85, fallbackPatches); // 非 RA2 扩展对象
+  branch(0x85, fallbackPatches); // Not an RA2 extended object.
   code.push(0x83, 0x79, SURFACE_UNLOCK_MODE, SURFACE_UNLOCK_PRIMARY); // cmp mode, primary
   branch(0x84, fallbackPatches);
   code.push(0x83, 0x79, SURFACE_UNLOCK_MODE, SURFACE_UNLOCK_SHELL); // cmp mode, shell
   branch(0x85, fastPatches); // generic → budget
   code.push(0x3b, 0x0d);
   emit32(HYPERCALL_ACTIVE_SHELL_SURFACE); // cmp ecx, [activeShell]
-  branch(0x85, fallbackPatches); // shell 换层必须进 host
+  branch(0x85, fallbackPatches); // Shell layer switches must enter the host.
 
   const fast = code.length;
   code.push(0x83, 0x79, SURFACE_UNLOCK_BUDGET, 0x00); // cmp budget, 0
@@ -344,16 +339,16 @@ function makeBudgetedSurfaceUnlockStub(id: number, argBytes: number): Uint8Array
   return new Uint8Array(code);
 }
 
-/** DirectX 的 Win32 API case（原 Win32Shim.dispatch 主 switch 拆分）。 */
+/** DirectX Win32 API cases extracted from Win32Shim.dispatch's main switch. */
 export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) {
   return class extends Base {
     constructor(...args: any[]) {
       super(...args);
     }
 
-    /** 上一次 vblank 节拍（host 时钟，ms）——60Hz 节拍对齐用，见 WaitForVerticalBlank。 */
+    /** Last vblank tick in host milliseconds, used for 60Hz alignment; see WaitForVerticalBlank. */
     private lastVblankHostMs = 0;
-    /** 原版战场循环会连续调用两次 BLOCKBEGIN；一对调用只应消耗一个刷新周期。 */
+    /** The native battlefield loop calls BLOCKBEGIN twice consecutively; the pair should consume only one refresh period. */
     private vblankPairSecondCall = false;
     private readonly clipperWindows = new Map<number, number>();
 
@@ -379,7 +374,7 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
     protected dispatchDirectDraw(call: Win32Call): Win32Result | null {
       const key = call.imported.key;
       const a = call.args;
-      // 动态 COM 桩带预计算标签/方法名（PeImport.comTag/method）；手搓导入回退字符串解析。
+      // Dynamic COM stubs carry precomputed PeImport.comTag/method; handcrafted imports fall back to string parsing.
       const tag = call.imported.comTag;
       const method = call.imported.method ?? key.slice(key.lastIndexOf('.') + 1);
       const thisPtr = a[0] ?? 0;
@@ -404,7 +399,7 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
               const size = this.readU32(caps);
               this.zero(caps, Math.min(Math.max(size, 4), 0x180));
               this.writeU32(caps, size);
-              // 软件 8-bit Blt/色键/调色板能力；不宣称 3D/overlay，避免游戏选错路径。
+              // Advertise software 8-bit Blt/color-key/palette capabilities, not 3D/overlay, so the game selects the correct path.
               this.writeU32(caps + 4, 0x0440_81c0);
               this.writeU32(caps + 0x30, 64 * 1024 * 1024);
               this.writeU32(caps + 0x34, 48 * 1024 * 1024);
@@ -417,8 +412,8 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
             const width = a[1] | 0;
             const height = a[2] | 0;
             const bpp = a[3] | 0;
-            // RA2 原生走 16-bit RGB565。尺寸不硬编码为 640×480：经典游戏的
-            // INI/命令行会请求 800×600 乃至更大模式，浏览器画布可直接承接。
+            // RA2 natively uses 16-bit RGB565. Do not hardcode 640x480: classic-game
+            // INI/command-line settings request 800x600 or larger modes, which the browser canvas supports directly.
             if ((bpp !== 8 && bpp !== 16) || width < 320 || width > 2560 || height < 200 || height > 1600) {
               return { eax: 0x8876_008a }; // DDERR_INVALIDMODE
             }
@@ -487,9 +482,9 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
               return { eax: 0 };
             }
             this.options.onLogicFrame?.();
-            // 按 60Hz 节拍对齐而非每次睡满一帧：游戏每帧连调两次 vblank（BEGIN/END），
-            // 各睡 16.7ms 会把节奏压到 30fps，setTimeout 抖动叠加成卡顿。改「距上一拍
-            // 的剩余时间」——连续调用总共只等一个周期，游戏回到 60fps 节拍。
+            // Align to 60Hz ticks instead of sleeping a full frame per call: the game calls vblank twice per frame (BEGIN/END),
+            // and two 16.7ms waits reduce it to 30fps with additional setTimeout jitter. Wait only for the remaining time
+            // since the previous tick so consecutive calls share one cycle and restore a 60fps cadence.
             this.vblankPairSecondCall = true;
             const now = performance.now();
             const period = this.clock.toHostDelay(DIRECTDRAW_VBLANK_MS);
@@ -575,7 +570,7 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
               this.applyReservedSystemPalette(palette);
               this.remapGdiTextForPalette(palette.object);
             }
-            // 调色板与像素常在转场中分两步更新；等下一次主表面呈现再一起捕获。
+            // Transitions often update palette and pixels separately; capture them together at the next primary-surface presentation.
             return { eax: 0 };
           }
           case 'GetEntries': {
@@ -632,8 +627,8 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
               const attached = this.surfaces.get(surface.attached);
               if (attached) this.remapGdiTextRunColors(attached);
             }
-            // SetPalette 不是像素呈现边界，避免新调色板套在旧像素上形成一帧花屏；
-            // 但 remap 已改像素，置脏让下一个真实呈现边界（vblank）重新快照。
+            // SetPalette is not a pixel-presentation boundary; avoid applying new palettes to old pixels for one corrupt frame.
+            // Since remap changes pixels, mark dirty so the next actual presentation boundary, vblank, resnapshots them.
             surface.dirty = true;
             return { eax: 0 };
           case 'GetPalette':
@@ -653,10 +648,10 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
             return { eax: 0 };
           case 'Lock':
             if (a[2]) this.writeSurfaceDesc(a[2], surface);
-            surface.dirty = true; // 锁定后客体会直接写像素，保守置脏
+            surface.dirty = true; // The guest writes pixels directly after locking; conservatively mark dirty.
             return { eax: 0 };
           case 'Unlock':
-            // RA2 的 Lock 已在客体内完成；Unlock 仍是逐次 host 提交边界，统一置脏。
+            // RA2 Lock already ran inside the guest; Unlock remains the host submission boundary, so mark dirty consistently.
             if (this.gameProfile.directDraw?.guestSurfaceFastPath) {
               surface.dirty = true;
               this.writeU32(
@@ -670,9 +665,9 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
           case 'Flip': {
             const attached = this.surfaces.get(surface.attached);
             if (attached) {
-              // 像素指针和 GDI 文字 run 必须同步交换：run 描述的是像素内容，
-              // 只换 pixels 会让前台 run 与像素错位，调色板换页时 remap
-              // 按错位的字形重写，文字像素保留旧索引（历史上显示成白色）。
+              // Swap pixel pointers and GDI text runs together because runs describe those pixels;
+              // swapping pixels alone misaligns front-buffer runs, causing palette-change remapping
+              // to rewrite the wrong glyphs and retain old text indexes, historically displayed as white.
               const pixels = surface.pixels;
               surface.pixels = attached.pixels;
               attached.pixels = pixels;
@@ -684,7 +679,7 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
                 this.refreshSurfaceDescCache(attached);
               }
             }
-            surface.dirty = true; // 换页后前台像素来自后台
+            surface.dirty = true; // After flipping, front pixels come from the back buffer.
             this.emitFrame(surface);
             return { eax: 0 };
           }
@@ -824,9 +819,9 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
             return { eax: 0 };
           case 'Lock': {
             const flags = a[7] ?? 0;
-            // DSBLOCK_FROMWRITECURSOR (1) 与 DSBLOCK_ENTIREBUFFER (2)。RA2 的
-            // 流式音乐会用这些标志维护环形缓冲；忽略 ENTIREBUFFER 会在 bytes=0
-            // 时返回一个空锁，导致只有预先填入的部分能够播放。
+            // DSBLOCK_FROMWRITECURSOR (1) and DSBLOCK_ENTIREBUFFER (2): RA2 streaming music
+            // uses these to maintain ring buffers. Ignoring ENTIREBUFFER with bytes=0
+            // returns an empty lock, so only the prefilled portion plays.
             if ((flags & 1) !== 0) {
               buffer.position =
                 this.options.audio?.getState(buffer.object)?.positionBytes ?? this.soundBufferPosition(buffer);
@@ -846,8 +841,8 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
           case 'Play':
             {
               const nextLooping = ((a[3] ?? 0) & 1) !== 0;
-              // DirectSound 对已播放且 flags 未变的 Play 是 no-op。Bink 每帧会重复
-              // 调用；不应为同一状态持续向主线程发送消息。
+              // DirectSound Play is a no-op when already playing with unchanged flags. Bink repeats it each frame;
+              // do not keep messaging the main thread for identical state.
               if (buffer.playing && buffer.looping === nextLooping) return { eax: 0 };
               if (!buffer.playing) buffer.startedAt = this.audioNow();
               buffer.playing = true;
@@ -877,8 +872,8 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
             } catch {
               return { eax: 0x8878_0064 };
             }
-            // 先按旧格式提交播放头，再切换格式；否则格式变化时会用新的
-            // block-align 解释旧时间段，造成一次错误的游标跳跃。
+            // Commit the playback cursor using the old format before switching; otherwise the new
+            // block alignment interprets the old interval and causes an incorrect cursor jump.
             buffer.position = this.soundBufferPosition(buffer);
             buffer.startedAt = this.audioNow();
             buffer.format = nextFormat;
@@ -939,9 +934,9 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
         for (let i = 0; i < methods.length; i++) {
           const [method, argBytes] = methods[i]!;
           const id = this.nextDynamicId++;
-          // 无副作用的查询类 COM 方法（IsLost 等）在战场渲染循环里每帧被调数万次，
-          // 每次往返 host 的开销远超方法本身。这些方法的 host 分支本就只返回常量，
-          // 直接生成客体内常量桩，消除 VM↔JS 往返。
+          // Side-effect-free COM queries such as IsLost run tens of thousands of times per battlefield frame;
+          // host round trips cost far more than the methods. Their host branches already return only constants,
+          // so generate constant guest stubs to eliminate VM/JS crossings.
           const constant = CONSTANT_COM_METHODS.get(`${interfaceName}.${method}`);
           const stubBytes =
             interfaceName === 'IDirectSoundBuffer' && method === 'GetCurrentPosition'
@@ -968,7 +963,7 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
             stub,
             argBytes,
             win32Module: win32ModuleOf(namespace),
-            // 路由预计算：dispatch 热路径不再 lastIndexOf/slice/startsWith。
+            // Precompute routing; dispatch's hot path no longer uses lastIndexOf/slice/startsWith.
             method,
             comTag: comTagOf(interfaceName),
           };
@@ -1015,9 +1010,7 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
       this.writeU32(buffer.object + SOUND_POSITION_BUDGET, 0);
     }
     /**
-     * 正式浏览器路径中 VM 位于 Worker，而 WebAudio 位于主线程，getState 无法
-     * 同步跨线程返回。用宿主单调时钟按 PCM 帧率维护 DirectSound 播放游标，
-     * 让 RA2 的流式解码线程可以继续判断哪些环形区段已经播完并及时回填。
+     * In the normal browser path the VM runs in a Worker while WebAudio runs on the main thread, preventing synchronous getState. Maintain DirectSound cursors from host monotonic time and PCM frame rate so RA2's streaming decoder can identify consumed ring regions and refill them promptly.
      */
     protected soundBufferPosition(buffer: SoundBufferState): number {
       if (!buffer.playing || buffer.size <= 0) return buffer.position;
@@ -1063,9 +1056,9 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
       return object;
     }
     protected applyReservedSystemPalette(palette: PaletteState): void {
-      // 客体传 DDPCAPS_8BIT (0x4) 时会使用几乎全部
-      // 256 个索引；不能套用窗口 GDI 的 20 个保留色。但 index 0 仍是
-      // 黑色/透明键，必须保持为黑，否则战场未绘制区会显示色键绿。
+      // When the guest supplies DDPCAPS_8BIT (0x4), it uses almost all
+      // 256 indexes; do not impose windowed GDI's 20 reserved colors. Index 0 remains
+      // the black/transparent key and must stay black, or undrawn battlefield regions appear color-key green.
       if (palette.caps & 0x40) return;
       palette.entries.set([0, 0, 0, 0], 0);
     }
@@ -1075,8 +1068,8 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
       const primary = (caps & 0x200) !== 0;
       const requestedWidth = (flags & 4) !== 0 ? this.readU32(desc + 12) : this.displayWidth;
       const requestedHeight = (flags & 2) !== 0 ? this.readU32(desc + 8) : this.displayHeight;
-      // DirectDraw 包装器在初始化过渡期可能带着 WIDTH/HEIGHT flags 传 0；
-      // Win9x 驱动实际按当前显示模式建立工作面，不能把它降成 1×1。
+      // During initialization, DirectDraw wrappers may pass zero dimensions with WIDTH/HEIGHT flags;
+      // Win9x drivers use the current display mode, so do not reduce these surfaces to 1x1.
       const width = requestedWidth || this.displayWidth || 800;
       const height = requestedHeight || this.displayHeight || 600;
       const surface = this.createSurface(width, height, caps);
@@ -1131,12 +1124,13 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
               ? SURFACE_UNLOCK_SHELL
               : SURFACE_UNLOCK_GENERIC,
         );
-        this.writeU32(object + SURFACE_UNLOCK_BUDGET, 0); // 首次 Unlock 必须进 host
+        this.writeU32(object + SURFACE_UNLOCK_BUDGET, 0); // The first Unlock must enter the host.
       }
       return surface;
     }
-    /** DDSURFACEDESC 暂存（108 字节）+ 复用 DataView：Lock/GetDisplayMode 每秒上万次，
-     *  原来 13 次 write_blob 合成 1 次，避免中间态与分配。 */
+    /**
+     * 108-byte DDSURFACEDESC staging plus a reused DataView: Lock/GetDisplayMode run tens of thousands of times per second. Replace 13 write_blob calls with one to avoid intermediate states and allocations.
+     */
     private readonly surfaceDescScratch = new Uint8Array(108);
     private readonly surfaceDescView = new DataView(this.surfaceDescScratch.buffer);
 
@@ -1150,8 +1144,8 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
       view.setUint32(12, surface.width, true);
       view.setUint32(16, surface.pitch, true);
       view.setUint32(36, surface.pixels, true);
-      // DDPIXELFORMAT（72 起 32 字节）与 writePixelFormat 同分支：RA2 的 16-bit
-      // surface 不能报成 8-bit 调色板格式。
+      // DDPIXELFORMAT, 32 bytes starting at 72, follows writePixelFormat branching; RA2's 16-bit
+      // surfaces must not be reported as 8-bit palette formats.
       view.setUint32(72, 32, true); // DDPIXELFORMAT.dwSize
       if (surface.bpp === 16) {
         view.setUint32(76, 0x40, true); // DDPF_RGB
@@ -1167,7 +1161,7 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
       this.memory.write_memory(bytes, ptr);
     }
 
-    /** Flip 交换 pixels 指针后同步 RA2 Lock 所读的对象内描述符。 */
+    /** After Flip swaps pixel pointers, synchronize the in-object descriptor read by RA2 Lock. */
     private refreshSurfaceDescCache(surface: SurfaceState): void {
       this.writeSurfaceDesc(surface.object + SURFACE_DESC_CACHE, surface);
     }
@@ -1185,7 +1179,7 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
         this.writeU32(ptr + 12, 8);
       }
     }
-    /** 记录最近被绘制的全屏层，呈现时按当前显示模式选择（见 snapshotFrame）。 */
+    /** Record the most recently drawn fullscreen layer and select it by current display mode at presentation; see snapshotFrame. */
     protected noteShellSurfaceDraw(surface: SurfaceState): void {
       if (
         this.gameProfile.shell?.compositeRgb565Layers &&
@@ -1220,8 +1214,8 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
       const source = this.surfaces.get(sourceObject);
       if (!source) return;
       const sourceRect = sourceRectPtr ? this.readRect(sourceRectPtr) : [0, 0, source.width, source.height];
-      // 全屏呈现路径仍可能传入窗口模式 RECT 全局；独占模式下该值保持空矩形。
-      // 旧 DirectDraw 驱动把它等价处理为整张主表面，这里显式归一化，否则所有运行时自绘都会丢失。
+      // Fullscreen presentation may still pass the windowed-mode global RECT, which stays empty in exclusive mode.
+      // Old DirectDraw drivers treat it as the whole primary surface; normalize explicitly or all runtime custom drawing disappears.
       if (destRect[2] <= destRect[0] || destRect[3] <= destRect[1]) {
         destRect = [0, 0, dest.width, dest.height];
       }
@@ -1280,14 +1274,14 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
       const destWidth = Math.max(0, dw | 0);
       const destHeight = Math.max(0, dh | 0);
       if (sw <= 0 || sh <= 0 || destWidth <= 0 || destHeight <= 0) return;
-      // 游戏建立的前/后缓冲位深一致；不同位深没有可靠的调色板来源，按
-      // DirectDraw 的无效像素格式语义跳过，避免越界破坏客体内存。
+      // Game-created front/back buffers share bit depth. Different depths have no reliable palette source;
+      // skip with DirectDraw invalid-pixel-format semantics to avoid out-of-bounds guest-memory corruption.
       if (source.bpp !== dest.bpp) return;
       const bytesPerPixel = source.bpp >>> 3;
 
-      // 等尺寸 Blt/BltFast 是战场每帧的热路径。先同时裁剪目标面与源面，
-      // 特别处理负目标坐标：旧实现直接算出 surface.pixels 之前的地址，边缘
-      // 动画会污染相邻内存并在顶部形成彩色噪声条。
+      // Equal-size Blt/BltFast is a per-frame battlefield hot path. Clip source and destination together,
+      // especially negative destinations: the old implementation addressed before surface.pixels, letting edge
+      // animations corrupt adjacent memory and create colored noise at the top.
       if (sw === destWidth && sh === destHeight) {
         let targetLeft = Math.max(0, dx);
         let targetTop = Math.max(0, dy);
@@ -1335,9 +1329,9 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
         return;
       }
 
-      // IDirectDrawSurface::Blt 允许源/目标 RECT 尺寸不同。RA2 的地图预览和
-      // UI 动画会把 198×99 表面缩到 144×72；按最近邻像素中心映射，保持
-      // RGB565 原值及色键语义。BltFast 不会进入此分支（其尺寸来自源 RECT）。
+      // IDirectDrawSurface::Blt permits unequal source/destination RECT sizes. RA2 map previews and
+      // UI animations shrink 198x99 surfaces to 144x72; use nearest-neighbor pixel-center mapping to retain
+      // original RGB565 values and color-key semantics. BltFast never reaches this branch because its size comes from the source RECT.
       const targetLeft = Math.max(0, dx);
       const targetTop = Math.max(0, dy);
       const targetRight = Math.min(dest.width, dx + destWidth);
@@ -1403,9 +1397,9 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
         this.memory.write_memory(sourceBytes, destinationStart);
         return;
       }
-      // read_memory 返回客体内存的视图（subarray，非拷贝）：逐像素直接改视图即改
-      // 客体内存，省掉每块一次 .slice() 拷贝 + 一次 write_memory 回写。BlitFast
-      // 热路径（統一天下 ~18 万次/秒）下这是主要分配与内存往返开销。
+      // read_memory returns a guest-memory subarray view, not a copy. Modify that view directly to update
+      // guest memory, eliminating a slice copy and write_memory per block. In the BlitFast hot path,
+      // about 180,000 calls/sec in Tongyi Tianxia, these dominate allocation and memory round-trip overhead.
       const destinationBytes = this.memory.read_memory(destinationStart, destinationSpan);
       if (!sourceKey && !destinationKey) {
         for (let row = 0; row < height; row++) {
@@ -1416,13 +1410,13 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
         }
         return;
       }
-      // 按色键组合拆开逐像素循环：单源色键（BltFast 0x11 最常见的形态）不必逐像素
-      // 读目标面，省掉每个像素一次目标读取与分支。16-bit 表面按 2 字节像素读写。
+      // Separate pixel loops by color-key combination: source-only keying, commonly BltFast 0x11, need not read
+      // the destination per pixel, saving one read and branch. Access 16-bit surfaces as two-byte pixels.
       if (sourceKey && !destinationKey) {
         const keyLow = sourceKey[0];
         const keyHigh = sourceKey[1];
-        // 对齐的 RGB565 直接按 16 位读写，避免每像素拼接/拆分两次字节。
-        // 奇数地址或 pitch 保留字节路径，不能用取整视图误读下一行。
+        // Read/write aligned RGB565 as 16-bit values, avoiding repeated byte assembly/splitting per pixel.
+        // Retain byte access for odd addresses or pitches; rounded views must not misread the next row.
         if (
           bytesPerPixel === 2 &&
           ((sourceBytes.byteOffset | destinationBytes.byteOffset | source.pitch | dest.pitch) & 1) === 0
@@ -1542,7 +1536,7 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
         return;
       }
       const span = (height - 1) * surface.pitch + byteWidth;
-      // 与 copyUnscaledRect 同理：视图直接改写，省 slice + 回写。
+      // As in copyUnscaledRect, modify views directly without slice plus writeback.
       const block = this.memory.read_memory(start, span);
       for (let y = 0; y < height; y++) block.set(row, y * surface.pitch);
     }

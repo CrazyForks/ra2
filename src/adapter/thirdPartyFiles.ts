@@ -1,16 +1,14 @@
 /**
- * 第三方分享的主程序（game.exe / gamemd.exe 等）获取与浏览器持久化。
+ * Fetch and persist third-party shared executables (game.exe / gamemd.exe, etc.) in the browser.
  *
- * 主程序走 manifest 登记的第三方分享地址（HTTP 缓存生效，须回 CORS 头允许
- * 站点跨源读取）；首次下载后另落 IndexedDB（ra2-vm-third-party-files），此后
- * 直接从缓存取，不再依赖网络；地址变更或 SHA 校验失败时重新下载。
+ * Use the sharing URLs registered in the manifest, with HTTP caching and CORS headers permitting cross-origin reads. After the first download, also persist to IndexedDB (ra2-vm-third-party-files) so subsequent reads need no network. Download again if the URL changes or SHA verification fails.
  */
 import { sha256Hex } from '../utils/sha256';
 import type { GameManifest, ThirdPartyFile } from '../games/manifest';
 
 const THIRD_PARTY_DB = 'ra2-vm-third-party-files';
 const THIRD_PARTY_STORE = 'files';
-// 预加载、导入和恢复缓存共用同一下载；哈希也是键的一部分，不能复用旧版本。
+// Preloading, importing, and cache restoration share one download; include the hash in the key to prevent reuse of old versions.
 const thirdPartyLoads = new Map<string, Promise<Uint8Array>>();
 
 function openThirdPartyDatabase(): Promise<IDBDatabase> {
@@ -57,8 +55,8 @@ function loadThirdPartyFile(thirdParty: ThirdPartyFile): Promise<Uint8Array> {
   const existing = thirdPartyLoads.get(key);
   if (existing) return existing;
   const pending = (async () => {
-    // 开发时优先使用磁盘缓存，仍校验同一份 manifest；仅缺失才回退 CDN/浏览器缓存。
-    // DEV 分支由生产构建消除，不向线上用户请求开发端点。
+    // Prefer the development disk cache while verifying the same manifest; fall back to CDN/browser caches only if it is missing.
+    // The production build removes this DEV branch, so online users never request development endpoints.
     if (import.meta.env.DEV) {
       const response = await fetch(`/__third-party/${encodeURIComponent(thirdParty.name)}`, { cache: 'no-store' });
       if (response.status !== 404) {
@@ -78,7 +76,7 @@ function loadThirdPartyFile(thirdParty: ThirdPartyFile): Promise<Uint8Array> {
         return bytes;
       }
     }
-    // 禁用 IndexedDB/存储配额不足不应阻止游戏启动，仍保留本页面内存缓存。
+    // Disabled IndexedDB or insufficient storage quota must not prevent startup; retain the in-page memory cache.
     const cached = await readThirdPartyCache(thirdParty.url).catch(() => null);
     if (cached && (!thirdParty.sha256 || (await sha256Hex(cached)) === thirdParty.sha256)) return cached;
     const response = await fetch(thirdParty.url);
@@ -90,7 +88,7 @@ function loadThirdPartyFile(thirdParty: ThirdPartyFile): Promise<Uint8Array> {
     await writeThirdPartyCache(thirdParty.url, bytes).catch(() => {});
     return bytes;
   })().catch((error) => {
-    // 后台预加载失败只影响本次请求；用户稍后启动时允许重新尝试。
+    // A failed background preload affects only that request; allow a fresh attempt when the user starts later.
     thirdPartyLoads.delete(key);
     throw error;
   });
@@ -98,7 +96,9 @@ function loadThirdPartyFile(thirdParty: ThirdPartyFile): Promise<Uint8Array> {
   return pending;
 }
 
-/** 页面进入时并行预热两款游戏；失败不阻断页面初始化，启动时仍会重试和报错。 */
+/**
+ * Warm both games in parallel on page entry; failure does not block page initialization, and startup still retries and reports errors.
+ */
 export async function preloadThirdPartyFiles(manifests: readonly GameManifest[]): Promise<void> {
   await Promise.all(
     manifests.map((manifest) =>
@@ -118,7 +118,7 @@ export async function loadThirdPartyFiles(
     manifest.thirdParty.map(async (thirdParty) => {
       onStatus?.(`正在加载 ${thirdParty.name}…`);
       const bytes = await loadThirdPartyFile(thirdParty);
-      // VM 会修改或 transfer EXE；每个调用者拿独立副本，不能损坏预加载缓存。
+      // The VM may modify or transfer the EXE; give each caller an independent copy to protect the preload cache.
       files.set(thirdParty.name, bytes.slice());
       onStatus?.(`已加载 ${thirdParty.name}`);
     }),

@@ -1,4 +1,4 @@
-/** 真实浏览器启动基准：先运行 pnpm run dev，资源使用 game/ra2/。 */
+/** Real browser startup benchmark: run pnpm run dev first, using game/ra2/ resources. */
 import assert from 'node:assert/strict';
 import { chromium } from '@playwright/test';
 
@@ -14,8 +14,9 @@ const browser = await chromium.launch({
 const samples: number[] = [];
 try {
   for (let run = 1; run <= runs; run++) {
-    // 每轮新建上下文，使用新的页面/Worker 和空存档环境。
+    // Create a new context each round, with a fresh page/Worker and empty save environment.
     const context = await browser.newContext({
+      locale: 'zh-CN',
       ignoreHTTPSErrors: true,
       viewport: { width: 1280, height: 900 },
     });
@@ -51,7 +52,7 @@ try {
       });
       await startButton.click();
       await page.locator('.detected-games button').first().click();
-      // 首帧包含启动画面；只有真实主菜单标题创建后才算启动完成。
+      // The first frame includes startup imagery; startup completes only when the real main-menu title exists.
       await page.waitForFunction(
         () => {
           const canvas = document.querySelector<HTMLElement>('#screen');
@@ -68,7 +69,7 @@ try {
       });
       assert(sample.frame > 0 && sample.menu >= sample.frame, `启动里程碑无效：${JSON.stringify(sample)}`);
 
-      // 实际点击 Single Player，确认测速优化后菜单仍能接收输入。
+      // Actually click Single Player to verify that the menu still accepts input after timing optimizations.
       await page.waitForTimeout(1_000);
       const box = await page.locator('#screen').boundingBox();
       assert(box, '游戏画布不可见');

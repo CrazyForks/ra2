@@ -1,4 +1,4 @@
-/** 输入是 RGB8 / 255；用查表避免逐帧调用浮点位转换，正确舍入到半精度。 */
+/** Input is RGB8 / 255; use a lookup table for correctly rounded half precision without per-frame float-bit conversions. */
 const rgbHalf = Uint16Array.from({ length: 256 }, (_, value) => {
   if (!value) return 0;
   const f = value / 255,

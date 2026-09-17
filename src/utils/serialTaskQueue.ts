@@ -1,6 +1,6 @@
 /**
- * 串行执行异步任务；事件按顺序触发并不代表其异步处理会按顺序完成。
- * 后一项只在前一项完全结束后执行；单项失败会报告错误，不会毒化整条队列。
+ * Serialize asynchronous tasks: ordered events do not imply ordered async completion.
+ * Run each task only after its predecessor fully finishes; report individual failures without poisoning the queue.
  */
 export class SerialTaskQueue {
   private tail: Promise<void> = Promise.resolve();

@@ -1,14 +1,15 @@
+import { localizeText, type UiLocale } from '../../src/ui/shared/i18n/translate';
 import { expect, type Page } from '@playwright/test';
 import { gameDownloadCatalog } from '../../src/games/downloadCatalog';
 
-/** 用可访问名称定位游戏，避免绑定图标、皮肤或按钮顺序。 */
-export function detectedGameButton(page: Page, game: string) {
+/** Locate games by accessible name, avoiding dependence on icons, skins, or button order. */
+export function detectedGameButton(page: Page, game: string, locale: UiLocale = 'zh-CN') {
   const entry = gameDownloadCatalog.find((entry) => entry.id === game);
   if (!entry) throw new Error('仅支持 ra2 或 yr');
-  return page.locator('.detected-games').getByRole('button', { name: entry.title, exact: true });
+  return page.locator('.detected-games').getByRole('button', { name: localizeText(entry.title, locale), exact: true });
 }
 
-/** 单游戏资源自动启动；共存资源按游戏名称选择，不依赖按钮位置。 */
+/** Single-game resources start automatically; with multiple games, select by name rather than button position. */
 export async function selectDevelopmentGame(page: Page, game: string): Promise<void> {
   if (game !== 'ra2' && game !== 'yr') throw new Error('仅支持 ra2 或 yr');
   await page.getByRole('button', { name: '开发测试', exact: true }).click();

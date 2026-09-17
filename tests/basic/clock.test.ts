@@ -1,9 +1,9 @@
-/** ScaledClock 单元测试：倍率切换连续性、钳制、宿主延迟换算。 */
+/** ScaledClock unit tests: continuity across speed changes, clamping, and host-delay conversion. */
 import { describe, expect, it } from 'vitest';
 import { normalizeGameClockRate, ScaledClock } from '../../src/vm86/clock';
 import { callShim, createGuestMemory, createTestShim } from '../helpers/guestMemory';
 
-/** 手动推进的宿主时钟。 */
+/** Manually advanced host clock. */
 function fakeClock(start = 10_000): { now: () => number; advance: (ms: number) => void } {
   let current = start;
   return {
@@ -33,9 +33,9 @@ describe('ScaledClock', () => {
     const atSwitch = clock.now();
     expect(atSwitch).toBe(1_000);
     host.advance(1000);
-    expect(clock.now()).toBe(3_000); // 2× 前进
+    expect(clock.now()).toBe(3_000); // Advance at 2x
     clock.setRate(0.5);
-    expect(clock.now()).toBe(3_000); // 切换点连续
+    expect(clock.now()).toBe(3_000); // Continuous at the switch point
     host.advance(1000);
     expect(clock.now()).toBe(3_500);
   });
@@ -84,8 +84,8 @@ describe('ScaledClock', () => {
 });
 
 describe('KERNEL32 时间结构写回（RA2 增补，原 clockSmoke）', () => {
-  // RA2 首页会连续读取本地 SYSTEMTIME 与 TIME_ZONE_INFORMATION。两者不仅要
-  // 在 ABI 表里登记，还必须把 Win32 结构完整写回客体内存。
+  // RA2's home page reads local SYSTEMTIME and TIME_ZONE_INFORMATION consecutively. Both must be registered
+  // in the ABI table and write their complete Win32 structures back to guest memory.
   it('GetLocalTime/GetTimeZoneInformation 把 Win32 结构完整写回客体内存', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory, { firstDynamicId: 1 });

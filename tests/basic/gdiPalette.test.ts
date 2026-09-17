@@ -1,11 +1,7 @@
 /**
- * GDI 调色板 smoke 迁移：8-bit 离屏 surface 上的文字在调色板换页时随
- * run 幂等重映射（SetEntries/Flip/Blt 三条路径），加载期间不提交中间帧，
- * 以及 rAF 延迟呈现的帧必须携带 emit 时刻的调色板。
+ * Migrated GDI palette smoke tests: idempotent run-based remapping of text on 8-bit offscreen surfaces after palette changes (SetEntries/Flip/Blt), no intermediate frame submissions during loading, and preservation of the emit-time palette in rAF-delayed frames.
  *
- * 注意：第一个 it 刻意保持原脚本的顺序累积状态——后段（加载帧事务、
- * Flip、Blt）依赖前段创建的 palette/primary/offscreen 与文字已重映射到
- * index 210/60 的事实，因此不拆分组。
+ * The first test deliberately retains the original script's cumulative sequential state: later loading transactions, Flip, and Blt depend on the earlier palette/primary/offscreen objects and text already remapped to indices 210/60. Keep these checks together.
  */
 import { describe, expect, it } from 'vitest';
 import type { Win32Shim } from '../../src/games/win32Shim';
@@ -32,7 +28,7 @@ const surfaceDesc = (memory: FakeGuestMemory, address: number, caps: number) => 
   writeU32(memory, address + 104, caps);
 };
 
-/** 原脚本的 dispatch：断言导入已实现且返回 DD_OK。 */
+/** Original script's dispatch: assert that the import is implemented and returns DD_OK. */
 const dispatchOk = (shim: Win32Shim, key: string, args: number[]) => {
   expect(callShim(shim, key, args).eax, `${key} 应返回 DD_OK`).toBe(0);
 };
@@ -79,8 +75,8 @@ describe('GDI 调色板换页重映射（原 gdiPaletteSmoke）', () => {
     expect(shim.inspectSurface(offscreen)?.pixels[0], '文字初次映射到旧调色板 index 40').toBe(40);
 
     const finalPalette = new Uint8Array(256 * 4);
-    finalPalette.set([255, 0, 0, 0], 40 * 4); // 旧 index 在战场调色板中为红色
-    finalPalette.set([251, 220, 156, 0], 210 * 4); // 关卡名/君主名的正确黄橙色
+    finalPalette.set([255, 0, 0, 0], 40 * 4); // The old index is red in the battle palette
+    finalPalette.set([251, 220, 156, 0], 210 * 4); // Correct yellow-orange for the level/monarch name
     memory.write_memory(finalPalette, paletteBytes);
     dispatch('DDRAW.COM!IDirectDrawPalette.SetEntries', [palette, 0, 0, 256, paletteBytes]);
 
@@ -88,22 +84,22 @@ describe('GDI 调色板换页重映射（原 gdiPaletteSmoke）', () => {
     expect(shim.inspectSurface(offscreen)?.pixels[0], '调色板切换后字形应重映射到 index 210').toBe(210);
 
     const stableFrames = frames;
-    writeU32(memory, 0x004a_f234, 1); // 原版大地图/关卡加载中
+    writeU32(memory, 0x004a_f234, 1); // Original game's large-map/level loading state
     dispatch('DDRAW.COM!IDirectDrawPalette.SetEntries', [palette, 0, 0, 256, paletteBytes]);
     expect(frames, '加载期间不应提交调色板/分块绘制中间帧').toBe(stableFrames);
     writeU32(memory, 0x004a_f234, 0);
     dispatch('DDRAW.COM!IDirectDrawSurface.Unlock', [primary, 0]);
     expect(frames, '加载完成后应恢复提交完整帧').toBe(stableFrames + 1);
 
-    // Flip 回归：后缓冲文字 → 翻页 → 调色板换页。run 必须跟像素一起交换，
-    // 否则前台字形停在旧索引（新调色板里通常是白色），重绘才恢复。
+    // Flip regression: back-buffer text -> flip -> palette change. Runs must swap with the pixels,
+    // or foreground glyphs retain old indices (usually white in the new palette) until repainted.
     const flipDesc = 0x14_000;
     const flipOut = 0x14_100;
     writeU32(memory, flipDesc, 108);
     writeU32(memory, flipDesc + 4, 0x26); // DDSD_HEIGHT | DDSD_WIDTH | DDSD_BACKBUFFERCOUNT
     writeU32(memory, flipDesc + 8, 4);
     writeU32(memory, flipDesc + 12, 4);
-    writeU32(memory, flipDesc + 20, 1); // 1 个后缓冲
+    writeU32(memory, flipDesc + 20, 1); // One back buffer
     writeU32(memory, flipDesc + 104, 0x200); // DDSCAPS_PRIMARYSURFACE
     dispatch('DDRAW.COM!IDirectDraw.CreateSurface', [0, flipDesc, flipOut, 0]);
     const flipPrimary = readU32(memory, flipOut);
@@ -124,14 +120,14 @@ describe('GDI 调色板换页重映射（原 gdiPaletteSmoke）', () => {
     expect(shim.inspectSurface(flipPrimary)?.pixels[0], 'Flip 后前台持有后缓冲像素').toBe(210);
 
     const flippedPalette = new Uint8Array(256 * 4);
-    flippedPalette.set([255, 255, 255, 0], 210 * 4); // 旧 index 在新调色板是白色（bug 症状）
+    flippedPalette.set([255, 255, 255, 0], 210 * 4); // The old index is white in the new palette (the bug's symptom)
     flippedPalette.set([251, 220, 156, 0], 60 * 4);
     memory.write_memory(flippedPalette, paletteBytes);
     dispatch('DDRAW.COM!IDirectDrawPalette.SetEntries', [palette, 0, 0, 256, paletteBytes]);
     expect(shim.inspectSurface(flipPrimary)?.pixels[0], 'Flip 后换页，前台字形应随像素归属的 run 重映射').toBe(60);
 
-    // Blt 回归：offscreen 文字 blit 到主表面后，字形像素的 run 必须跟过去，
-    // 否则换页时目标面上的文字停旧索引（变白）。offscreen 上现在有 index 60 的字形。
+    // Blt regression: after offscreen text is blitted to the primary, its glyph runs must follow,
+    // or destination text retains old indices and turns white on palette changes. The offscreen glyphs now use index 60.
     const blitDestRect = 0x15_000;
     writeU32(memory, blitDestRect, 0);
     writeU32(memory, blitDestRect + 4, 0);
@@ -146,7 +142,7 @@ describe('GDI 调色板换页重映射（原 gdiPaletteSmoke）', () => {
     expect(shim.inspectSurface(flipPrimary)?.pixels[0], 'Blt 后主表面持有 offscreen 字形像素').toBe(60);
 
     const blitPalette = new Uint8Array(256 * 4);
-    blitPalette.set([255, 255, 255, 0], 60 * 4); // 旧 index 在新调色板是白色
+    blitPalette.set([255, 255, 255, 0], 60 * 4); // The old index is white in the new palette
     blitPalette.set([251, 220, 156, 0], 90 * 4);
     memory.write_memory(blitPalette, paletteBytes);
     dispatch('DDRAW.COM!IDirectDrawPalette.SetEntries', [palette, 0, 0, 256, paletteBytes]);
@@ -154,7 +150,7 @@ describe('GDI 调色板换页重映射（原 gdiPaletteSmoke）', () => {
   });
 
   it('rAF 延迟呈现：emit 后、回调前换调色板，帧仍携带 emit 时刻的调色板', () => {
-    // 旧像素套新调色板 = 文字变白的历史症状。
+    // Old pixels with the new palette reproduce the historical white-text symptom.
     const memory = createGuestMemory();
     let pendingEmit: (() => void) | null = null;
     let delivered: { pixels: Uint8Array; palette: Uint8Array } | null = null;
@@ -177,7 +173,7 @@ describe('GDI 调色板换页重映射（原 gdiPaletteSmoke）', () => {
     const schedPaletteBytes = 0x16_200;
     const schedPaletteOut = 0x16_700;
     const oldPalette = new Uint8Array(256 * 4);
-    oldPalette.set([251, 220, 156, 0], 40 * 4); // 文字金橙
+    oldPalette.set([251, 220, 156, 0], 40 * 4); // Golden-orange text
     memory.write_memory(oldPalette, schedPaletteBytes);
     dispatch('DDRAW.COM!IDirectDraw.CreatePalette', [0, 4, schedPaletteBytes, schedPaletteOut, 0]);
     const schedPalette = readU32(memory, schedPaletteOut);
@@ -189,10 +185,10 @@ describe('GDI 调色板换页重映射（原 gdiPaletteSmoke）', () => {
     memory.write_memory([0x43], 0x16_900);
     expect(callShim(scheduledShim, 'GDI32.DLL!TextOutA', [schedDc, 0, 0, 0x16_900, 1]).eax).toBe(1);
 
-    // 主表面 DC 释放触发呈现（游戏在主表面画完即 ReleaseDC 的常见路径）。
+    // Releasing the primary surface DC triggers presentation (the common game path calls ReleaseDC immediately after drawing).
     expect(callShim(scheduledShim, 'USER32.DLL!ReleaseDC', [0, schedDc]).eax).toBe(1);
     expect(pendingEmit, 'scheduleFrame 应挂起一次呈现').toBeTruthy();
-    // emit 之后、回调之前：客体把 index 40 换成白色。
+    // After emit but before the callback, the guest changes index 40 to white.
     const newPalette = new Uint8Array(256 * 4);
     newPalette.set([255, 255, 255, 0], 40 * 4);
     memory.write_memory(newPalette, schedPaletteBytes);
@@ -219,8 +215,8 @@ describe('GDI 画刷句柄与 DirectDraw Blt 几何（RA2 增补，原 gdiPalett
     expect(callShim(shim, 'GDI32.DLL!DeleteObject', [brush]).eax, '重复释放 HBRUSH 应失败').toBe(0);
   });
 
-  // DirectDraw UI 动画回归：Blt 必须缩放而不是裁掉源表面的右/下部分；
-  // BltFast 的负目标坐标必须裁剪，不能写到 surface.pixels 之前。
+  // DirectDraw UI animation regression: Blt must scale rather than crop the source surface's right/bottom;
+  // negative destination coordinates in BltFast must clip without writing before surface.pixels.
   it('Blt 缩放采样完整源图；BltFast 负目标坐标裁剪且不越界写', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory);
@@ -238,7 +234,7 @@ describe('GDI 画刷句柄与 DirectDraw Blt 几何（RA2 增补，原 gdiPalett
     writeU32(memory, flipDesc + 4, 0x26); // DDSD_HEIGHT | DDSD_WIDTH | DDSD_BACKBUFFERCOUNT
     writeU32(memory, flipDesc + 8, 4);
     writeU32(memory, flipDesc + 12, 4);
-    writeU32(memory, flipDesc + 20, 1); // 1 个后缓冲
+    writeU32(memory, flipDesc + 20, 1); // One back buffer
     writeU32(memory, flipDesc + 104, 0x200); // DDSCAPS_PRIMARYSURFACE
     dispatch('DDRAW.COM!IDirectDraw.CreateSurface', [0, flipDesc, flipOut, 0]);
     const flipPrimary = readU32(memory, flipOut);

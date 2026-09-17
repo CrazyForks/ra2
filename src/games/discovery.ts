@@ -1,9 +1,9 @@
 export interface GameSourceTransformResult {
   executableBytes: Uint8Array;
-  /** 相对游戏根目录的只读覆盖文件。 */
+  /** Read-only overlay files relative to the game root. */
   overlay: ReadonlyMap<string, Uint8Array>;
   label: string;
 }
 
-/** 识别安装器/补丁壳并产出可直接启动的游戏文件。 */
+/** Identify installer/patch wrappers and produce directly bootable game files. */
 export type GameSourceTransform = (bytes: Uint8Array) => Promise<GameSourceTransformResult | null>;

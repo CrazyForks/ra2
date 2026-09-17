@@ -1,25 +1,22 @@
 import type { GuestMemory } from '../../vm86/win32';
 import { le32 } from './bytes';
 
-/** 单人测试入口的版本参数：跳转目标、开局处理器与对应的页面直达安装器。 */
+/** Version parameters for single-player test entry: jump target, start handler, and the matching direct-page installer. */
 export interface BattleStartupSpec {
   readonly label: string;
   readonly expectedHash: string;
   readonly site: number;
-  /** 原生开局处理器；以 fastcall 约定接收设置窗口与动作码。 */
+  /** Native start handler; receives the setup window and action code via fastcall. */
   readonly handler: number;
-  /** 进入战场前先直达该版本的遭遇战页面，由它校验哈希并分配自己的桩尾。 */
+  /** Enter this version's skirmish page before the battlefield; it verifies the hash and allocates its own stub tail. */
   readonly navigate: (memory: GuestMemory, reserve: (size: number) => number, hash: string) => number;
 }
 
-/** 两个版本在覆盖点处的原始指令相同：读设置命令再比较 0x617。 */
+/** Both versions have identical original instructions at the overwrite point: read the setup command, then compare against 0x617. */
 const SIGNATURE = [0x8b, 0x44, 0x24, 0x04, 0x3d, 0x17, 0x06, 0, 0, 0x74, 0x22] as const;
 
 /**
- * 单人测试入口：原生设置初始化返回后，以当前设置调用开局处理器。
- * 不发送 WM_COMMAND/鼠标事件，不绕过选项校验、场景加载或设置页清理。
- * ECX=设置窗口，EDX=原生开始动作 0x617；两个栈参数为零，由被调用者 RET 8。
- * 这里只消费一次；返回菜单后再次进入遭遇战仍然需要玩家自行开始。
+ * Single-player test entry: after native setup initialization returns, invoke the start handler with current settings. Do not send WM_COMMAND/mouse events or bypass option validation, scenario loading, or setup-page cleanup. ECX=setup window; EDX=native start action 0x617. Both stack arguments are zero and the callee uses RET 8. Consume this once; returning to skirmish from the menu still requires manual start.
  */
 export function installBattleStartup(
   memory: GuestMemory,
@@ -42,7 +39,7 @@ export function installBattleStartup(
   const state = base + 80;
   const code = [
     0x9c,
-    0x60, // 保存原始标志/寄存器；开局处理器只能通过原生状态输出结果。
+    0x60, // Preserve original flags/registers; the start handler must report results only through native state.
     0x83,
     0x3d,
     ...le32(state),
@@ -52,7 +49,7 @@ export function installBattleStartup(
     0xc7,
     0x05,
     ...le32(state),
-    ...le32(0), // 调用前消费，重入也不会重复开局。
+    ...le32(0), // Consume before calling so reentry cannot start another game.
     0x6a,
     0,
     0x6a,

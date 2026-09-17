@@ -15,7 +15,7 @@ export interface ResourceInventory {
 }
 export const sha256 = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).digest('hex');
 
-/** 整批资源都参与指纹，额外 MOD/地图也不能悄悄改变验收环境；大 MIX 流式校验。 */
+/** Fingerprint the entire asset set so extra MODs/maps cannot silently change the acceptance environment; hash large MIX files as streams. */
 export async function inventoryResources(roots: ResourceRoots): Promise<ResourceInventory> {
   const files: Record<string, string> = {};
   async function walk(path: string, key: string): Promise<void> {
@@ -55,7 +55,7 @@ export function assertInventory(actual: ResourceInventory, expected: unknown): v
   }
 }
 
-/** 清单不能为缺素材背书；另按产品清单确认指定游戏（未指定则两款）的必需资源和主程序。 */
+/** A manifest cannot justify missing assets; also use the product manifest to verify required resources and executables for the specified game, or both if unspecified. */
 export function assertGameResources(inventory: ResourceInventory, gameId?: SupportedGameId): void {
   const names = new Map<string, string>();
   for (const name of Object.keys(inventory.files)) {
@@ -69,7 +69,7 @@ export function assertGameResources(inventory: ResourceInventory, gameId?: Suppo
       if (!names.has(name)) throw new Error(`缺少真实游戏资源：${name}`);
     }
     for (const file of manifest.thirdParty) {
-      // thirdPartyCacheHandler 用登记文件名精确读取，不能仅满足大小写无关检查。
+      // thirdPartyCacheHandler reads exact registered filenames; passing a case-insensitive check is insufficient.
       if (inventory.files[`thirdParty/${file.name}`] !== file.sha256) throw new Error(`主程序版本不符：${file.name}`);
     }
   }

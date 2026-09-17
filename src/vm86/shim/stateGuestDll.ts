@@ -1,7 +1,5 @@
 /**
- * 随游戏提供的客体 DLL 的装载与桥接（mixin 拆分自 state.ts）：
- * PE 映像装载、IAT 重定向、动态导入登记与原版 Bink 线程固定。
- * 挂在文件层之后，kernel32/win32 分派之前。
+ * Loading/bridging bundled guest DLLs, extracted from state.ts: PE loading, IAT redirection, dynamic imports, and native Bink thread pinning. Apply after file state and before kernel32/win32 dispatch.
  */
 import type { PeImport, Win32Call } from '../win32';
 import { normalizeGuestPath } from '../paths';
@@ -14,9 +12,9 @@ export type ShimGuestDllChain = InstanceType<ReturnType<typeof withShimGuestDll>
 export function withShimGuestDll<TBase extends Constructor<ShimFilesChain>>(Base: TBase) {
   return class extends Base {
     protected readonly dynamicImports = new Map<number, PeImport>();
-    /** 原生 Bink 实例期间已从 hypercall 桩改成直跳客体 DLL 的入口，以及被覆盖的
-     *  原始入口字节。主程序会缓存静态 IAT 中的函数地址，所以这里不能只处理
-     *  GetProcAddress 动态桩；Close 时也必须逐字节恢复原入口。 */
+    /**
+     * Entries redirected from hypercall stubs directly into guest DLLs during native Bink lifetime, plus overwritten original bytes. The executable caches static-IAT function addresses, so handle more than GetProcAddress stubs; restore each original byte on Close too.
+     */
     protected readonly directGuestDllImportStubs = new Map<PeImport, Uint8Array>();
     protected readonly vtables = new Map<string, number>();
     protected readonly loadedGuestDlls = new Map<string, LoadedGuestDll>();
@@ -142,8 +140,7 @@ export function withShimGuestDll<TBase extends Constructor<ShimFilesChain>>(Base
     }
 
     /**
-     * 在主 EXE 入口前初始化随游戏提供的 DLL，并把主模块静态 IAT 统一改为真实导出。
-     * 这样函数指针参数（BinkSetSoundSystem → BinkOpenDirectSound）也不会残留 hypercall 桩。
+     * Initialize bundled DLLs before the main EXE entry and replace its static IAT with actual exports. Function-pointer arguments such as BinkSetSoundSystem -> BinkOpenDirectSound must not retain hypercall stubs.
      */
     linkGuestDllBeforeEntry(name: string, entry: number, imports: PeImport[]): number {
       const module = this.loadGuestDll(name);
@@ -159,9 +156,7 @@ export function withShimGuestDll<TBase extends Constructor<ShimFilesChain>>(Base
     }
 
     /**
-     * 只在主 EXE 入口前完成客体 DLL 的 PROCESS_ATTACH，不改写主模块 IAT。
-     * Bink 需要这个模式：CRT/DirectSound 全局状态应在菜单回调与客体线程出现前
-     * 建好，但 Open/Close/逐帧 API 仍必须经过 host 做文件完整性和原子调用决策。
+     * Perform guest DLL PROCESS_ATTACH before the main EXE entry without rewriting its IAT. Bink requires CRT/DirectSound globals before menu callbacks or guest threads exist, but Open/Close/per-frame APIs still need host decisions about file completeness and atomic calls.
      */
     initializeGuestDllBeforeEntry(name: string, entry: number): number {
       const module = this.loadGuestDll(name);
@@ -184,16 +179,15 @@ export function withShimGuestDll<TBase extends Constructor<ShimFilesChain>>(Base
       code.push(0xb8);
       emit32(module.entry);
       code.push(0xff, 0xd0); // call DllMainCRTStartup
-      code.push(0x85, 0xc0, 0x75, 0x02, 0xcc, 0xf4); // FALSE → INT3 后停机
+      code.push(0x85, 0xc0, 0x75, 0x02, 0xcc, 0xf4); // FALSE triggers INT3, then halt.
       code.push(0xb8);
       emit32(entry);
-      code.push(0xff, 0xe0); // jmp 主 EXE 入口，保留 boot 的原返回地址
+      code.push(0xff, 0xe0); // Jump to the main EXE entry, preserving boot's original return address.
       return this.allocateDynamicCode(code);
     }
 
     /**
-     * 静态 IAT 已被 hypercall 桩接管时，把原调用桥回随游戏提供的客体 DLL。
-     * import stub 执行 `ret n` 后参数仍留在旧栈地址，桥按原顺序重新压栈调用导出。
+     * Bridge original calls back to bundled guest DLLs when hypercall stubs own the static IAT. After import-stub ret n, arguments remain at old stack addresses; repush them in original order before calling the export.
      */
     protected redirectGuestDllExport(
       call: Win32Call,
@@ -213,7 +207,7 @@ export function withShimGuestDll<TBase extends Constructor<ShimFilesChain>>(Base
         code.push(0x68);
         emit32(value);
       };
-      // 先复制原参数；DllMain 的三次 push 会复用 import stub 已弹掉的旧参数区。
+      // Copy original arguments first; DllMain's three pushes reuse the old argument area already popped by the import stub.
       for (let index = argumentCount; index >= 1; index--) {
         code.push(0xff, 0x35);
         emit32(call.stack + index * 4); // push dword [addr]
@@ -236,7 +230,7 @@ export function withShimGuestDll<TBase extends Constructor<ShimFilesChain>>(Base
       }
       code.push(0xb8);
       emit32(target);
-      code.push(0xff, 0xd0); // call export（Bink 导出均为 stdcall）
+      code.push(0xff, 0xd0); // Call the export; Bink exports all use stdcall.
       if (atomicGuestCall) {
         code.push(0x89, 0xc2); // mov edx,eax
         code.push(0x8b, 0x0d);
@@ -246,28 +240,29 @@ export function withShimGuestDll<TBase extends Constructor<ShimFilesChain>>(Base
         code.push(0x83, 0x3c, 0x8d);
         emit32(GUEST_THREAD_CRITICAL_DEPTH);
         code.push(0x00);
-        code.push(0x75, 0x09); // 外层仍持锁则保持 CLI，跳到 lockedReturn
+        code.push(0x75, 0x09); // If an outer lock remains held, retain CLI and jump to lockedReturn.
         code.push(0x89, 0xd0); // mov eax,edx
         push(originalReturn);
-        // STI 只保证紧随其后的一条指令不会被中断；必须让那条指令就是 RET。
-        // 旧序列在 STI 后还恢复寄存器/装载跳转地址，浏览器 Worker 的真实 PIT
-        // 会在桥接器中间抢占，把尚未回到调用方的 ESP/EIP 保存成线程上下文。
+        // STI protects only the immediately following instruction from interrupts; that instruction must be RET.
+        // The old sequence restored registers/loaded jump targets after STI, allowing real browser-Worker PIT preemption
+        // inside the bridge and saving ESP/EIP before return to the caller as thread context.
         code.push(0xfb, 0xc3); // sti; ret
         code.push(0x89, 0xd0); // lockedReturn: mov eax,edx
         push(originalReturn);
-        code.push(0xc3); // ret（外层锁仍保持 CLI）
+        code.push(0xc3); // ret with the outer lock still preserving CLI.
         this.writeU32(call.stack, this.allocateDynamicCode(code));
         return true;
       }
       code.push(0xb9);
       emit32(originalReturn);
-      code.push(0xff, 0xe1); // jmp original return，保留导出返回的 EAX
+      code.push(0xff, 0xe1); // Jump to the original return address, preserving export EAX.
       this.writeU32(call.stack, this.allocateDynamicCode(code));
       return true;
     }
 
-    /** 在原生 DLL 的一个实例存活期间，把主模块的高频 IAT 直接指到客体导出。
-     * 关闭实例前恢复 hypercall stub，下一次 Open 才能重新执行完整/稀疏文件决策。 */
+    /**
+     * While a native DLL instance lives, point high-frequency main-module IAT calls directly at guest exports. Restore hypercall stubs before closing so the next Open reevaluates complete/sparse file policy.
+     */
     protected routeStaticGuestDllExports(dll: string, exportNames: ReadonlySet<string>, direct: boolean): void {
       const module = direct ? this.loadGuestDll(dll) : undefined;
       const normalizedDll = dll.toLowerCase();
@@ -278,9 +273,9 @@ export function withShimGuestDll<TBase extends Constructor<ShimFilesChain>>(Base
       }
     }
 
-    /** GetProcAddress 或静态 IAT 旧缓存留下的桩都要直达 DLL；否则 BinkWait 的自旋
-     * 会继续以每秒上万次串口 hypercall 运行，音频时钟被拖住、影片无法结束。
-     * 只覆盖七字节 `mov eax,target; jmp eax`，Close 前原样恢复这七字节。 */
+    /**
+     * Redirect both GetProcAddress stubs and cached static-IAT stubs into the DLL; otherwise BinkWait keeps spinning through tens of thousands of serial hypercalls per second, stalling audio time and movie completion. Overwrite only seven bytes, mov eax,target; jmp eax, and restore them exactly before Close.
+     */
     protected routeDynamicGuestDllExport(call: Win32Call, dll: string, exportName: string): void {
       if (call.imported.dll.toLowerCase() !== dll.toLowerCase()) return;
       const target = this.loadGuestDll(dll)?.exports.get(exportName);

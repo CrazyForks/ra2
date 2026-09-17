@@ -1,4 +1,4 @@
-/** 有界的资源准备子进程：退出即回收 WASM、LZMA 与临时 JS 缓冲。 */
+/** Bounded resource-preparation subprocess: exiting reclaims WASM, LZMA, and temporary JS buffers. */
 import { isAbsolute } from 'node:path';
 import { prepareGame } from './prepareGame';
 import { logMemory } from './memory';

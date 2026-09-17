@@ -1,29 +1,32 @@
-/** 通用 WS 二进制协议：单字节类型；数据报固定 13 字节头。
- * exe 是兼容性 SHA-256，n 是不透明元数据；服务不解释游戏内容。
+/**
+ * General-purpose binary WS protocol: one-byte message type and a fixed 13-byte datagram header.
+ * exe is a compatibility SHA-256; n is opaque metadata. The service does not interpret game content.
  */
 
-/** 虚拟 LAN 成员上限；游戏对局人数由各游戏适配层限制。 */
+/** Virtual LAN member limit; each game adapter limits the player count per match. */
 export const RELAY_MAX_LAN_MEMBERS = 20;
 export const RELAY_MAX_FRAME_BYTES = 128 * 1024;
 export const RELAY_MAX_CLIENT_ID_LENGTH = 128;
-/** UDP 数据报理论上限 65507；中继与客体队列共用同一上限。 */
+/** The theoretical UDP datagram limit is 65507; relay and guest queues use the same limit. */
 export const RELAY_MAX_DATAGRAM_BYTES = 65_507;
 export const RELAY_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 export const RELAY_COMPATIBILITY_HASH_HEX_LENGTH = 64;
-/** 虚拟 LAN 网段：10.247.0.0/16（网络序 u32 高 16 位固定）。 */
+/** Virtual LAN subnet: 10.247.0.0/16 (fixed high 16 bits of a network-order u32). */
 export const RELAY_SUBNET_PREFIX = 0x0af7_0000;
 export const RELAY_SUBNET_MASK = 0xffff_0000;
-/** 受限广播 255.255.255.255 与子网定向广播 10.247.255.255 都视为广播。 */
+/** Treat both limited broadcast 255.255.255.255 and subnet-directed broadcast 10.247.255.255 as broadcasts. */
 export const RELAY_LIMITED_BROADCAST = 0xffff_ffff;
 export const RELAY_SUBNET_BROADCAST = RELAY_SUBNET_PREFIX | (~RELAY_SUBNET_MASK >>> 0);
 
-/** 房间虚拟地址两个主机号八位组的可分配范围：0 与 255 在本网段内保留。
- *  中继分配与客户端自分配必须共用这一处边界，否则两端会各自演化出不同规则。 */
+/**
+ * Allocatable range for both host octets in room virtual addresses: 0 and 255 are reserved in this subnet.
+ * Relay allocation and client self-allocation must share these bounds to prevent their rules from diverging.
+ */
 export const RELAY_HOST_OCTET_MIN = 1;
 export const RELAY_HOST_OCTET_MAX = 254;
 export const RELAY_HOST_OCTET_COUNT = RELAY_HOST_OCTET_MAX - RELAY_HOST_OCTET_MIN + 1;
 
-/** 该地址是否落在虚拟 LAN 网段内且两个主机号八位组都可分配。 */
+/** Whether the address belongs to the virtual LAN subnet and both host octets are allocatable. */
 export function isAssignableRoomAddress(address: number): boolean {
   const host = address & 0x0000_ffff;
   const high = (host >>> 8) & 0xff;
@@ -122,7 +125,7 @@ const opcodes = {
   'room-close': 8,
 } as const;
 
-/** 热路径只分配最终帧；WS 已提供消息长度，无需重复编码 payload 长度。 */
+/** Allocate only the final frame on the hot path; WS supplies message length, so payload length need not be encoded again. */
 export function encodeRelayFrame(message: RelayWire): Uint8Array {
   if ((message.t === 'hello' || message.t === 'peer-join') && !isRelayCompatibilityHash(message.exe)) {
     throw invalidHashError('兼容性哈希无效');
@@ -196,7 +199,7 @@ export function encodeRelayFrame(message: RelayWire): Uint8Array {
   return frame.slice(0, offset);
 }
 
-/** 严格检查边界、类型、UTF-8 和尾部；载荷只复制逻辑字节。 */
+/** Strictly validate bounds, types, UTF-8, and trailing bytes; copy only the logical payload bytes. */
 export function decodeRelayFrame(data: ArrayBuffer | ArrayBufferView): RelayWire {
   const bytes =
     data instanceof ArrayBuffer
@@ -273,7 +276,7 @@ export function decodeRelayFrame(data: ArrayBuffer | ArrayBufferView): RelayWire
   return message;
 }
 
-/** BroadcastChannel 结构化克隆链路的运行时守卫（与二进制解码同规则）。 */
+/** Runtime guard for the BroadcastChannel structured-clone transport, using the same rules as binary decoding. */
 export function isRelayWire(value: unknown): value is RelayWire {
   if (!isRecord(value) || typeof value.t !== 'string') return false;
   try {
@@ -321,7 +324,7 @@ export function isRelayWire(value: unknown): value is RelayWire {
   }
 }
 
-/** 判断目标地址是否为广播（受限广播或 虚拟子网定向广播）。 */
+/** Whether the destination is a broadcast address: limited broadcast or virtual subnet-directed broadcast. */
 export function isRelayBroadcastAddress(addr: number): boolean {
   return addr === RELAY_LIMITED_BROADCAST || addr === RELAY_SUBNET_BROADCAST;
 }

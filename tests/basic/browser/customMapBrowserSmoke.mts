@@ -1,5 +1,5 @@
 import { preventThirdPartyDownloads } from '../../helpers/offlineBrowser';
-/** 无游戏资源的浏览器回归：真实 7z Worker → 前端暂存/持久化 → 下次启动文件集。 */
+/** Browser regression without game assets: real 7z Worker -> frontend staging/persistence -> file set for the next startup. */
 import assert from 'node:assert/strict';
 import SevenZip from '7z-wasm';
 import { zipSync, strToU8 } from 'fflate';
@@ -12,17 +12,17 @@ seven.FS.writeFile('/input/maps/FIRST.MPR', strToU8('[Basic]\nName=Fixture\n'));
 seven.FS.writeFile('/input/RA2MD.CSF', new Uint8Array([1, 2, 3]));
 seven.FS.writeFile('/input/game.exe', new Uint8Array([0x4d, 0x5a]));
 seven.FS.writeFile('/input/rules.ini', strToU8('[General]\n'));
-// 外层已有目标且超过 3 项，仍必须探索嵌套 ZIP，不能复用本体导入的提前停止规则。
+// Even with a target and more than three entries in the outer archive, explore nested ZIPs; do not reuse the base-game import's early-stop rule.
 seven.FS.writeFile('/input/nested.zip', zipSync({ 'deep/SECOND.YRM': strToU8('[Basic]\nName=Nested\n') }));
 assert.equal(seven.callMain(['a', '-t7z', '/maps.7z', '/input']), 0);
 const archive = Buffer.from(seven.FS.readFile('/maps.7z'));
 const duplicate = Buffer.from(zipSync({ 'one/X.MPR': strToU8('one'), 'two/x.mpr': strToU8('two') }));
 const browser = await chromium.launch({ args: ['--no-sandbox', '--enable-unsafe-swiftshader'] });
 try {
-  const page = await browser.newPage({ ignoreHTTPSErrors: true });
+  const page = await browser.newPage({ locale: 'zh-CN', ignoreHTTPSErrors: true });
   await preventThirdPartyDownloads(page);
   await page.goto(process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15174/');
-  // 地图入口仅在 VM 启动后开放；无素材回归直接请求同一个 React 弹窗服务。
+  // The map entry is available only after VM startup; this asset-free regression requests the same React dialog service directly.
   const openMaps = async () => {
     await expect(page.getByRole('button', { name: '↓ 没有游戏文件？点击下载', exact: true })).toBeVisible();
     await page.evaluate(`(async () => {
@@ -88,7 +88,7 @@ try {
   assert.deepEqual(await page.evaluate('window.__customMapLiveFiles'), ['second.yrm'], '动态挂载必须排除 CSF');
   assert.equal(navigations, 0, '动态应用不能刷新页面或重启 VM');
   await dialog.getByRole('button', { name: '关闭', exact: true }).click();
-  // 同一浏览器上下文内用全新 provider 模拟恢复，并在真实 put 成功事件中中止事务。
+  // Simulate restoration with a new provider in the same browser context, and abort the transaction during a real put success event.
   const persistence = await page.evaluate(`(async () => {
     const { SessionGameFileProvider } = await import('/src/platform/browser/files/sessionFiles.ts');
     const { IndexedDbWriteCache } = await import('/src/platform/browser/files/writeCache.ts');

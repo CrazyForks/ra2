@@ -1,6 +1,6 @@
 import type { RelaySocket } from './relaySocket';
 
-/** 一条标准二进制 WebSocket；控制与数据共用连接，无额外协商。 */
+/** One standard binary WebSocket; control and data share a connection without extra negotiation. */
 export class WsRelaySocket implements RelaySocket {
   private readonly socket: WebSocket;
   constructor(url: string) {
@@ -47,7 +47,7 @@ export class WsRelaySocket implements RelaySocket {
     this.socket.send(frame);
   }
   close(code = 1000, reason = ''): void {
-    // 浏览器不允许应用发送保留状态码；端口代理的本地错误统一映射。
+    // Browsers prohibit applications from sending reserved status codes; map local port-proxy errors consistently.
     this.socket.close(code === 1000 || (code >= 3000 && code <= 4999) ? code : 4000, reason);
   }
 }

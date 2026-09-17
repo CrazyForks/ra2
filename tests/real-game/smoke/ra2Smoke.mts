@@ -1,8 +1,7 @@
 /**
- * Red Alert 2 专用真实 EXE 冒烟入口。
+ * Red Alert 2 real-EXE smoke entry.
  *
- * 冒烟本体已迁移到按游戏拆分的 Vitest（tests/real-game/ra2/boot.test.ts），这里
- * 转发所有 VM_* 环境变量，保持 `pnpm run test:vm:ra2` 的调用习惯不变。
+ * The smoke tests now live in per-game Vitest suites (tests/real-game/ra2/boot.test.ts). Forward all VM_* environment variables to preserve pnpm run test:vm:ra2 usage.
  */
 import { spawnSync } from 'node:child_process';
 

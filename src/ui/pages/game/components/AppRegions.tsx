@@ -1,3 +1,4 @@
+import { t, localizeText } from '../../../shared/i18n/translate';
 import { createPortal } from 'react-dom';
 import { lazy, Suspense } from 'react';
 import { useStore } from '../../../shared/state/useStore';
@@ -6,18 +7,19 @@ import { RuntimeToolbarView } from './RuntimeToolbarView';
 import { DebugPanel } from './DebugPanel';
 import { GroupDialog } from './GroupDialog';
 import { BootView, ExitPanel, ProblemPanel, ShortcutHelp, StatusView } from './RuntimePanels';
+import { EdgeNotice, edgeRequest } from './edgeMouseNotice';
 
 const GameSourcePickerView = lazy(() =>
   import('./GameSourcePickerView').then((module) => ({ default: module.GameSourcePickerView })),
 );
 const CustomMapDialog = lazy(() => import('./CustomMapDialog').then((module) => ({ default: module.CustomMapDialog })));
 
-// 每个区域只订阅自己的低频快照，工具栏计数变化不会重新渲染画布或资源选择器。
+// Each region subscribes only to its own low-frequency snapshot; toolbar counters do not rerender the canvas or resource picker.
 export function Toolbar() {
   const props = useStore(state.toolbarState);
   const collapsed = useStore(state.controlsCollapsed);
   return (
-    <nav id="vm-controls" aria-label="运行状态与控制" className={collapsed ? 'collapsed' : undefined}>
+    <nav id="vm-controls" aria-label={t('运行状态与控制')} className={collapsed ? 'collapsed' : undefined}>
       {props && <RuntimeToolbarView {...props} />}
     </nav>
   );
@@ -26,7 +28,7 @@ export function DebugRegion() {
   const visible = useStore(state.debugVisible),
     props = useStore(state.debugState);
   return (
-    <aside id="vm-debug" hidden={!visible} aria-label="调试信息">
+    <aside id="vm-debug" hidden={!visible} aria-label={t('调试信息')}>
       {props && <DebugPanel {...props} />}
     </aside>
   );
@@ -38,7 +40,7 @@ export function MainRegion() {
   return (
     <div id="ui">
       {request && (
-        <Suspense fallback={<p role="status">正在加载资源选择器…</p>}>
+        <Suspense fallback={<p role="status">{t('正在加载资源选择器…')}</p>}>
           <GameSourcePickerView key={request.id} onSelected={request.finish} />
         </Suspense>
       )}
@@ -63,7 +65,7 @@ export function ScreenStatus() {
   return (
     <>
       <output id="vm-upscale-status" role="status" aria-live="polite" hidden={upscale === null}>
-        {upscale}
+        {upscale && localizeText(upscale)}
       </output>
       {network && <StatusView id="vm-network-status" bottom={38} value={network} />}
       {resource && <StatusView id="vm-resource-status" bottom={8} value={resource} />}
@@ -72,15 +74,17 @@ export function ScreenStatus() {
 }
 export function Dialogs() {
   const group = useStore(state.groupVisible),
-    maps = useStore(state.mapRequest);
+    maps = useStore(state.mapRequest),
+    edge = useStore(edgeRequest);
   return createPortal(
     <>
       {group && <GroupDialog close={() => state.groupVisible.set(false)} />}
       {maps && (
-        <Suspense fallback={<p role="status">正在加载地图管理…</p>}>
+        <Suspense fallback={<p role="status">{t('正在加载地图管理…')}</p>}>
           <CustomMapDialog key={maps.id} gameId={maps.gameId} applyLive={maps.applyLive} finish={maps.finish} />
         </Suspense>
       )}
+      {edge && <EdgeNotice close={edge.close} />}
     </>,
     document.body,
   );

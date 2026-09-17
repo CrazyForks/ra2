@@ -1,7 +1,7 @@
 import { selectDevelopmentGame } from '../../helpers/selectDevelopmentGame';
 import type { GamePerformanceSample } from '../../../src/games/performance';
 import { summarizeGamePerformance } from '../../helpers/gamePerformance';
-/** 真实资源直达战场：选择资源后不发送任何客体点击/键盘事件。 */
+/** Direct battle startup with real assets: send no guest mouse or keyboard events after resource selection. */
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -17,9 +17,13 @@ try {
     for (const mode of modes) {
       assert.ok(game === 'ra2' || game === 'yr');
       assert.ok(mode === 'worker' || mode === 'main');
-      const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1000, height: 800 } });
+      const context = await browser.newContext({
+        locale: 'zh-CN',
+        ignoreHTTPSErrors: true,
+        viewport: { width: 1000, height: 800 },
+      });
       await context.addInitScript((game) => localStorage.setItem(`vm-resolution-${game}`, '800x600'), game);
-      // 测试侧只读探针：验证原生本地 House 有单位；不替换 EXE，也不写游戏状态。
+      // Read-only test probe: verify units exist for the native local House, without replacing the EXE or writing game state.
       const abi =
         game === 'ra2'
           ? { local: 0xa35db4, human: 0x134, units: 0x5434, dead: 0x13d }
@@ -51,8 +55,11 @@ globalThis.__battleStartSnapshot = () => {
       page.on('pageerror', (error) => errors.push(error.message));
       await page.goto(`${origin}/?debug=1&start-page=battle${mode === 'main' ? '&vm-worker=0' : ''}`);
       await selectDevelopmentGame(page, game);
+      // YR loads an order of magnitude more archive data than RA2 (CI observed ~2.5 min vs a few seconds),
+      // so a shared timeout would treat its healthy startup as a failure under runner load.
+      const battleStartupTimeout = game === 'yr' ? 300_000 : 150_000;
       try {
-        // 不以 loading 时暂时没有 shell 为成功；要求战场像素、侧栏和持续帧更新。
+        // Temporary shell absence during loading is not success; require battlefield pixels, the sidebar, and continuing frame updates.
         await page.waitForFunction(
           () => {
             const c = document.querySelector<HTMLElement>('#screen');
@@ -65,7 +72,7 @@ globalThis.__battleStartSnapshot = () => {
             );
           },
           null,
-          { timeout: 150000 },
+          { timeout: battleStartupTimeout },
         );
         const snapshot = async () => {
           const target = mode === 'worker' ? page.workers().find((w) => w.url().includes('/vmWorker.ts'))! : page;
@@ -77,10 +84,10 @@ globalThis.__battleStartSnapshot = () => {
               const state = await snapshot();
               return state?.human === 1 && state.dead === 0 && state.units > 0;
             },
-            { timeout: 150000 },
+            { timeout: battleStartupTimeout },
           )
           .toBe(true);
-        // 读条画面也可能有大量彩色像素。先等原生单位建立，再检查持续画面输出。
+        // Loading screens can also contain many colorful pixels. Wait for native units to exist before checking sustained frame output.
         const frame = Number(await page.locator('#screen').getAttribute('data-vm-frame'));
         await page.waitForFunction(
           (frame) => Number(document.querySelector<HTMLElement>('#screen')?.dataset.vmFrame) > frame + 120,
@@ -108,13 +115,24 @@ globalThis.__battleStartSnapshot = () => {
         console.log('[game-perf]', game, mode, JSON.stringify(report));
         console.log(game, mode, '无客体输入直达战场通过');
       } finally {
-        await page.screenshot({ path: join(screenshotDirectory, `${game}-battle-start-${mode}.png`) });
-        console.log(
-          await page.locator('#screen').evaluate((c) => {
-            const d = (c as HTMLElement).dataset;
-            return { status: d.vmStatus, shell: d.shellPage, frame: d.vmFrame, pixels: d.vmBattlefield };
-          }),
-        );
+        // A crashed renderer must not let a screenshot error replace the real failure; capture page state and
+        // page errors first, then tolerate screenshot loss and always release the context.
+        try {
+          console.log(
+            await page.locator('#screen').evaluate((c) => {
+              const d = (c as HTMLElement).dataset;
+              return { status: d.vmStatus, shell: d.shellPage, frame: d.vmFrame, pixels: d.vmBattlefield };
+            }),
+          );
+        } catch (error) {
+          console.log('页面状态读取失败（渲染进程可能已崩溃）', error);
+        }
+        if (errors.length) console.log('页面错误', errors);
+        try {
+          await page.screenshot({ path: join(screenshotDirectory, `${game}-battle-start-${mode}.png`) });
+        } catch (error) {
+          console.log('截图失败（渲染进程可能已崩溃）', error);
+        }
         await context.close();
       }
     }

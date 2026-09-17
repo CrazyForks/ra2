@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 
-/** 每个子进程拥有独立进程组，测试超时/信号退出时同时回收其浏览器和 Worker。 */
+/** Each child has its own process group, allowing timeouts and signals to reclaim its browsers and Workers together. */
 export class Processes {
   private children = new Set<ChildProcess>();
   constructor(
@@ -24,7 +24,7 @@ export class Processes {
   async close(): Promise<void> {
     const children = [...this.children];
     for (const child of children) this.kill(child, 'SIGTERM');
-    // 进程组主进程退出并不保证 Chromium 后代已退出，始终回收剩余组成员。
+    // The process-group leader exiting does not guarantee Chromium descendants have exited; always reclaim remaining group members.
     if (children.length) await delay(300);
     for (const child of children) this.kill(child, 'SIGKILL');
     this.children.clear();
@@ -47,7 +47,7 @@ export class Processes {
         else reject(new Error(`${name} 失败：${signal ?? code}；日志 ${join(this.report, `${name}.log`)}`));
       });
     });
-    // 后台服务在 readiness 或最终清理前退出，也不产生未处理的 rejection。
+    // A background service exiting before readiness or final cleanup must not produce an unhandled rejection.
     void done.catch(() => {});
     return { child, done };
   }

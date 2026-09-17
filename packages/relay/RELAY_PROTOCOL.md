@@ -1,71 +1,53 @@
-# 通用 WS 二进制协议
+# Generic WS binary protocol
 
-一条 WS/WSS 连接同时传控制消息和游戏数据，独立服务路径可为 `/房间名`。
-不要求 WebSocket 子协议，无额外协商。每条 WS 二进制消息恰好一帧；客户端与服务端必须使用同一协议版本。
+One WS/WSS connection carries both control and game data. Standalone service paths may be `/room-name`. No WebSocket subprotocol or extra negotiation is required. Each WS binary message contains exactly one frame; client/server must use the same protocol version.
 
-## 编码
+## Encoding
 
-所有整数均为无符号、大端。公共头仅 1 字节消息类型 `TT`。
-WebSocket 保留消息边界，即使底层拆帧，接收 API 仍交付完整消息；不按 TCP read 边界解析。
-`str` 为 `uint16 UTF-8字节数 + UTF-8字节`，严格校验 UTF-8；`hash` 为 32 字节 SHA-256。
-`metadata` / `data` 占用该消息剩余字节，不额外编码长度；其他消息禁止尾随字节。
+All integers are unsigned and big-endian. The common header is a single message-type byte `TT`. WebSocket preserves message boundaries: even if transport frames split, the receive API delivers complete messages. Do not parse by TCP read boundaries.
 
-| TT  | 消息       | 公共头之后的字段，按顺序                      |
+`str` is `uint16 UTF-8 byte length + UTF-8 bytes` with strict UTF-8 validation; `hash` is a 32-byte SHA-256. `metadata` / `data` occupy remaining message bytes without an extra length. Other messages prohibit trailing bytes.
+
+| TT  | Message    | Fields after the common header, in order      |
 | --- | ---------- | --------------------------------------------- |
-| 01  | hello      | room:str, hash:32字节, nonce:str, metadata    |
+| 01  | hello      | room:str, hash:32 bytes, nonce:str, metadata  |
 | 02  | welcome    | peer:str, addr:u32, epoch:u32                 |
-| 03  | peer-join  | peer:str, addr:u32, hash:32字节, metadata     |
+| 03  | peer-join  | peer:str, addr:u32, hash:32 bytes, metadata   |
 | 04  | peer-leave | peer:str, addr:u32                            |
 | 05  | datagram   | src:u32, dest:u32, sport:u16, dport:u16, data |
 | 06  | ping       | n:u32, at:u64                                 |
 | 07  | pong       | n:u32, at:u64                                 |
 | 08  | room-close | epoch:u32, reason:str                         |
 
-游戏数据报固定 **13 字节头**，没有 JSON：
+Game datagrams have a fixed **13-byte header**, without JSON:
 
 ```text
-偏移  0       1       5       9       11      13
-      05      src     dest    sport   dport   原始数据…
-字节  1       4       4       2       2
+Offset 0       1       5       9       11      13
+       05      src     dest    sport   dport   Raw data…
+Bytes  1       4       4       2       2
 ```
 
-例如 src=1、dest=2、sport=3、dport=4、数据为 AA：
-`05 00 00 00 01 00 00 00 02 00 03 00 04 AA`。
-WS 自身的帧头另计。JavaScript API 保留 exe（64 位小写十六进制哈希）、n/a 字段名，
-由编解码器转换，不向网络发送字段名。at 只允许 0 至 2^53−1 的整数，避免客户端精度丢失。
+Example: src=1, dest=2, sport=3, dport=4, payload AA:
+`05 00 00 00 01 00 00 00 02 00 03 00 04 AA`.
 
-## 房间与限制
+WebSocket framing overhead is additional. The JavaScript API retains exe (a 64-character lowercase hexadecimal hash) and n/a field names; codecs convert them without transmitting names. at permits only integers from 0 to 2^53−1 to avoid JavaScript precision loss.
 
-URL 路径解码后直接确定房间，覆盖 hello.room；客户端仍发送有效的 hello.room 字段。
-所有路径按同一房间名规则解析。只允许非空单段房间名，
-禁止控制字符及点段；直接升级根路径 / 被拒绝。应用客户端先为无路径地址补上 /ra2。
-通用客户端可用 room 选项指定缺省路径，未指定则为 /default；显式路径始终优先。
-路径不能作为鉴权秘密，服务不提供房间认证。
+## Rooms and limits
 
-连接后 5 秒内发送 hello；服务发送 welcome，再发送已有成员的 peer-join，通知其他成员新人加入。
-同房间必须使用相同兼容性哈希。服务端不读取游戏文件或解释元数据。
-room 非空、最多 64 个 UTF-16 代码单元，禁止空白及 ? & # /；nonce 非空且最多 32。
-URL 的 `clientId` 查询参数与协议中的 `peer` 使用同一规则：非空、最多 128 个 ASCII 字符，且只允许
-`A-Z`、`a-z`、`0-9`、`.`、`_`、`-`；`reason` 非空且最多 128 个 UTF-16 代码单元；metadata 最多 64 字节。
-完整帧不超过 128 KiB，data 为 1–65507 字节；最多 20 位成员，默认发送积压上限 4 MiB。
+The decoded URL path determines the room and overrides hello.room; clients still send a valid hello.room field. All paths use the same room-name rules. Names must be nonempty single segments without control characters or dot segments. Root-path / upgrades are rejected. Application clients add /ra2 to pathless addresses; generic clients use their room option or /default. Explicit paths always take priority. Paths are not authentication secrets; room authentication is not provided.
 
-addr/src/dest 是网络序 IPv4 数值，不是实际网络端点。服务端覆写 src 为连接的虚拟地址，
-在房间内按 dest 单播；255.255.255.255 和 10.247.255.255 广播给其他成员。
-关闭连接通知 peer-leave。WS 可靠有序；无自动重连、断线续局或无序传输。
-WS ping/pong 每 15 秒检查存活；应用 ping/pong 测量 RTT。服务限制包速率和字节速率。
+Send hello within 5 seconds of connecting. The server sends welcome, then peer-join for existing members, and notifies other members of the newcomer. Room members must share a compatibility hash. The server neither reads game files nor interprets metadata.
 
-## 部署
+room is nonempty, at most 64 UTF-16 code units, and excludes whitespace and ? & # /. nonce is nonempty and at most 32. URL `clientId` and protocol `peer` follow the same rules: nonempty, at most 128 ASCII characters, allowing only `A-Z`, `a-z`, `0-9`, `.`, `_`, and `-`. `reason` is nonempty and at most 128 UTF-16 code units. metadata is at most 64 bytes. Complete frames are capped at 128 KiB; data is 1–65507 bytes. Rooms allow at most 20 members; default send-backlog limit is 4 MiB.
 
-启动、Docker 和客户端例子见 `README.md`。只需一个 TCP 端口；CLI 选项为
-`--host`（默认 0.0.0.0）、`--port`（默认 15176）、`--max-connections`（默认 2048）、
-`--delay-ms`（每次游戏数据报转发附加 0–60000ms，默认关闭）、
-`--faults`（可选 JSON 故障配置）和 `--help`。独立服务只读取 CLI 选项，不读取环境变量。
-红警页面由 `parseRa2RelayUrl` 按主机确定唯一的 WS/WSS 协议；省略协议或提供完整 URL
-都会按主机重选协议，不执行失败回退。通用 `RelayClient` 对裸地址仍可先尝试 WSS、
-失败后尝试 WS；显式协议不回退，建立会话后不自动重连。每次协议建连/握手默认限时 10 秒。
-`--delay-ms` 不延迟心跳，页面 RTT 不反映注入；双向数据报增加约两倍指定值。
-它复用保序有界故障队列，不模拟 TCP 重传；不能与 faults.delayMs 同时指定。
-GET /healthz 返回 JSON 健康信息（不是 WS 线协议）。SIGUSR2 排空，SIGTERM/SIGINT 关闭服务。
+addr/src/dest are network-order IPv4 numbers, not actual endpoints. The server overwrites src with the connection's virtual address and unicasts within the room by dest. 255.255.255.255 and 10.247.255.255 broadcast to other members. Closing connections produces peer-leave. WS is reliable/ordered, without automatic reconnect, match resumption, or unordered transport. WS ping/pong checks liveness every 15 seconds; application ping/pong measures RTT. The service limits both packet and byte rates.
 
-服务不含认证、静态网页、游戏资源或任意目标代理。明文 WS 不要求证书；HTTPS 页面访问
-内网 WS 仍受浏览器混合内容和本地网络策略限制，WSS 可由部署者的反向代理终止 TLS。
+## Deployment
+
+See [README.md](README.md) for startup, Docker, and client examples. Only one TCP port is required. CLI options are `--host` (default 0.0.0.0), `--port` (15176), `--max-connections` (2048), `--delay-ms` (0–60000 ms per game-datagram forwarding operation, disabled by default), `--faults` (optional JSON), and `--help`. Standalone service reads CLI options only, not environment variables.
+
+The Red Alert page's `parseRa2RelayUrl` chooses one WS/WSS protocol by host, whether the input omits a scheme or provides a complete URL, with no failure fallback. Generic `RelayClient` may try WSS then WS for bare addresses; explicit protocols do not fall back, and established sessions never reconnect automatically. Each protocol connection/handshake defaults to a 10-second timeout.
+
+`--delay-ms` leaves heartbeats unchanged, so page RTT excludes injection; bidirectional datagrams add about twice the configured value. It reuses ordered bounded fault queues, does not simulate TCP retransmission, and cannot coexist with faults.delayMs. GET /healthz returns JSON health information outside the WS wire protocol. SIGUSR2 drains; SIGTERM/SIGINT stop the service.
+
+The server includes no authentication, static pages, game resources, or arbitrary-destination proxy. Plain WS needs no certificate. HTTPS-to-private-WS access remains subject to browser mixed-content/local-network policies; deployers can terminate WSS TLS at a reverse proxy.

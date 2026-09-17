@@ -1,4 +1,4 @@
-// 按 VA 从 PE32 中切出字节窗口写到 stdout：tsx ra2Dis.mts <exe> <vaStartHex> <lenHex> | ndisasm -b 32 -o 0x<vaStart> -
+// Write a byte window from a PE32 virtual address to stdout: tsx ra2Dis.mts <exe> <vaStartHex> <lenHex> | ndisasm -b 32 -o 0x<vaStart> -
 import { readFileSync } from 'node:fs';
 
 const [, , exePath, vaHex, lenHex] = process.argv;

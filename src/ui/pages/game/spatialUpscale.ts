@@ -1,17 +1,17 @@
 import type { FsrMode } from './vmFrameRenderer';
 
-/** 实验性空间重建开关；不是 AI/时域超分，也不改变客体渲染分辨率。 */
+/** Experimental spatial reconstruction switch; neither AI nor temporal upscaling, and does not change guest rendering resolution. */
 export function spatialUpscaleEnabled(search: string): boolean {
   return new URLSearchParams(search).get('sr') === '1';
 }
 
-/** FSR 1.0（AMD FidelityFX）空间超采样；?sr=fsr / fsr-rcas / fsr-rcas-soft 启动即开启。 */
+/** FSR 1.0 (AMD FidelityFX) spatial upsampling; ?sr=fsr / fsr-rcas / fsr-rcas-soft enables it at startup. */
 export function fsrUpscaleMode(search: string): FsrMode | null {
   const value = new URLSearchParams(search).get('sr');
   return value === 'fsr' || value === 'fsr-rcas' || value === 'fsr-rcas-soft' ? value : null;
 }
 
-/** ScaleFX 3× 像素画边缘插值；?sr=scalefx 启动即开启。 */
+/** ScaleFX 3x pixel-art edge interpolation; ?sr=scalefx enables it at startup. */
 export function scalefxUpscaleEnabled(search: string): boolean {
   return new URLSearchParams(search).get('sr') === 'scalefx';
 }
@@ -20,7 +20,7 @@ export function aiUpscaleEnabled(search: string): boolean {
   return new URLSearchParams(search).get('sr') === 'ai';
 }
 
-/** 单 pass 抗振铃 Catmull–Rom 重建；直接读取原始纹理，不需要 CPU 展开或中间帧。 */
+/** Single-pass anti-ringing Catmull-Rom reconstruction reads original textures directly, without CPU expansion or intermediate frames. */
 export function spatialUpscaleShader(format: 'indexed' | 'rgba' | 'rgb565'): string {
   const texture = format === 'indexed' ? 'indexedFrame' : format === 'rgba' ? 'rgbaFrame' : 'packedFrame';
   const sample =
@@ -51,7 +51,7 @@ export function spatialUpscaleShader(format: 'indexed' | 'rgba' | 'rgb565'): str
     }
     void main() {
       vec2 size = vec2(textureSize(${texture}, 0));
-      // 1:1 或缩小时保留原采样，不让实验开关改变原生像素。
+      // Preserve original sampling at 1:1 or while downscaling so experimental switches cannot change native pixels.
       if (!upscale) { color = readPixel(ivec2(floor(uv * size))); return; }
       vec2 position = uv * size - 0.5;
       ivec2 base = ivec2(floor(position));
@@ -61,7 +61,7 @@ export function spatialUpscaleShader(format: 'indexed' | 'rgba' | 'rgb565'): str
         for (int x = 0; x < 4; ++x) {
           vec4 value = readPixel(base + ivec2(x - 1, y - 1));
           sum += value * wx[x] * wy[y];
-          // 中央 2×2 的颜色范围限制负瓣过冲，减少文字和高反差边缘的光晕。
+          // The central 2x2 color range limits negative-lobe overshoot, reducing halos around text and high-contrast edges.
           if (x >= 1 && x <= 2 && y >= 1 && y <= 2) {
             low = min(low, value); high = max(high, value);
           }

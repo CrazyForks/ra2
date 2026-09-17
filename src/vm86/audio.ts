@@ -1,4 +1,4 @@
-/** DirectSound/PCM 的核心数据协议；具体输出由 adapter 提供。 */
+/** Core DirectSound/PCM data protocol; adapters provide concrete output. */
 export interface PcmWaveFormat {
   wFormatTag: number;
   nChannels: number;

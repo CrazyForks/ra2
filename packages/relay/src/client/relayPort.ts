@@ -11,7 +11,7 @@ type PortMessage = { id: number } & (
 );
 let nextId = 0;
 
-/** 只合并当前执行片段已有的数据，不跨任务等待凑包。限制空帧数量及单批处理量。 */
+/** Batch only data already available in this execution slice; do not wait across tasks to fill a batch. Bound empty-frame counts and batch size. */
 function frameBatch(deliver: (frames: Uint8Array[]) => void) {
   let frames: Uint8Array[] = [],
     bytes = 0,
@@ -44,7 +44,7 @@ function frameBatch(deliver: (frames: Uint8Array[]) => void) {
   };
 }
 
-/** Worker 代理：普通发送立即复制，独占帧接管后在微任务交接；每批 ACK 限制积压。 */
+/** Worker proxy: normal sends copy immediately; owned frames transfer in a microtask, with per-batch ACKs bounding the backlog. */
 export class PortRelaySocket implements RelaySocket {
   readonly id = ++nextId;
   readyState = 0;
@@ -101,7 +101,7 @@ export class PortRelaySocket implements RelaySocket {
     }
   };
   send(frame: Uint8Array): void {
-    // Buffer.slice() 仍共享内存；必须复制逻辑字节，调用方可立即复用原缓冲。
+    // Buffer.slice() still shares memory; copy the logical bytes so the caller can immediately reuse the original buffer.
     this.sendOwned(new Uint8Array(frame));
   }
   sendOwned(frame: Uint8Array): void {
@@ -117,12 +117,12 @@ export class PortRelaySocket implements RelaySocket {
     ) {
       throw new Error('relay owned frame must have an exclusive ArrayBuffer');
     }
-    // 调用方交出所有权后不得再访问；不为合批增加第二次字节复制或提前 transfer。
+    // The caller must not access the frame after handing over ownership; batching adds neither a second byte copy nor an early transfer.
     this.bufferedAmount += frame.byteLength;
     this.outgoing.add(frame);
   }
   close(code = 1000, reason = 'closed'): void {
-    // 保留 send 后 close 的顺序，已接受的正常发送先交给页面。
+    // Preserve send-before-close ordering by handing accepted normal sends to the page first.
     this.outgoing.flush();
     this.finishClose(code, reason, true);
   }
@@ -136,14 +136,14 @@ export class PortRelaySocket implements RelaySocket {
       try {
         this.port.postMessage({ id: this.id, t: 'close', code, reason } satisfies PortMessage);
       } catch {
-        /* 端口已经不可用，仍须完成本地清理。 */
+        /* The port is already unavailable, but local cleanup must still finish. */
       }
     }
     this.onclose?.(new CloseEvent('close', { code, reason }));
   }
 }
 
-/** 返回的清理函数归 VM 会话所有；Worker 被终止也必须关闭页面连接。 */
+/** The VM session owns the returned cleanup function; terminating the Worker must also close the page connection. */
 export function serveRelayPort(port: MessagePort): () => void {
   let disposed = false;
   const sockets = new Map<
@@ -205,7 +205,7 @@ export function serveRelayPort(port: MessagePort): () => void {
       let bytes = 0;
       try {
         for (const frame of m.frames) {
-          // 每条仍是独立 WS 消息；每次 send 都检查真实 WS 队列，不被批量 ACK 掩盖。
+          // Each frame remains a separate WS message; check the actual WS queue on every send so batch ACKs cannot hide backlog.
           if (entry.socket.bufferedAmount + frame.byteLength > RELAY_MAX_BUFFERED_BYTES) {
             entry.socket.close(1008, 'slow consumer');
             return;

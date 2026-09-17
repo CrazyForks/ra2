@@ -1,5 +1,5 @@
-// 扫描 PE32 中对指定 VA 的写指令（mov/inc/dec/add/or/and/xor [addr], ...），
-// 输出文件偏移 → VA 映射，供 ndisasm 窗口反汇编。
+// Scan PE32 instructions that write to a specified VA (mov/inc/dec/add/or/and/xor [addr], ...),
+// printing file-offset-to-VA mappings for windowed ndisasm disassembly.
 import { readFileSync } from 'node:fs';
 
 const exePath = process.argv[2];
@@ -35,7 +35,7 @@ function offToVa(off: number) {
   return null;
 }
 
-// 生成写指令模式：opcode 前缀 + ModRM(mod=00,reg=opcodeExt,rm=101 disp32)
+// Generate write-instruction patterns: opcode prefix + ModRM(mod=00,reg=opcodeExt,rm=101 disp32).
 const regNames = ['eax', 'ecx', 'edx', 'ebx', 'esp', 'ebp', 'esi', 'edi'];
 const grp1Names = ['add', 'or', 'adc', 'sbb', 'and', 'sub', 'xor', 'cmp'];
 const patterns = [];
@@ -62,7 +62,7 @@ for (const t of targets) {
   patterns.push({ desc: `mov [0x${t.toString(16)}], eax`, bytes: Buffer.concat([Buffer.from([0xa3]), le]) });
   // mov [t], reg (89 /r)
   for (let r = 0; r < 8; r++) {
-    if (r === 4) continue; // esp 需要 SIB
+    if (r === 4) continue; // esp requires a SIB byte.
     patterns.push({
       desc: `mov [0x${t.toString(16)}], ${regNames[r]}`,
       bytes: Buffer.concat([Buffer.from([0x89, 0x05 + r * 8]), le]),

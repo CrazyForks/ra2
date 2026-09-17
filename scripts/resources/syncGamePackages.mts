@@ -1,19 +1,13 @@
 /**
- * 本地同步在线游戏包：下载显式指定的 ZIP（可校验 SHA-256），把压缩包
- * 留档到 game/<id>[-<pack>].zip，并解压到 game/<folder>/（RA2 与 YR 共用
- * game/ra2，与目录发现流程一致）。解压后 dev 按钮、e2e 冒烟与离线调试
- * 直接使用本地文件，不必每次在浏览器里下载。
+ * Synchronize online game packages locally: download an explicitly specified ZIP with optional SHA-256 verification, retain it at game/<id>[-<pack>].zip, and extract to game/<folder>/. RA2 and YR share game/ra2, matching directory discovery. Development buttons, e2e smoke tests, and offline debugging then use local files without repeated browser downloads.
  *
- * 用法：
+ * Usage:
  *   RA2_PACKAGE_URL="$RA2_DOWNLOAD_URL" pnpm run sync:game -- ra2
  *   YR_PACKAGE_URL="$YR_DOWNLOAD_URL" pnpm run sync:game -- yr
- * 内置 catalog 已移除下载源；使用上述环境变量指定 ZIP，亦可设置对应的
- * RA2_PACKAGE_SHA256 / YR_PACKAGE_SHA256。主程序缓存由 prepare:third-party 准备。
+ * Download sources have been removed from the built-in catalog; specify ZIPs with these environment variables and optionally RA2_PACKAGE_SHA256 / YR_PACKAGE_SHA256. prepare:third-party prepares the executable cache.
  *
- * 注意：RA2 的 e2e 冒烟（tests/real-game/ra2/）按原版安装主程序校准（368 个导入），
- * 在线包的 game.exe 是联机再打包版（369 个导入）；同步后 e2e 的导入数断言
- * 会不匹配，可用 VM_GAME_DIR 指向原版目录，或仅以浏览器 dev 流程为准。
- * 此留档入口只支持 ZIP；其他原始包直接在前端导入，CI 使用共享提取器。
+ * Note: RA2 e2e smoke tests (tests/real-game/ra2/) target the original installed executable (368 imports), whereas the online package's game.exe is a multiplayer repack (369 imports). After synchronization, the import-count assertion will differ; point VM_GAME_DIR to an original installation or use only the browser development flow.
+ * This archival entry point supports ZIP only; import other original packages in the frontend. CI uses the shared extractor.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -56,7 +50,7 @@ async function syncPackage(
   let written = 0;
   for (const entry of entries) {
     const target = resolve(root, entry.path);
-    // readZipArchive 已归一化路径（无盘符/反斜杠/上级段），此处仅纵深防御。
+    // readZipArchive already normalizes paths, removing drive letters, backslashes, and parent segments; this is defense in depth.
     if (!isArchiveTargetWithinRoot(root, target)) throw new Error(`拒绝写出目录外的路径：${entry.path}`);
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, entry.bytes);

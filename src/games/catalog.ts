@@ -12,18 +12,18 @@ import { YR_RUNTIME_HOOKS } from './yr/runtimeHooks';
 
 export type SupportedGameId = 'ra2' | 'yr';
 
-/** 静态游戏定义；不包含浏览器文件句柄或 VM 运行态。 */
+/** Static game definition; contains no browser file handles or VM runtime state. */
 export interface SupportedGame {
   id: SupportedGameId;
   title: string;
   executable: string;
-  /** 传给客体的命令行参数尾部；原版开关归游戏配置，不写进通用 Win32 层。 */
+  /** Command-line argument suffix passed to the guest; original switches belong in game configuration, not the generic Win32 layer. */
   commandLineArguments?: string;
-  /** 原版 INI 速度档位（0 最快）；只覆盖单机启动默认值。 */
+  /** Original INI speed setting, with 0 fastest; override only the single-player startup default. */
   defaultGameSpeed?: number;
-  /** 开发资源根目录下的约定子目录，也用于识别同时包含多款游戏的父目录。 */
+  /** Conventional subdirectory under the development asset root, also identifying parents containing multiple games. */
   folder: string;
-  /** 客体静态导入的 x86 ABI（stdcall `ret n` 清理字节数）。 */
+  /** x86 ABI for static guest imports: stack-cleanup byte count for stdcall ret n. */
   argBytes: ImportArgBytes;
   abi: Readonly<Record<string, number>>;
   driveTypes?: Readonly<Record<string, number>>;
@@ -37,25 +37,26 @@ export interface SupportedGame {
   arenaTop?: number;
   fastFileMirrorBase?: number;
   fastFileMirrorTop?: number;
-  /** 持久镜像区只常驻这些高频档案；其余文件仍由同步 provider 缓存并按需读取。 */
+  /** Only these frequently used archives stay in the persistent mirror; synchronous providers still cache and read other files on demand. */
   fastFileMirrorFiles?: readonly string[];
-  /** 传给 Win32 层的显式兼容能力；共用 shim 不读取 game id。 */
+  /** Explicit compatibility capabilities passed to Win32; the shared shim does not inspect game IDs. */
   shimProfile: GameShimProfile;
   runtimeHooks?: GameRuntimeHooks;
-  /** VM 创建前需要同步挂载的文件。initializeBeforeEntry 只提前执行 DLL 入口，
-   * linkBeforeEntry 还会把主模块 IAT 直连到 DLL 导出。 */
+  /**
+   * Files to mount synchronously before VM creation. initializeBeforeEntry only runs DLL entry points early; linkBeforeEntry also connects the main module's IAT directly to DLL exports.
+   */
   preloadFiles?: readonly {
     path: string;
     initializeBeforeEntry?: boolean;
     linkBeforeEntry?: boolean;
   }[];
-  /** 超大且只需容器索引的资源包：只挂载此前缀，逻辑文件长度仍保持原值。 */
+  /** Very large archives requiring only a container index: mount this prefix while preserving the original logical file length. */
   sparseFilePrefixes?: Readonly<Record<string, number>>;
   sourceTransform?: GameSourceTransform;
   unsupportedExecutableReason?: (bytes: Uint8Array) => string | undefined;
 }
 
-// 游戏包由玩家本地导入；受校验的主程序由 manifest.ts 独立登记。
+// Players import game packages locally; manifest.ts registers verified executables separately.
 export const SUPPORTED_GAMES: readonly SupportedGame[] = [
   {
     id: 'ra2',

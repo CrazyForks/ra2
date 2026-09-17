@@ -1,8 +1,7 @@
 /**
- * AMD FidelityFX Super Resolution 1.0 — EASU（边缘自适应空间超采样）。
+ * AMD FidelityFX Super Resolution 1.0 -- EASU (Edge-Adaptive Spatial Upsampling).
  *
- * 算法移植自 GPUOpen-Effects/FidelityFX-FSR 的 ffx_fsr1.h（FSR 1，v1.20210629），
- * MIT 许可，版权声明见下方注释与 vendor/README.md：
+ * Ported from GPUOpen-Effects/FidelityFX-FSR ffx_fsr1.h (FSR 1, v1.20210629), under the MIT license. See the copyright notice below and vendor/README.md:
  *
  *   FidelityFX Super Resolution Sample
  *   Copyright (c) 2021 Advanced Micro Devices, Inc. All rights reserved.
@@ -22,24 +21,21 @@
  *   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  *   THE SOFTWARE.
  *
- * 适配（与官方实现的差异，数学部分逐行保留）：
- * - 官方用 gather4 取 12 个抽头、CPU 打包 con0–con3 常量；本移植按客体帧格式
- *   （索引 / RGBA / RGB565 三种）用 texelFetch 直接取点，输出像素到输入的映射
- *   经 uv 恒等化简后与官方一致，无需打包常量。
- * - 快速倒数/开方近似（fsrRcp / fsrRsq）沿用官方位运算版本：对 0 输入返回
- *   有限大数，平色区域不会像精确 1/x 那样产生 NaN。
- * - 缩小或 1:1 时走原采样直通，不改变原生像素（与 bicubic 路径同一约定）。
+ * Adaptations from the official implementation, retaining the math line by line:
+ * - Upstream uses gather4 for 12 taps and CPU-packed con0-con3 constants. This port uses texelFetch for indexed / RGBA / RGB565 guest frames. After simplifying the UV identity, output-to-input mapping matches upstream without packed constants.
+ * - Fast reciprocal/square-root approximations (fsrRcp / fsrRsq) retain upstream bit operations, yielding finite large values for zero inputs so flat regions avoid NaNs from exact 1/x.
+ * - Downscaling and 1:1 use original sampling unchanged, preserving native pixels as in the bicubic path.
  */
 
 const FSr_COMMON = `
-// ===== FSR EASU（移植自 ffx_fsr1.h，MIT，见文件头）=====
-// 官方 APrxLoRcpF1 / APrxLoRsqF1 位运算近似：有限值输出是平色区稳定的前提。
+// ===== FSR EASU (ported from ffx_fsr1.h, MIT; see file header) =====
+// Official APrxLoRcpF1 / APrxLoRsqF1 bitwise approximations: finite outputs keep flat-color regions stable.
 float fsrRcp(float a) { return uintBitsToFloat(0x7ef07ebbu - floatBitsToUint(a)); }
 float fsrRsq(float a) { return uintBitsToFloat(0x5f347d74u - (floatBitsToUint(a) >> 1u)); }
-// 官方「最简多通道近似亮度」：0.5*R + G + 0.5*B（2 FMA）。
+// Official minimal multichannel approximate luma: 0.5*R + G + 0.5*B (2 FMAs).
 float fsrLuma(vec3 c) { return c.r * 0.5 + c.g + c.b * 0.5; }
 
-// 累加方向与长度（官方 FsrEasuSetF，双线性权重由调用方按 pp 给出）。
+// Accumulate direction and length (official FsrEasuSetF; callers derive bilinear weights from pp).
 void fsrSet(
   vec2 pp, float w, float lA, float lB, float lC, float lD, float lE, inout vec2 dir, inout float len) {
   float dc = lD - lC;
@@ -62,7 +58,7 @@ void fsrSet(
   len += lenY * w;
 }
 
-// 单抽头滤波（官方 FsrEasuTapF：旋转、各向异性、lanczos2 近似、负瓣）。
+// Single-tap filtering (official FsrEasuTapF: rotation, anisotropy, Lanczos2 approximation, negative lobes).
 void fsrTap(
   inout vec3 aC, inout float aW, vec2 off, vec2 dir, vec2 len, float lob, float clp, vec3 c) {
   vec2 v;
@@ -82,10 +78,12 @@ void fsrTap(
 }
 `;
 
-/** FSR 1.0 RCAS 锐化 pass：读取 EASU 放大后的中间 RGBA 纹理，单 pass 输出。
- * sharpness 采用官方语义：0 = 最大锐化，越大越柔和（内部按 2^-sharpness 缩放）。 */
+/**
+ * FSR 1.0 RCAS sharpening pass: read the EASU-upscaled intermediate RGBA texture and output in one pass.
+ * Use official sharpness semantics: 0 is maximum sharpening; larger values soften it through internal 2^-sharpness scaling.
+ */
 export function fsrRcasShader(sharpness: number): string {
-  // 官方 FsrRcasCon 的档位换算：stops → 线性。
+  // Official FsrRcasCon setting conversion: stops to linear.
   const scale = Math.pow(2, -sharpness).toFixed(9);
   return `#version 300 es
     precision highp float;
@@ -93,18 +91,18 @@ export function fsrRcasShader(sharpness: number): string {
     uniform sampler2D easuFrame;
     in vec2 uv;
     out vec4 color;
-    // ===== FSR RCAS（移植自 ffx_fsr1.h，MIT，见文件头）=====
-    // 官方 APrxMedRcpF1 中精度倒数近似：避免可见的色调阶梯。
+    // ===== FSR RCAS (ported from ffx_fsr1.h, MIT; see file header) =====
+    // Official APrxMedRcpF1 medium-precision reciprocal approximation avoids visible tone steps.
     float rcasMedRcp(float a) { float b = uintBitsToFloat(0x7ef19fffu - floatBitsToUint(a)); return b * (-b * a + 2.0); }
-    // FSR_RCAS_DENOISE 未启用（官方建议噪声在锐化之后另行处理），噪声检测分支省略。
+    // FSR_RCAS_DENOISE is disabled; upstream recommends separate denoising after sharpening, so omit the noise-detection branch.
     vec4 rcasLoad(ivec2 p) {
       p = clamp(p, ivec2(0), textureSize(easuFrame, 0) - 1);
       return texelFetch(easuFrame, p, 0);
     }
     void main() {
-      // 官方以输出整数像素 sp 取 3×3 十字邻域；uv 即输出像素位置，sp = uv*size。
-      // FBO 写入端按 gl_FragCoord（自下而上）落行，采样端按屏幕 uv（自上而下），
-      // 因此必须翻转 Y：否则 EASU→RCAS 整条链上下颠倒（曾实际发生）。
+      // Upstream samples a 3x3 cross around integer output pixel sp; uv represents output position, so sp = uv*size.
+      // FBO writes follow bottom-up gl_FragCoord, while sampling follows top-down screen UVs.
+      // Flip Y or the entire EASU -> RCAS chain becomes vertically inverted, as previously observed.
       ivec2 sp = ivec2(floor(uv * vec2(textureSize(easuFrame, 0))));
       sp.y = textureSize(easuFrame, 0).y - 1 - sp.y;
       vec3 b = rcasLoad(sp + ivec2(0, -1)).rgb;
@@ -112,11 +110,11 @@ export function fsrRcasShader(sharpness: number): string {
       vec3 e = rcasLoad(sp).rgb;
       vec3 f = rcasLoad(sp + ivec2(1, 0)).rgb;
       vec3 h = rcasLoad(sp + ivec2(0, 1)).rgb;
-      // 环（上下左右）的逐通道 min/max。
+      // Per-channel min/max of the cross neighbors (up/down/left/right).
       vec3 mn4 = min(min(b, d), min(f, h));
       vec3 mx4 = max(max(b, d), max(f, h));
-      // 官方限制器（高精度倒数）；分母加极小钳制：纯白/纯黑块下官方 0×∞
-      // 会产生 NaN，社区移植常规以钳制规避，仅影响病态输入。
+      // Official limiter with high-precision reciprocals. Clamp denominators slightly: upstream 0 x infinity
+      // produces NaN in pure-white/black blocks; common community ports clamp this, affecting only pathological inputs.
       vec3 hitMin = min(mn4, e) * (1.0 / max(4.0 * mx4, 1e-4));
       vec3 hitMax = (vec3(1.0) - max(mx4, e)) * (1.0 / max(4.0 * mn4 - 4.0, 1e-4));
       vec3 lobe3 = max(-hitMin, hitMax);
@@ -127,7 +125,7 @@ export function fsrRcasShader(sharpness: number): string {
   `;
 }
 
-/** 单 pass FSR 1.0 EASU 片段着色器；三种客体帧格式共用同一套滤波数学。 */
+/** Single-pass FSR 1.0 EASU fragment shader; all three guest-frame formats share the same filtering math. */
 export function fsrUpscaleShader(format: 'indexed' | 'rgba' | 'rgb565'): string {
   const texture = format === 'indexed' ? 'indexedFrame' : format === 'rgba' ? 'rgbaFrame' : 'packedFrame';
   const sample =
@@ -157,13 +155,13 @@ export function fsrUpscaleShader(format: 'indexed' | 'rgba' | 'rgb565'): string 
     };
     return letters.map((l) => `  vec3 ${l}C = readPixel(ivec2(fp + ${offsets[l]})).rgb;`).join('\n');
   })();
-  // 官方 12-tap 核的四个双线性角区（FsrEasuF 的 FsrEasuSetF 调用顺序与权重）。
+  // Four bilinear corner regions of the official 12-tap kernel, matching FsrEasuSetF call order and weights in FsrEasuF.
   const sets = `
   fsrSet(pp, (1.0 - pp.x) * (1.0 - pp.y), bL, eL, fL, gL, jL, dir, len);
   fsrSet(pp, pp.x * (1.0 - pp.y), cL, fL, gL, hL, kL, dir, len);
   fsrSet(pp, (1.0 - pp.x) * pp.y, fL, iL, jL, kL, nL, dir, len);
   fsrSet(pp, pp.x * pp.y, gL, jL, kL, lL, oL, dir, len);`;
-  // 官方 12 个抽头的顺序与相对 'f' 的偏移。
+  // Official order of the 12 taps and their offsets relative to 'f'.
   const tapCalls = `
   fsrTap(aC, aW, vec2(0.0, -1.0) - pp, dir, len2, lob, clp, bC); // b
   fsrTap(aC, aW, vec2(1.0, -1.0) - pp, dir, len2, lob, clp, cC); // c
@@ -192,12 +190,12 @@ export function fsrUpscaleShader(format: 'indexed' | 'rgba' | 'rgb565'): string 
     ${FSr_COMMON}
     void main() {
       vec2 size = vec2(textureSize(${texture}, 0));
-      // 1:1 或缩小时保留原采样，不改变原生像素。
+      // Preserve original sampling at 1:1 or while downscaling, leaving native pixels unchanged.
       if (!upscale) { color = readPixel(ivec2(floor(uv * size))); return; }
-      // 官方把输出整数像素 ip 映射回输入：pp = ip*scale + 0.5*scale - 0.5。
-      // 全屏四边形的 uv 落在输出像素中心（ip = uv*outputSize - 0.5），代入上式
-      // 恒等化简为 uv*size - 0.5，与 bicubic 路径同一约定；直接用 uv 也避免了
-      // WebGL gl_FragCoord 与官方 Vulkan 示例的 Y 轴方向差异（曾导致画面上下颠倒）。
+      // Upstream maps integer output pixel ip to input coordinates: pp = ip*scale + 0.5*scale - 0.5.
+      // Fullscreen-quad UVs land at output pixel centers (ip = uv*outputSize - 0.5). Substitution
+      // simplifies exactly to uv*size - 0.5, matching the bicubic convention. Direct UV use also avoids
+      // Y-axis differences between WebGL gl_FragCoord and upstream Vulkan examples that previously inverted the image.
       vec2 pp = uv * size - 0.5;
       vec2 fp = floor(pp);
       pp -= fp;
@@ -207,7 +205,7 @@ ${taps}
       float kL = fsrLuma(kC), lL = fsrLuma(lC), nL = fsrLuma(nC), oL = fsrLuma(oC);
       vec2 dir = vec2(0.0);
       float len = 0.0;${sets}
-      // 归一化（官方近似）并在接近零时回退为水平方向。
+      // Normalize with the upstream approximation, falling back to a horizontal direction near zero.
       vec2 dir2 = dir * dir;
       float dirR = dir2.x + dir2.y;
       bool zro = dirR < (1.0 / 32768.0);
@@ -221,7 +219,7 @@ ${taps}
       vec2 len2 = vec2(1.0 + (stretch - 1.0) * len, 1.0 + (-0.5) * len);
       float lob = 0.5 + ((1.0 / 4.0 - 0.04) - 0.5) * len;
       float clp = fsrRcp(lob);
-      // 最近 4 邻域（f/g/j/k）的颜色范围做去振铃钳位。
+      // Clamp against the nearest four neighbors' (f/g/j/k) color range to suppress ringing.
       vec3 min4 = min(min(fC, gC), min(jC, kC));
       vec3 max4 = max(max(fC, gC), max(jC, kC));
       vec3 aC = vec3(0.0);

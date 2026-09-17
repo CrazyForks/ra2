@@ -1,11 +1,9 @@
 import { COMMON_WIN32_ABI } from '../../vm86/abi';
 
 /**
- * Red Alert 2 / XWIS 轻量客户端的独立 x86 ABI。
+ * Independent x86 ABI for Red Alert 2 / lightweight XWIS clients.
  *
- * 网络、外层 WOL UI 和 Bink 在单机阶段只走最小失败/跳过语义，但仍必须登记
- * 正确的 `ret n`，否则一次可选功能探测就会把客体栈永久推歪。XWIS ord1 的
- * 唯一导出为 `?X@@YAXXZ`（无参数 cdecl），因此清理字节数为 0。
+ * Networking, outer WOL UI, and Bink use minimal failure/skip semantics during single-player startup, but correct ret n values remain essential: one optional-feature probe can otherwise permanently corrupt the guest stack. XWIS ord1 exports only ?X@@YAXXZ, a no-argument cdecl function, so its cleanup size is 0.
  */
 export const RA2_ABI: Record<string, number> = {
   ...COMMON_WIN32_ABI,
@@ -190,9 +188,9 @@ export const RA2_ABI: Record<string, number> = {
   'OLE32.DLL!CoFileTimeNow': 4,
   'OLE32.DLL!StringFromCLSID': 8,
   'OLE32.DLL!CLSIDFromString': 8,
-  // OleSaveToStream(IPersistStream*, IStream*) 只有两个参数。错记成
-  // 12 字节会让 stdcall 桩多弹一格，RA2 选择战役后保存 ALL01T
-  // 初始状态时便会把返回地址当数据，最终落入 WASM unreachable。
+  // OleSaveToStream(IPersistStream*, IStream*) has only two arguments. Registering
+  // 12 bytes makes the stdcall stub pop one extra slot; when RA2 saves ALL01T's initial state after campaign selection,
+  // the return address becomes data, eventually producing WASM unreachable.
   'OLE32.DLL!OleSaveToStream': 8,
   'OLE32.DLL!OleLoadFromStream': 12,
   'OLE32.DLL!OleRun': 4,

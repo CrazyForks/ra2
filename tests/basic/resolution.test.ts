@@ -65,8 +65,8 @@ describe('RA2/YR 分辨率 INI 内存覆盖', () => {
         files: missingFiles,
         executableBytes: new Uint8Array([1]),
       };
-      // 在线包没有 ra2.ini：提供格式规范的默认配置（游戏读到缺失/空 INI
-      // 会退回 640×400 开场卡死）；写入被遮蔽，不落 provider。
+      // The online package lacks ra2.ini: provide well-formed defaults (missing/empty INI makes the game
+      // fall back to a frozen 640x400 intro). Writes are shadowed and do not reach the provider.
       const overlaid = await withGameResolutionOverride(missingSource, null);
       expect(decode((await overlaid.files.read(ini))!)).toBe(
         '[Video]\nAllowHiResModes=yes\nScreenWidth=800\nScreenHeight=600\n',

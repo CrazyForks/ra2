@@ -1,3 +1,4 @@
+import '../helpers/chineseLocale';
 import { describe, expect, it } from 'vitest';
 import {
   captureProbeImage,

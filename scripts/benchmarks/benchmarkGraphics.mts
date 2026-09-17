@@ -1,5 +1,7 @@
-/** 固定工作量的宿主绘图微基准；不启动游戏，不把结果当成实际游戏 FPS。
- * 可传入旧版 worktree 绝对路径，用相同脚本/数据测基线（不测旧版不存在的直传）。 */
+/**
+ * Host graphics microbenchmark with a fixed workload; does not start the game or measure actual game FPS.
+ * An old worktree's absolute path can be supplied to measure a baseline with the same script/data, excluding direct transfer if unavailable there.
+ */
 import { performance } from 'node:perf_hooks';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -44,7 +46,7 @@ const reusedShim = createTestShim(memory, {
   takeFrameBuffer: (size) => pool.take(size),
 }) as unknown as typeof shim;
 reusedShim.primarySurface = target.object;
-// 混合透明像素与不透明像素，防止全透明/全色块成为不具代表性的特例。
+// Mix transparent and opaque pixels to avoid unrepresentative fully transparent or solid-color special cases.
 const pixels = new Uint16Array(memory.bytes.buffer, source.pixels, 1440 * 900);
 for (let i = 0; i < pixels.length; i++) pixels[i] = i % 3 ? i & 0xffff : 0;
 memory.write_memory(new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength), target.pixels);

@@ -1,7 +1,7 @@
 import type { GuestMemory } from '../../vm86/win32';
 import type { GameFrameReader } from '../performance';
 
-/** 只读探针：未知映像/签名不匹配返回不可用，不能把任意内存当作 FPS。 */
+/** Read-only probe: unknown images/signature mismatches are unavailable; never interpret arbitrary memory as FPS. */
 export function createFrameCounterReader(
   memory: GuestMemory,
   hash: string,

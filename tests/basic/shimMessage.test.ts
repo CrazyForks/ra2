@@ -1,7 +1,5 @@
 /**
- * Win32Shim 消息队列单元测试（假客体内存，不起 v86）：
- * postMessage/GetMessageA/PeekMessageA 的出队语义、WM_MOUSEMOVE 合并、
- * 首个消息 API 的初始窗口消息注入、DispatchMessageA/SendMessageA 的回调跳板改写。
+ * Win32Shim message-queue unit tests with fake guest memory, without v86: postMessage/GetMessageA/PeekMessageA dequeue semantics, WM_MOUSEMOVE coalescing, initial window-message injection at the first message API, and DispatchMessageA/SendMessageA callback trampoline rewriting.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -26,8 +24,8 @@ const WNDCLASS = 0x0010_0000;
 const CLASS_NAME = 0x0010_0100;
 const MSG = 0x0010_0200;
 const DIALOG_TEMPLATE = 0x0010_1000;
-const STACK = 0x006f_ff00; // 假栈顶附近
-const WNDPROC = 0x0040_1000; // 假 WndProc 地址（本测试不真正执行客体代码）
+const STACK = 0x006f_ff00; // Near the fake stack top
+const WNDPROC = 0x0040_1000; // Fake WndProc address (this test does not execute guest code)
 
 const WM_MOVE = 0x0003;
 const WM_SIZE = 0x0005;
@@ -42,7 +40,7 @@ const WM_LBUTTONUP = 0x0202;
 const WM_LBUTTONDBLCLK = 0x0203;
 const WM_USER = 0x0400;
 
-/** 注册窗口类并创建窗口，返回 hwnd。 */
+/** Register a window class, create a window, and return its hwnd. */
 function createWindow(shim: Win32Shim, memory: FakeGuestMemory, classStyle = 0): number {
   writeAsciiZ(memory, CLASS_NAME, 'TESTCLS');
   memory.write_memory(new Uint8Array(40), WNDCLASS);
@@ -110,7 +108,7 @@ describe('消息队列', () => {
     view.setInt16(12, 0, true);
     view.setInt16(14, 100, true);
     view.setInt16(16, 100, true);
-    // menu/class/title 三个空 UTF-16 字串，item 从 DWORD 对齐的 24 开始。
+    // Three empty UTF-16 strings for menu/class/title; the item starts at DWORD-aligned offset 24.
     view.setUint32(24, 0x5000_0000, true); // WS_CHILD | WS_VISIBLE
     view.setUint32(28, 0, true);
     view.setInt16(32, 10, true);
@@ -214,8 +212,8 @@ describe('消息队列', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory);
     const hwnd = createWindow(shim, memory);
-    shim.postMessage(WM_USER, 0x11, 0); // 就绪前 → pendingHostMessages
-    getMessage(shim); // WM_MOVE（此刻 flush 缓存）
+    shim.postMessage(WM_USER, 0x11, 0); // Before readiness -> pendingHostMessages
+    getMessage(shim); // WM_MOVE (flush the cache now)
     getMessage(shim); // WM_SIZE
     getMessage(shim); // WM_ACTIVATEAPP
     expect(getMessage(shim).eax).toBe(1);
@@ -228,7 +226,7 @@ describe('消息队列', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory);
     createWindow(shim, memory);
-    // PostQuitMessage 直接入队，排在首个 GetMessageA 才注入的初始三连之前。
+    // PostQuitMessage queues directly, before the initial three messages injected only by the first GetMessageA.
     callShim(shim, 'USER32.DLL!PostQuitMessage', [7]);
     expect(getMessage(shim).eax).toBe(0);
     expect(readU32(memory, MSG + 4)).toBe(WM_QUIT);
@@ -239,16 +237,16 @@ describe('消息队列', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory);
     createWindow(shim, memory);
-    // 主泵就绪前 post：进 pendingHostMessages，就绪后并入主队列走 GetMessage 出队。
-    // （就绪后的鼠标消息改为在 PeekMessage 边界同步分派，不再经过 MSG 出队。）
+    // Posting before the main pump is ready goes to pendingHostMessages; once ready, merge into the main queue for GetMessage dequeue.
+    // After readiness, mouse messages dispatch synchronously at PeekMessage boundaries instead of passing through MSG dequeue.
     shim.postMessage(WM_MOUSEMOVE, 0, 1);
     shim.postMessage(WM_MOUSEMOVE, 0, 2);
     getMessage(shim);
     getMessage(shim);
-    getMessage(shim); // 排空初始三连
+    getMessage(shim); // Drain the initial three messages
     expect(getMessage(shim).eax).toBe(1);
-    expect(readU32(memory, MSG + 12)).toBe(2); // 最新 lParam
-    // 队列已空：无定时器时 GetMessageA 走 delayMs 挂起路径
+    expect(readU32(memory, MSG + 12)).toBe(2); // Latest lParam
+    // The queue is empty; without timers, GetMessageA suspends through delayMs
     const empty = getMessage(shim);
     expect(empty.eax).toBe(1);
     expect(empty.delayMs).toBeGreaterThan(0);
@@ -276,31 +274,31 @@ describe('消息队列', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory);
     createWindow(shim, memory);
-    // 首个 Peek 触发初始三连注入；用 PM_REMOVE 排空。
+    // The first Peek injects the initial three messages; drain them with PM_REMOVE.
     for (let i = 0; i < 3; i++) {
       expect(callShim(shim, 'USER32.DLL!PeekMessageA', [MSG, 0, 0, 0, 1]).eax).toBe(1);
     }
     shim.postMessage(WM_USER, 5, 0);
-    expect(callShim(shim, 'USER32.DLL!PeekMessageA', [MSG, 0, 0, 0, 0]).eax).toBe(1); // 不移除
+    expect(callShim(shim, 'USER32.DLL!PeekMessageA', [MSG, 0, 0, 0, 0]).eax).toBe(1); // Do not remove
     expect(readU32(memory, MSG + 4)).toBe(WM_USER);
-    expect(callShim(shim, 'USER32.DLL!PeekMessageA', [MSG, 0, 0, 0, 1]).eax).toBe(1); // 移除
-    expect(callShim(shim, 'USER32.DLL!PeekMessageA', [MSG, 0, 0, 0, 1]).eax).toBe(0); // 已空
+    expect(callShim(shim, 'USER32.DLL!PeekMessageA', [MSG, 0, 0, 0, 1]).eax).toBe(1); // Remove
+    expect(callShim(shim, 'USER32.DLL!PeekMessageA', [MSG, 0, 0, 0, 1]).eax).toBe(0); // Already empty
     expect(readU32(memory, HYPERCALL_PEEK_BUDGET)).toBeGreaterThan(0);
     shim.postMessage(WM_USER, 6, 0);
-    expect(readU32(memory, HYPERCALL_PEEK_BUDGET)).toBe(0); // 新消息强制下一次回 host
+    expect(readU32(memory, HYPERCALL_PEEK_BUDGET)).toBe(0); // A new message forces the next call back to the host
   });
 
   it('鼠标消息出队时恢复按键与 Ctrl 键态，后续消息再清除', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory, { gameId: 'ra2' });
     createWindow(shim, memory);
-    for (let i = 0; i < 3; i++) getMessage(shim); // 排空初始三连
+    for (let i = 0; i < 3; i++) getMessage(shim); // Drain the initial three messages
 
     shim.setKeyState(0x11, true);
     shim.setKeyState(0xa2, true);
     shim.setKeyState(0x01, true);
     shim.postMessage(WM_LBUTTONDOWN, 0x0008 | 0x0001, 0); // MK_CONTROL | MK_LBUTTON
-    // worker 可在客体取消息前先收到物理鼠标/Ctrl 抬起；队列时间线仍应保持按下态。
+    // The Worker may receive physical mouse/Ctrl releases before the guest retrieves messages; the queued timeline must retain the pressed state.
     shim.setKeyState(0x11, false);
     shim.setKeyState(0xa2, false);
     shim.setKeyState(0x01, false);
@@ -318,7 +316,7 @@ describe('消息队列', () => {
     expect(callShim(shim, 'USER32.DLL!PeekMessageA', [MSG, 0, 0, 0, 1]).eax).toBe(1);
     expect(callShim(shim, 'USER32.DLL!GetAsyncKeyState', [0x11]).eax).toBe(0);
     expect(callShim(shim, 'USER32.DLL!GetAsyncKeyState', [0xa2]).eax).toBe(0);
-    // 即使消息泵已查看后续 keyup，派发较早的 Ctrl+鼠标消息时仍须恢复 Ctrl。
+    // Even if the pump has already peeked at a later keyup, dispatching an earlier Ctrl+mouse message must restore Ctrl.
     callShim(shim, 'USER32.DLL!DispatchMessageA', [mouseMessage], STACK);
     expect(callShim(shim, 'USER32.DLL!GetKeyState', [0x11]).eax).toBe(0x8000);
     expect(callShim(shim, 'USER32.DLL!GetKeyState', [0xa2]).eax).toBe(0x8000);
@@ -351,9 +349,9 @@ describe('消息队列', () => {
     inputState.captureWindow = child;
     inputState.pressedButton = child;
     expect(callShim(shim, 'USER32.DLL!SetFocus', [child]).eax).toBe(0);
-    for (let i = 0; i < 3; i++) getMessage(shim); // 排空初始三连
+    for (let i = 0; i < 3; i++) getMessage(shim); // Drain the initial three messages
 
-    callShim(shim, 'USER32.DLL!ShowWindow', [child, 0]); // shell 切页时隐藏旧焦点控件
+    callShim(shim, 'USER32.DLL!ShowWindow', [child, 0]); // Hide the old focused control during a shell-page switch
     expect(inputState.captureWindow).toBe(0);
     expect(inputState.pressedButton).toBe(0);
     callShim(shim, 'USER32.DLL!SetWindowLongA', [child, -16, 0x5000_0000]);
@@ -445,7 +443,7 @@ describe('消息队列', () => {
         0,
         0,
       ]).eax;
-      // CreateDialogIndirectParamA 在解析 id=1684 标题控件时写入此状态。
+      // CreateDialogIndirectParamA writes this state when parsing title control id=1684.
       shellState.shellPageTitle = title;
       return { page, titleWindow };
     };
@@ -527,7 +525,7 @@ describe('消息队列', () => {
       ),
     ).toBe(false);
 
-    // 标题控件隐藏不应让仍可见且位于顶层的页面失去 active；恢复可见时重读标题。
+    // Hiding the title control must not deactivate a visible topmost page; reread the title when it becomes visible again.
     callShim(shim, 'USER32.DLL!ShowWindow', [chooseMap.titleWindow, 0]);
     expect(shellState.activeShellPage).toBe(chooseMap.page);
     expect(shim.inspectShellPageTitle()).toBe('');
@@ -535,7 +533,7 @@ describe('消息队列', () => {
     expect(shellState.activeShellPage).toBe(chooseMap.page);
     expect(shim.inspectShellPageTitle()).toBe('GUI:ChooseMap');
 
-    // 页根 caption 不是 shell 标题控件，不能覆盖 shellPageTitle。
+    // The page-root caption is not the shell title control and must not overwrite shellPageTitle.
     writeAsciiZ(memory, CLASS_NAME + 0x180, 'DialogCaption');
     callShim(shim, 'USER32.DLL!SetWindowTextA', [chooseMap.page, CLASS_NAME + 0x180]);
     expect(shim.inspectShellPageTitle()).toBe('GUI:ChooseMap');
@@ -562,7 +560,7 @@ describe('消息队列', () => {
     expect(shellState.activeShellPage).toBe(chooseMap.page);
     expect(shim.inspectShellPageTitle()).toBe('GUI:ChooseMap');
 
-    // 显示处于 z 序中段的页不能越过仍在顶部的 ChooseMap。
+    // Showing a page in the middle of the z-order must not overtake ChooseMap while it remains on top.
     callShim(shim, 'USER32.DLL!SetWindowLongA', [skirmish.page, -16, 0x4000_0000]);
     callShim(shim, 'USER32.DLL!SetWindowLongA', [skirmish.page, -16, 0x5000_0000]);
     expect(shellState.activeShellPage).toBe(chooseMap.page);
@@ -576,12 +574,12 @@ describe('消息队列', () => {
     expect(shellState.activeShellPage).toBe(skirmish.page);
     expect(shim.inspectShellPageTitle()).toBe('GUI:SkirmishGame');
 
-    // 已存在且可见的页面提层也必须更新 activeShellPage。
+    // Raising an existing visible page must also update activeShellPage.
     callShim(shim, 'USER32.DLL!SetWindowPos', [chooseMap.page, 0, 0, 0, 0, 0, 0x0001 | 0x0002]);
     expect(shellState.activeShellPage).toBe(chooseMap.page);
     expect(shim.inspectShellPageTitle()).toBe('GUI:ChooseMap');
 
-    // SWP_HIDEWINDOW/SWP_SHOWWINDOW 需要同步本地 WS_VISIBLE 和页回落。
+    // SWP_HIDEWINDOW/SWP_SHOWWINDOW must synchronize local WS_VISIBLE and page fallback.
     callShim(shim, 'USER32.DLL!SetWindowPos', [chooseMap.page, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0080]);
     expect(shellState.activeShellPage).toBe(skirmish.page);
     expect(shim.inspectShellPageTitle()).toBe('GUI:SkirmishGame');
@@ -589,7 +587,7 @@ describe('消息队列', () => {
     expect(shellState.activeShellPage).toBe(chooseMap.page);
     expect(shim.inspectShellPageTitle()).toBe('GUI:ChooseMap');
 
-    // 直接改 GWL_STYLE 的 WS_VISIBLE 也走同一条页同步路径。
+    // Directly changing WS_VISIBLE through GWL_STYLE uses the same page synchronization path.
     callShim(shim, 'USER32.DLL!SetWindowLongA', [chooseMap.page, -16, 0x4000_0000]);
     expect(shellState.activeShellPage).toBe(skirmish.page);
     expect(shim.inspectShellPageTitle()).toBe('GUI:SkirmishGame');
@@ -716,7 +714,7 @@ describe('回调跳板（DispatchMessageA / SendMessageA）', () => {
     expect(shim.inspectCallbackState()).toMatchObject({ hwnd: parent, message: 0x0111 });
 
     const defaultProc = callShim(shim, 'USER32.DLL!GetWindowLongA', [child, -4]).eax;
-    // NewListBox 自行处理按下，只把抬起交给默认过程；鼠标位置不能再次改选择。
+    // NewListBox handles presses itself and delegates only releases to the default procedure; mouse position must not change selection again.
     writeU32(memory, STACK, 0x1234_5678);
     callShim(shim, 'USER32.DLL!CallWindowProcA', [defaultProc, child, WM_LBUTTONUP, 0, 5], STACK);
     expect(readU32(memory, STACK)).toBe(0x1234_5678);
@@ -750,18 +748,18 @@ describe('回调跳板（DispatchMessageA / SendMessageA）', () => {
     const getTop = () => callShim(shim, 'USER32.DLL!SendMessageA', [child, 0x018e, 0, 0]).eax;
     expect(getTop()).toBe(0);
 
-    // LB_SETTOPINDEX：GETTOPINDEX 返回同值，条目矩形随滚动偏移（可见行 y=0）。
+    // LB_SETTOPINDEX: GETTOPINDEX returns the same value, and item rectangles reflect the scroll offset (visible row y=0).
     callShim(shim, 'USER32.DLL!SendMessageA', [child, 0x0197, 7, 0]);
     expect(getTop()).toBe(7);
     callShim(shim, 'USER32.DLL!SendMessageA', [child, 0x0198, 7, STACK]);
     expect(readU32(memory, STACK)).toBe(0);
     expect(readU32(memory, STACK + 12)).toBe(16);
 
-    // 越界设置返回 LB_ERR 且顶部不变。
+    // Out-of-range settings return LB_ERR without changing the top index.
     expect(callShim(shim, 'USER32.DLL!SendMessageA', [child, 0x0197, 20, 0]).eax).toBe(-1);
     expect(getTop()).toBe(7);
 
-    // WM_VSCROLL：一行、一页（64/16=4 行）、到底、滚轮回退 3 行。
+    // WM_VSCROLL: one line, one page (64/16 = 4 rows), bottom, then wheel back three rows.
     callShim(shim, 'USER32.DLL!SendMessageA', [child, 0x0115, 1, 0]);
     expect(getTop()).toBe(8);
     callShim(shim, 'USER32.DLL!SendMessageA', [child, 0x0115, 3, 0]);
@@ -771,7 +769,7 @@ describe('回调跳板（DispatchMessageA / SendMessageA）', () => {
     callShim(shim, 'USER32.DLL!SendMessageA', [child, 0x020a, (120 << 16) >>> 0, 0]);
     expect(getTop()).toBe(16);
 
-    // 条目删减后顶部收敛到有效范围。
+    // After deleting items, clamp the top index to the valid range.
     for (let index = 0; index < 18; index++) {
       callShim(shim, 'USER32.DLL!SendMessageA', [child, 0x0182, 0, 0]);
     }
@@ -807,7 +805,7 @@ describe('回调跳板（DispatchMessageA / SendMessageA）', () => {
       expect(destroy.message).toBe(0x0002); // WM_DESTROY
       expect(callShim(shim, 'USER32.DLL!GetWindowLongA', [child, -16]).eax).toBe(0x5000_0000);
 
-      // 假内存不执行跳板：只释放销毁回调槽，外层模态菜单仍在运行。
+      // Fake memory does not execute trampolines: release only the destruction callback slot; the outer modal menu remains active.
       writeU32(memory, GUEST_CALLBACK_OWNERS + destroy.depth * 4, 0);
       writeU32(memory, HYPERCALL_CALLBACK_DEPTH, 1);
       expect(callShim(shim, 'USER32.DLL!GetWindowLongA', [child, -16]).eax).toBe(0);
@@ -852,11 +850,11 @@ describe('回调跳板（DispatchMessageA / SendMessageA）', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory);
     const hwnd = createWindow(shim, memory);
-    getMessage(shim); // WM_MOVE 出队（MSG 已填）
-    writeU32(memory, STACK, 0x0040_2000); // 假返回地址
+    getMessage(shim); // WM_MOVE dequeued (MSG filled)
+    writeU32(memory, STACK, 0x0040_2000); // Fake return address
     expect(readU32(memory, HYPERCALL_CALLBACK_DEPTH)).toBe(0);
     callShim(shim, 'USER32.DLL!DispatchMessageA', [MSG], STACK);
-    // 返回地址指向独立桥；在执行桥之前就已经计入活动回调。
+    // The return address points to a separate bridge; the callback is counted as active before the bridge executes.
     expect(readU32(memory, STACK)).toBe(0x0022_0000);
     expect(readU32(memory, HYPERCALL_CALLBACK_DEPTH)).toBe(1);
     const state = shim.inspectCallbackState();

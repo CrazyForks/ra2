@@ -1,6 +1,6 @@
 import { isRelayRoomId } from './relayWire';
 
-/** 每个单段路径都是房间；没有保留的游戏路径或旧入口。 */
+/** Every single-segment path identifies a room; there are no reserved game paths or legacy endpoints. */
 export function relayRoomFromPath(path: string): string {
   let room: string;
   try {
@@ -13,14 +13,14 @@ export function relayRoomFromPath(path: string): string {
   return room;
 }
 
-/** 保留省略协议这一选择，供客户端在建立连接前探测；不依赖页面协议。 */
+/** Preserve an omitted protocol so the client can probe before connecting; do not depend on the page protocol. */
 export function normalizeRelayAddress(value: string, defaultRoom = 'default'): string {
   const input = value.trim();
   const explicit = /^[a-z][a-z0-9+.-]*:\/\//i.test(input);
   if (!input || /\s|\\/.test(input) || input.startsWith('/')) throw new Error('relay 必须包含主机地址');
   const authorityAndPath = (explicit ? input.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '') : input).split(/[?#]/, 1)[0]!;
   const slash = authorityAndPath.indexOf('/');
-  // 在 URL 规范化点段前校验，避免 /a/../b 悄悄变成另一个房间。
+  // Validate before URL dot-segment normalization so /a/../b cannot silently become a different room.
   if (slash >= 0 && authorityAndPath.slice(slash) !== '/') relayRoomFromPath(authorityAndPath.slice(slash));
   let url: URL;
   try {
@@ -34,7 +34,7 @@ export function normalizeRelayAddress(value: string, defaultRoom = 'default'): s
   if (url.pathname === '/') url.pathname = '/' + encodeURIComponent(defaultRoom);
   relayRoomFromPath(url.pathname);
   if (explicit) return url.href;
-  // URL 会省略 WS 的默认 80 端口；探测 WSS 时仍必须使用调用方指定的 80。
+  // URL omits the default WS port 80; WSS probing must still use port 80 when explicitly supplied by the caller.
   const authority = input.split(/[/?#]/, 1)[0]!;
   return (
     url.hostname + (url.port ? ':' + url.port : authority.endsWith(':80') ? ':80' : '') + url.pathname + url.search

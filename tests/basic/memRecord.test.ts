@@ -1,4 +1,4 @@
-/** utils/memoryDiff.ts 单元测试：4 字节粒度内存 diff 与改动计数。 */
+/** utils/memoryDiff.ts unit tests: 4-byte memory diffs and change counts. */
 import { describe, expect, it } from 'vitest';
 import { accumulateChangedWords, diffMemory } from '../../src/utils/memoryDiff';
 
@@ -12,7 +12,7 @@ describe('diffMemory', () => {
   it('单字改动 → 一个 4 字节区段', () => {
     const a = new Uint8Array(32);
     const b = new Uint8Array(32);
-    b[9] = 1; // 落在字 [8,12)
+    b[9] = 1; // Falls in word [8,12)
     expect(diffMemory(a, b)).toEqual({ ranges: [{ from: 8, to: 12 }], totalBytes: 4 });
   });
 
@@ -20,8 +20,8 @@ describe('diffMemory', () => {
     const a = new Uint8Array(64);
     const b = new Uint8Array(64);
     b[4] = 1;
-    b[8] = 1; // 字 1、2 相邻 → [4,12)
-    b[40] = 2; // 字 10 独立
+    b[8] = 1; // Adjacent words 1 and 2 -> [4,12)
+    b[40] = 2; // Word 10 is separate
     expect(diffMemory(a, b)).toEqual({
       ranges: [
         { from: 4, to: 12 },
@@ -40,10 +40,10 @@ describe('diffMemory', () => {
 
   it('长度不同按较短者对齐到字', () => {
     const a = new Uint8Array(16);
-    const b = new Uint8Array(10); // 10 >>> 2 = 2 个字，只覆盖字节 [0,8)
+    const b = new Uint8Array(10); // 10 >>> 2 = 2 words, covering only bytes [0,8)
     b[7] = 1;
     expect(diffMemory(a, b).ranges).toEqual([{ from: 4, to: 8 }]);
-    b[9] = 1; // 字 [8,12) 超出较短者的字范围，不计入
+    b[9] = 1; // Word [8,12) exceeds the shorter buffer's word range and is excluded
     expect(diffMemory(a, b).ranges).toEqual([{ from: 4, to: 8 }]);
   });
 });
@@ -69,7 +69,7 @@ describe('accumulateChangedWords', () => {
     current[4] = 1;
     accumulateChangedWords(prev, current, counts, 1);
     expect(counts.size).toBe(1);
-    // 再改另一个新地址 → 截断；旧地址继续累加。
+    // Changing another new address truncates the record; existing addresses continue accumulating.
     current[0] = 2;
     current[8] = 1;
     const truncated = accumulateChangedWords(prev, current, counts, 1);

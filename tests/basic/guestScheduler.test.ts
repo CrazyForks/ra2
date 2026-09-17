@@ -16,7 +16,7 @@ describe('客体调度热路径', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory);
     const event = callShim(shim, 'KERNEL32.DLL!CreateEventA', [0, 1, 0, 0]).eax;
-    // 只在测试中构造调度状态；运行时代码仍通过 Win32 API 管理线程。
+    // Construct scheduler state only in tests; runtime code still manages threads through Win32 APIs.
     const scheduler = shim as unknown as {
       guestThreads: Map<number, Thread>;
       selectGuestThread(now: number, afterDelay: boolean, yielded: boolean): number;
@@ -32,7 +32,7 @@ describe('客体调度热路径', () => {
       const afterDelay = Boolean(random() & 1024);
       const rate = sample % 2 ? 2 : 1;
       shim.setGameClockRate(rate);
-      // 奇数步长生成唯一 id，并改变 Map 顺序，覆盖排序不能依赖插入顺序的约束。
+      // An odd stride generates unique IDs and changes Map order, covering the requirement that sorting not depend on insertion order.
       const start = random() % 8;
       for (let i = 0; i < 8; i++) {
         const id = (start + i * 3) % 8;

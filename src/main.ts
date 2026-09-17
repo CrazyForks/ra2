@@ -1,3 +1,4 @@
+import { uiLocale } from './ui/shared/i18n/translate';
 import { installNavigationGuard } from './ui/pages/game/navGuard';
 import { preloadThirdPartyFiles } from './adapter/thirdPartyFiles';
 import { GAME_MANIFESTS } from './games/manifest';
@@ -5,16 +6,20 @@ import { createElement } from 'react';
 import { AppShell } from './ui/pages/game/AppShell';
 import { createRoot } from 'react-dom/client';
 import { UiErrorBoundary } from './ui/shared/components/UiErrorBoundary';
+import { showEdgeMouseNotice } from './ui/pages/game/components/edgeMouseNotice';
 
-// 与页面模块初始化并行，不等待玩家选包；启动时复用缓存或同一条在途请求。
+document.documentElement.lang = uiLocale;
+document.title = uiLocale === 'en' ? 'Red Alert 2 in your browser' : '红色警戒2 网页版';
+
+// Run alongside page-module initialization without waiting for package selection; startup reuses the cache or the same in-flight request.
 void preloadThirdPartyFiles(Object.values(GAME_MANIFESTS));
 
-// 页面生命周期级导航护栏：后退/前进、鼠标侧键、Alt+← 等误触一律留在本页
-// （开发调试可用 ?nav-guard=0 关闭）。安装一次，与 VM 生命周期无关。
+// Page-lifetime navigation guard: keep accidental back/forward, mouse-side-button, and Alt+Left navigation on this page
+// (disable with ?nav-guard=0 for development). Install once, independently of VM lifetime.
 installNavigationGuard();
 
-// PWA：生产环境注册服务线程（浏览器「安装」的必要条件）。开发服务器不注册，
-// 避免与禁缓存/手动刷新策略打架；load 后注册，不与首次启动资源加载竞争。
+// PWA: register the service worker in production for browser installation eligibility; skip development
+// to avoid conflicting with no-cache/manual-refresh policies. Register after load to avoid competing with initial startup resources.
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch((error) => {
@@ -23,7 +28,8 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   });
 }
 
-// 整个应用只有一个根，VM 在组件提交后通过 canvas ref 接入，不需要 flushSync。
+// The application has one root; attach the VM through the canvas ref after component commit, without flushSync.
 const root = createRoot(document.getElementById('root')!);
 root.render(createElement(UiErrorBoundary, null, createElement(AppShell)));
+void showEdgeMouseNotice();
 if (import.meta.hot) import.meta.hot.dispose(() => root.unmount());

@@ -1,6 +1,5 @@
 /**
- * 游戏网络包单元测试：ZIP 流式解压、会话级 provider 的 IndexedDB 写穿透
- * （Node 无 IndexedDB 时退化为纯内存）、深目录发现。
+ * Network game-package unit tests: streaming ZIP extraction, session-provider IndexedDB write-through (memory-only fallback when Node lacks IndexedDB), and deep-directory discovery.
  */
 import { strToU8, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
@@ -8,7 +7,7 @@ import { SessionGameFileProvider } from '../../src/platform/browser/files/sessio
 import { formatZipBytes, readZipArchive } from '../../src/utils/archive/zip';
 import { discoverGameSources } from '../../src/resources/discovery/discoverGameSources';
 
-/** 最小可识别的 PE：MZ 魔数 + 少量填充。 */
+/** Minimal recognizable PE: MZ magic plus a little padding. */
 function fakeExe(): Uint8Array {
   const bytes = new Uint8Array(64);
   bytes[0] = 0x4d;
@@ -43,7 +42,7 @@ describe('会话级包 provider', () => {
     const provider = new SessionGameFileProvider('测试包', new Map([['game.exe', fakeExe()]]));
     expect(await provider.read('GAME.EXE')).not.toBeNull();
     expect(provider.hasKnownFile('game.exe')).toBe(true);
-    // IndexedDB key 集合枚举完成前同步判定返回 null（Node 无 IDB，枚举为空集）。
+    // Synchronous checks return null until IndexedDB key enumeration completes (Node has no IDB, so the enumerated set is empty).
     expect(provider.hasKnownFile('missing.mix')).toBeNull();
     await provider.list('');
     expect(provider.hasKnownFile('missing.mix')).toBe(false);

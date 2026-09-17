@@ -1,7 +1,7 @@
 import type { GameFileProvider } from '../contracts';
 import { normalizeGuestPath } from '../../vm86/paths';
 
-/** 用内存文件覆盖底层 provider 的读取；写入/落盘仍走底层。 */
+/** Overlay memory files over underlying provider reads; writes and persistence still use the underlying provider. */
 export class OverlayGameFileProvider implements GameFileProvider {
   readonly label: string;
   private readonly overlay: ReadonlyMap<string, Uint8Array>;
@@ -10,12 +10,13 @@ export class OverlayGameFileProvider implements GameFileProvider {
     readonly parent: GameFileProvider,
     files: ReadonlyMap<string, Uint8Array>,
     labelSuffix: string,
-    /** overlay 命中的文件写入只在客体会话内视为成功，不下沉到真实目录。 */
+    /** Writes to overlay hits succeed only within the guest session and never reach the real directory. */
     private readonly shadowOverlayWrites = false,
-    /** copy=false 时直接持有传入字节（调用方保证之后不再改动）。 */
+    /** With copy=false, retain input bytes directly; the caller guarantees no later modification. */
     copy = true,
-    /** 底层优先：先读底层（玩家自己的完整安装，如中文资源），缺失时再用
-     *  覆盖层（在线包）补齐。默认 false=覆盖层优先。写入不受影响，始终走底层。 */
+    /**
+     * Parent-first: read the player's full installation, including localized assets, before filling missing files from the online-package overlay. Default false means overlay-first. Writes are unaffected and always use the parent.
+     */
     private readonly parentFirst = false,
   ) {
     const normalized = new Map<string, Uint8Array>();
@@ -24,7 +25,7 @@ export class OverlayGameFileProvider implements GameFileProvider {
     this.label = `${parent.label}${labelSuffix}`;
   }
 
-  /** 本层覆盖文件（已归一化路径）；供 worker init 消息序列化用。 */
+  /** Normalized files in this overlay, exposed for Worker init serialization. */
   get overlays(): ReadonlyMap<string, Uint8Array> {
     return this.overlay;
   }

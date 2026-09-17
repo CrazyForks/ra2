@@ -20,11 +20,11 @@ if (
 }
 const report = await mkdtemp(resolve(`.tmp-${mode}-ci-`));
 const env = { ...process.env };
-// 下载凭据只由当前进程读取；不传给 pnpm、游戏、Vite 或浏览器。
+// Only this process reads download credentials; do not pass them to pnpm, the game, Vite, or the browser.
 for (const key of Object.keys(env)) if (/^GAME_.*_(URL|SHA256)$/.test(key)) delete env[key];
-// VM_* 是本机调试开关（跳帧检查、点击序列、只悬停、关 JIT 等），会弱化断言。
-// CI 只使用本脚本下面显式写入的值，不从环境继承，避免 runner 上的遗留变量
-// 把真实游戏验收降级成走过场。
+// VM_* flags are local debugging controls (skip frame checks, click sequences, hover-only, disable JIT, etc.) that weaken assertions.
+// CI uses only values explicitly set below, without inheriting environment values, so stale runner variables cannot
+// turn real-game acceptance into a superficial check.
 for (const key of Object.keys(env)) if (key.startsWith('VM_')) delete env[key];
 const tasks = new Processes(report, env);
 let resources: string | undefined;
@@ -96,7 +96,7 @@ try {
   } else if (mode === 'browser') {
     await browsers();
   } else {
-    // 远端只有 game 参数及两个 secrets；本地显式 --local 才读取已有资源配置。
+    // Remote runs use only the game argument and two secrets; existing resource configuration is read locally only with explicit --local.
     const gameId = game as 'ra2' | 'yr';
     let roots: { game: string; thirdParty: string }, manifest: string, expected: string;
     if (flag === '--local') {
@@ -105,7 +105,7 @@ try {
       expected = env.RA2_CI_RESOURCE_MANIFEST_SHA256 ?? '';
     } else {
       const prefix = gameId === 'ra2' ? 'GAME_RA2' : 'GAME_RA2_YR';
-      // 缺 secret 时先报清楚原因：否则会落到下载器的通用失败分支，看不出是凭据没配。
+      // Report missing secrets explicitly before reaching the downloader's generic failure path, which would hide the missing configuration.
       const sourceUrl = process.env[`${prefix}_URL`];
       const sourceSha256 = process.env[`${prefix}_SHA256`];
       if (!sourceUrl || !sourceSha256) {
@@ -119,7 +119,7 @@ try {
       console.log(`开始：下载并校验 ${gameId} 资源`);
       await downloadResources(sourceUrl, sourceSha256, join(payload, 'archive.bin'));
       console.log(`开始：提取 ${gameId} 游戏包（与前端共享）`);
-      // 7z/WASM 的堆随提取进程退出回收，不能一直留在编排进程中挤占双 VM 内存。
+      // Reclaim the 7z/WASM heap when the extraction process exits; retaining it in the orchestrator would consume memory needed by the two VMs.
       await tasks.run('prepare-game', 15, process.execPath, [
         '--import',
         'tsx',
@@ -150,7 +150,7 @@ try {
     });
     await mkdir(env.RA2_BROWSER_SCREENSHOT_DIR!, { recursive: true });
     if (flag !== '--local') await installBrowser();
-    // 各 job 的 checkout 独立；不能依赖 Basic job 或本机遗留的 dist/lib。
+    // Each job has an independent checkout; do not depend on dist/lib left by the Basic job or local runs.
     await tasks.run('relay-build', 2, 'pnpm', ['--filter', 'relay-package', 'run', 'build:lib']);
     const boot = [`tests/real-game/${gameId}/boot.test.ts`];
     if (gameId === 'ra2') boot.push('tests/real-game/ra2/shortGame.test.ts');

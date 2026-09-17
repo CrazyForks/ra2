@@ -1,48 +1,57 @@
 /**
- * 游戏文件清单：启动需要哪些顶层文件、分别从哪来、各有什么用途。
+ * Game-file manifests: required top-level startup files, their sources, and their purposes.
  *
- * 文件来源：主程序（game.exe / gamemd.exe，版本敏感、shim 固定地址依赖精确
- * 字节，二进制不在本仓库）走清单登记的第三方分享固定绝对 URL（浏览器 HTTP
- * 缓存 + 客户端 IndexedDB 持久化；服务端须回 CORS 头允许站点与本地开发源跨源
- * 读取），其余资源文件由玩家本地压缩包提供。
- * 清单面板据此显示提供/缺失文件；两层导入在目录齐全且启动层就绪后启动，
- * 其他资源的字节可以后台解压，但不得当成缺失文件。
+ * Executables (game.exe / gamemd.exe) are version-sensitive: fixed shim addresses require exact bytes, and binaries are absent from this repository. Fetch them from fixed absolute third-party URLs registered here, using browser HTTP caching and client IndexedDB persistence. Servers must allow cross-origin reads from the site and local development origins via CORS. Players supply remaining resources in local archives. The manifest panel displays present/missing files. Two-stage imports start once the full directory and startup layer are ready; other resource bytes may extract in the background but must not be treated as missing.
  *
- * 清单出处：
- *  - RA2：以 game/ra2（联机客户端可启动集，boot 实证）为基准，与完整版
- *    安装归档（Red_Alert_2.rar 解出内容）做差集——只在完整版出现且本项目
- *    用不到的（RegSetup.exe / Ra2.exe 启动壳 / xwis.dll / wolapi.* /
- *    mph.exe / *.mmx / secdrv.sys 等）一律不列；联机客户端集内的
- *    nl.cfg / taunts / rmcache 经 rar 启动实证不需要，也不列。
- *  - YR：docs/RESOURCE_PACKAGE_EVIDENCE.md 中的基包裁剪依据。
+ * Manifest evidence:
+ * - RA2: compare game/ra2, a multiplayer-client bootable set verified by boot tests, with the full installation archive extracted from Red_Alert_2.rar. Omit full-installation-only files unused here: RegSetup.exe, Ra2.exe launcher, xwis.dll, wolapi.*, mph.exe, *.mmx, secdrv.sys, etc. Also omit nl.cfg / taunts / rmcache from the multiplayer set, shown unnecessary by RAR boot tests.
+ * - YR: base-package reduction evidence in docs/RESOURCE_PACKAGE_EVIDENCE.md.
  */
 import type { SupportedGameId } from './catalog';
 
 export interface ThirdPartyFile {
-  /** 顶层文件名（提供到游戏目录时使用此名）。 */
+  /**
+   * Top-level filename used when supplying the file to the game directory.
+   */
   name: string;
-  /** 获取地址（绝对 URL，须允许站点跨源读取）。 */
+  /**
+   * Download location: an absolute URL allowing cross-origin reads from the site.
+   */
   url: string;
-  /** 登记 SHA-256（下载后校验，防内容被替换）。 */
+  /**
+   * Registered SHA-256, verified after download to detect replaced content.
+   */
   sha256: string;
 }
 
 export interface ManifestFile {
-  /** 顶层文件名（任意大小写）；目录条目（如 Taunts/）填目录名。 */
+  /**
+   * Top-level filename in any case; use the directory name for entries such as Taunts/.
+   */
   name: string;
-  /** 用途说明（清单面板展示）。 */
+  /**
+   * Purpose displayed in the manifest panel.
+   */
   note: string;
-  /** 目录条目：小写目录前缀（如 'taunts/'），任一名下含该前缀即视为已提供。 */
+  /**
+   * Directory entry: lowercase prefix such as 'taunts/'; any filename with this prefix counts as present.
+   */
   directory?: string;
 }
 
 export interface GameManifest {
   gameId: SupportedGameId;
-  /** 第三方分享文件（主程序等）。 */
+  /**
+   * Third-party shared files, including executables.
+   */
   thirdParty: readonly ThirdPartyFile[];
-  /** 玩家必须提供的顶层文件（缺一不可启动）。 */
+  /**
+   * Required player-supplied top-level files; startup requires every one.
+   */
   playerRequired: readonly ManifestFile[];
-  /** 玩家可选提供的顶层文件（缺了不阻塞启动，例如电影/战役/音乐）。 */
+  /**
+   * Optional player-supplied top-level files, such as movies/campaigns/music; absence does not block startup.
+   */
   playerOptional: readonly ManifestFile[];
 }
 
@@ -63,9 +72,9 @@ export const GAME_MANIFESTS: Record<SupportedGameId, GameManifest> = {
       { name: 'Blowfish.dll', note: '启动依赖（游戏读取其内容，缺失即退出）' },
     ],
     playerOptional: [
-      // mod 顶层覆盖文件（经典共和国之辉的 expand01.mix / ecache01.mix /
-      // ra2.csf，及通用 rules.ini / art.ini / ai.ini）：有则随本地导入保留，
-      // 无则仍启动原版。不拆 MIX、不替换第三方分享的主程序；清单也会自动扩充归档提取白名单。
+      // Top-level MOD overrides (classic Gonghui's expand01.mix / ecache01.mix /
+      // ra2.csf, plus generic rules.ini / art.ini / ai.ini): retain them on local import when present;
+      // otherwise start the original game. Do not unpack MIX files or replace third-party executables; the manifest also extends the extraction allowlist automatically.
       { name: 'ai.ini', note: 'mod 顶层 AI 配置覆盖（可选）' },
       { name: 'art.ini', note: 'mod 顶层美术配置覆盖（可选）' },
       { name: 'ecache01.mix', note: '共和国之辉 MOD 图像资源（可选）' },
@@ -111,9 +120,9 @@ export const GAME_MANIFESTS: Record<SupportedGameId, GameManifest> = {
   },
 };
 
-/** 两个游戏玩家侧清单的并集：归档提取一次拿到全部所需名（主程序来自第三方分享，
- *  不随包提取）。目录条目（Taunts/）带小写目录前缀，Worker 按前缀匹配并保留
- *  目录结构。 */
+/**
+ * Union of both games' player-supplied manifests: obtain all required names in one archive extraction, excluding executables fetched separately from third-party sources. Directory entries such as Taunts/ carry lowercase prefixes; the Worker matches them and preserves directory structure.
+ */
 export const ARCHIVE_WANTED_NAMES: readonly string[] = [
   ...new Set(
     Object.values(GAME_MANIFESTS).flatMap((manifest) =>

@@ -1,29 +1,27 @@
 /**
- * 归档提取主线程封装：rar / 7z / SFX 自解压 exe（多层）→ 顶层所需文件映射。
- * Worker 内跑 7z-wasm；返回 { name → bytes } 与命中/缺失清单，供清单面板
- * 显示「缺哪些文件 / 加载了哪些文件」。
+ * Main-thread archive-extraction wrapper: nested rar / 7z / self-extracting SFX EXEs to required top-level files. A Worker runs 7z-wasm and returns name-to-bytes mappings plus found/missing lists for the manifest panel.
  */
 import type { ArchiveDirectoryRule, ArchiveExtractRequest, ArchiveExtractResponse } from './archiveExtractor';
 
 export interface ArchiveExtractResult {
-  /** 提取出的文件映射（顶层文件，大小写保留归档原名）。 */
+  /** Extracted top-level files, preserving original archive filename case. */
   files: Map<string, Uint8Array>;
-  /** 命中清单（归档实际提供的所需文件）。 */
+  /** Found list: required files actually supplied by the archive. */
   found: string[];
-  /** 缺失清单（wanted 中归档没有提供的文件）。 */
+  /** Missing list: wanted files absent from the archive. */
   missing: string[];
 }
 
 export interface ArchiveExtractOptions {
-  /** 需要的顶层文件名（任意大小写，逐个比对）。 */
+  /** Required top-level filenames, compared individually without case sensitivity. */
   wanted: string[];
-  /** 附加包专用：按后缀发现未知文件名，并探索所有嵌套归档。 */
+  /** Add-on packages only: discover unknown filenames by suffix and explore all nested archives. */
   extensions?: string[];
   directoryRules?: readonly ArchiveDirectoryRule[];
-  /** 阶段文案回调（解压层数等）。 */
+  /** Phase-text callback, such as extraction depth. */
   onStatus?: (message: string) => void;
   signal?: AbortSignal;
-  /** 游戏本体两层解压；附加地图包不使用。目录不足以确认完整本体时回退整包。 */
+  /** Two-stage extraction for base games, not add-on maps; fall back to full extraction if the directory cannot establish a complete base game. */
   layers?: { required: string[]; startup: string[] };
   onCatalog?: (names: string[]) => void;
   onFile?: (name: string, bytes: Uint8Array) => void;
@@ -40,7 +38,7 @@ export function extractArchiveFiles(
     const files = new Map<string, Uint8Array>();
     let worker: Worker | undefined;
     let settled = false;
-    // 所有出口共用一次清理；已排队的消息和保留的 prioritize 回调在结束后失效。
+    // All exits share one cleanup; invalidate queued messages and retained prioritize callbacks after completion.
     const cleanup = () => {
       settled = true;
       signal?.removeEventListener('abort', abort);
@@ -114,10 +112,10 @@ export function extractArchiveFiles(
         layers: options.layers,
       };
       if (bytes instanceof Blob) {
-        // File 由浏览器持有，交给 WORKERFS，避免复制整包。
+        // The browser owns File; pass it to WORKERFS without copying the entire archive.
         send({ ...request, archive: bytes });
       } else {
-        // 仅移交独占副本，不能拆走调用方持有的源字节。
+        // Transfer only an exclusive copy, never detaching source bytes still owned by the caller.
         const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
         send({ ...request, buffer }, [buffer]);
       }

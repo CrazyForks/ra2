@@ -1,4 +1,4 @@
-/** 宿主网络状态；连接存活不代表客体游戏已同步。 */
+/** Host network status; a live connection does not establish guest-game synchronization. */
 export interface VmNetworkStatus {
   phase: 'connecting' | 'connected' | 'disconnected' | 'error';
   room: string;
@@ -60,8 +60,9 @@ const GUEST_BINK_VIDEO_EXPORTS = new Set([
 
 const GUEST_BINK_SOUND_SETUP_EXPORTS = new Set(['_BinkSetSoundSystem@8', '_BinkOpenDirectSound@4']);
 
-/** Open/Close 留在 host 作为实例生命周期边界；逐帧方法直连客体 DLL，避免每帧
- * CopyToBuffer 都通过 COM1 IRQ 唤醒 v86（用户日志中的精确 panic 边界）。 */
+/**
+ * Keep Open/Close in the host as lifecycle boundaries; connect per-frame methods directly to guest DLLs, avoiding COM1 IRQ wakeups on every CopyToBuffer, the precise panic boundary in user logs.
+ */
 const DIRECT_NATIVE_BINK_EXPORTS = new Set([
   '_BinkDDSurfaceType@4',
   '_BinkGoto@12',
@@ -74,7 +75,7 @@ const DIRECT_NATIVE_BINK_EXPORTS = new Set([
   '_BinkGetError@0',
 ]);
 
-/** v86 对客体物理内存开放的最小接口。 */
+/** Minimal v86 interface to guest physical memory. */
 export interface GuestMemory {
   read_memory(offset: number, length: number): Uint8Array;
   write_memory(bytes: Uint8Array | number[], offset: number): void;
@@ -83,11 +84,11 @@ export interface GuestMemory {
 export interface Win32Result {
   eax: number;
   edx?: number;
-  /** WaitMessage 等接口在 host 上挂起这么久后再唤醒客体。 */
+  /** Host suspension duration before waking the guest for APIs such as WaitMessage. */
   delayMs?: number;
-  /** ExitProcess/ExitThread 等会要求 host 停机。 */
+  /** ExitProcess/ExitThread and similar calls may request host shutdown. */
   exit?: boolean;
-  /** 只终止当前客体线程，由调度器恢复其他线程。 */
+  /** Terminate only the current guest thread; the scheduler resumes others. */
   threadExit?: boolean;
 }
 
@@ -100,15 +101,15 @@ export interface Win32Call {
 export interface VmFrame {
   width: number;
   height: number;
-  /** 8-bit 调色板模式的索引；RGB565 模式下为空。 */
+  /** Indexes for 8-bit palette mode; empty for RGB565. */
   pixels: Uint8Array;
-  /** DirectDraw PALETTEENTRY：每项 red/green/blue/flags。 */
+  /** DirectDraw PALETTEENTRY: red/green/blue/flags per entry. */
   palette: Uint8Array;
-  /** 16-bit RGB565 表面转换后的浏览器原生 RGBA。 */
+  /** Browser-native RGBA converted from 16-bit RGB565 surfaces. */
   rgba?: Uint8Array;
-  /** 无需宿主控件合成时的紧凑 RGB565；无行尾填充，可直接上传整数纹理。 */
+  /** Compact RGB565 when host controls need no composition; no row padding, allowing direct integer-texture upload. */
   rgb565?: Uint16Array;
-  /** Win32 硬件光标的独立小纹理；宿主可移动它而无需重传整张 framebuffer。 */
+  /** Independent small Win32 cursor texture; the host moves it without retransmitting the full framebuffer. */
   cursor?: {
     handle: number;
     width: number;
@@ -144,10 +145,10 @@ export interface VmHeapState {
   freeBytes: number;
   nextAddress: number;
   peakAddress: number;
-  /** VirtualAlloc 保留区（与堆互斥，MEM_DECOMMIT 不清除保留）。 */
+  /** VirtualAlloc reservations disjoint from the heap; MEM_DECOMMIT retains reservations. */
   virtualRegions: number;
   virtualBytes: number;
-  /** MEM_RELEASE 归还、可供后续 VirtualAlloc 复用的字节数。 */
+  /** Bytes returned by MEM_RELEASE and available for later VirtualAlloc reuse. */
   virtualFreeBytes: number;
 }
 
@@ -162,67 +163,68 @@ export interface VmCallbackState {
 }
 
 export interface Win32ShimOptions {
-  /** 静态 PE 导入后的第一个动态 COM hypercall id。 */
+  /** First dynamic COM hypercall ID after static PE imports. */
   firstDynamicId?: number;
-  /** 主模块静态 IAT；原生客体 DLL 活跃时可把高频导出临时直连，避开串口 IRQ 往返。 */
+  /** Main-module static IAT; temporarily connect frequent exports directly while native guest DLLs are active, avoiding serial IRQ round trips. */
   staticImports?: readonly PeImport[];
   onFrame?: (frame: VmFrame) => void;
-  /** 客体完成一轮 DirectDraw 垂直同步，即原版主循环的一帧。 */
+  /** The guest completed one DirectDraw vertical-sync cycle, corresponding to a native main-loop frame. */
   onLogicFrame?: () => void;
-  /** 将高频 primary surface 更新合并到下一次宿主绘制机会。 */
+  /** Coalesce frequent primary-surface updates into the next host drawing opportunity. */
   scheduleFrame?: (emit: () => void) => void;
-  /** Worker 只在 mailbox 有发送额度时取快照；主线程路径保持 emit 时取快照。 */
+  /** Workers snapshot only with mailbox send capacity; the main-thread path snapshots on emit. */
   deferFrameSnapshot?: boolean;
-  /** 呈现端支持 RGB565 时，避免在 VM 线程将整帧展开成 RGBA。 */
+  /** When presentation supports RGB565, avoid expanding the entire frame to RGBA on the VM thread. */
   packedRgb565Frames?: boolean;
-  /** 独立呈现缓冲回收池；返回精确尺寸，不能与客体内存共享。 */
+  /** Independent presentation-buffer pool; return exact sizes without sharing guest memory. */
   takeFrameBuffer?: (size: number) => ArrayBuffer;
-  /** 显式游戏兼容能力；缺省为空，不启用任何游戏专属地址或补丁。 */
+  /** Explicit game compatibility capabilities; empty by default, enabling no game-specific addresses or patches. */
   gameProfile?: GameShimProfile;
-  /** 启动前已从 /game 取得的同步客体文件。 */
+  /** Synchronous guest files fetched from /game before startup. */
   files?: ReadonlyMap<string, Uint8Array>;
-  /** 可选的宿主 PCM 输出；Node 冒烟测试不提供时仍保留完整 DirectSound 状态。 */
+  /** Optional host PCM output; Node smoke tests without it retain complete DirectSound state. */
   audio?: Win32AudioSink;
-  /** DirectPlay 传输工厂；浏览器默认 WebSocket，Node 回归可显式注入 BroadcastChannel。 */
+  /** DirectPlay transport factory; browsers default to WebSocket, while Node regressions may inject BroadcastChannel explicitly. */
   dplayTransportFactory?: DplayTransportFactory;
-  /** 浏览器侧同步字体光栅器；文字最终仍写回客体的 8-bit DirectDraw surface。 */
+  /** Synchronous browser font rasterizer; text ultimately writes to guest 8-bit DirectDraw surfaces. */
   textRasterizer?: Win32TextRasterizer;
-  /** 可写文件关闭或显式 flush 时通知宿主持久化；bytes 是独立快照。 */
+  /** Notify the host to persist on writable-file close or explicit flush; bytes is an independent snapshot. */
   onFileWrite?: (path: string, bytes: Uint8Array) => void;
-  /** 客体 GetCommandLine/GetModuleFileName 看到的真实主程序名。 */
+  /** Actual executable name exposed by guest GetCommandLine/GetModuleFileName. */
   moduleName?: string;
-  /** GetCommandLineA 的参数尾部；独立于模块路径，不能污染 GetModuleFileNameA。 */
+  /** GetCommandLineA argument suffix, independent of the module path and never affecting GetModuleFileNameA. */
   commandLineArguments?: string;
-  /** 虚拟 Win32 盘符类型；未提供时只有安装所在的 C: 固定盘。 */
+  /** Virtual Win32 drive types; defaults to only the installation's fixed C: drive. */
   driveTypes?: Readonly<Record<string, number>>;
-  /** GetVolumeInformationA 报告的卷序列号；缺省 0x20010701（Node 侧用 VM_SERIAL 注入）。 */
+  /** Volume serial reported by GetVolumeInformationA; default 0x20010701, injected in Node through VM_SERIAL. */
   volumeSerial?: number;
-  /** 启用客体内高速 _lread 桩：文件在打开时镜像（写入时降级），关闭即归还堆。 */
+  /** Enable fast guest _lread stubs: mirror files on open, demote on write, and return heap memory on close. */
   enableFastFileMirror?: boolean;
-  /** 镜像总预算（默认 48MB）；配置持久镜像区时通常取该区实际大小。 */
+  /** Total mirror budget, default 48MB; with persistent regions, usually use their actual size. */
   fastFileMirrorLimit?: number;
-  /** 大型只读文件的持久镜像区；配置后按路径缓存、跨句柄复用，不占游戏堆。 */
+  /** Persistent region for large read-only mirrors, cached by path and reused across handles outside the game heap. */
   fastFileMirrorBase?: number;
   fastFileMirrorTop?: number;
-  /** 配置后只有列出的规范化路径会进入持久镜像区。 */
+  /** When configured, only listed normalized paths enter the persistent mirror region. */
   fastFileMirrorFiles?: readonly string[];
-  /** VirtualAlloc(NULL) 保留区的自顶向下分配上界；默认与堆上限一致。 */
+  /** Upper bound for top-down VirtualAlloc(NULL) reservations; defaults to the heap limit. */
   virtualTop?: number;
-  /** 固定地址 VirtualAlloc 的最低合法地址；默认保留原版映像后的 0x4be000。 */
+  /** Lowest legal fixed VirtualAlloc address; default 0x4be000 after the original image. */
   virtualBase?: number;
-  /** 堆 bump 与固定地址 VirtualAlloc 的 arena 顶（默认 0x7e00000）；
-   *  与 virtualTop 分离：冒烟把 virtualTop 压到 8MB 验证堆穿过保留区，
-   *  堆必须仍能增长到真正的 arena 顶。 */
+  /**
+   * Arena top for heap bumps and fixed-address VirtualAlloc, default 0x7e00000.
+   * Separate from virtualTop: smoke tests lower virtualTop to 8MB to verify heap growth past reservations, while the heap must still reach the real arena top.
+   */
   heapTop?: number;
-  /** shim 堆起点；默认 0x700000。必须位于 PE 映像和主线程栈之后。 */
+  /** Shim heap start, default 0x700000; must follow the PE image and main-thread stack. */
   heapBase?: number;
-  /** 动态来宾 DLL 的静态导入 ABI 查询器。 */
+  /** Static-import ABI lookup for dynamically loaded guest DLLs. */
   importArgBytes?: ImportArgBytes;
-  /** 动态来宾 DLL 的导入桩工厂；应与主 PE 使用同一快速路径配置。 */
+  /** Import-stub factory for dynamic guest DLLs; use the main PE's fast-path configuration. */
   dynamicImportStub?: ImportStubFactory;
 }
 
-/** GetDriveTypeA 盘符类型（Win32 DRIVE_* 常量中本项目用到的一档）。 */
+/** GetDriveTypeA drive type from the Win32 DRIVE_* values used here. */
 
 export interface Win32AudioSink {
   createBuffer(id: number, byteLength: number, format: PcmWaveFormat): void;
@@ -255,10 +257,11 @@ export interface VmTextBitmap {
   height: number;
   /** 0..255 glyph coverage, tightly packed by row. */
   alpha: Uint8Array;
-  /** 覆盖度偏置的中性点（默认 128）：shim 侧按 coverage + (128 - threshold)
-   * 得到有效覆盖度，调低更粗、调高更细。 */
+  /**
+   * Neutral coverage-bias point, default 128. The shim computes coverage + (128 - threshold); lower thresholds thicken and higher ones thin strokes.
+   */
   threshold?: number;
-  /** 光栅实际使用的 CSS family（诊断用）。 */
+  /** Actual CSS font family used for rasterization, for diagnostics. */
   family?: string;
 }
 
@@ -278,13 +281,13 @@ export interface SurfaceState {
   attached: number;
   sourceColorKey: [number, number] | null;
   destinationColorKey: [number, number] | null;
-  /** GDI 字形保留 COLORREF，调色板换页时可重映射而不变色。 */
+  /** GDI glyphs retain COLORREF so palette changes can remap them without changing color. */
   textRuns: GdiTextRun[];
-  /** 最近一次 Unlock/Blt/BltFast 的全局递增序号；用于从同规格工作表面中选择最新层。 */
+  /** Global increasing sequence number of the latest Unlock/Blt/BltFast, selecting the newest layer among equal-sized work surfaces. */
   lastDrawSerial: number;
-  /** 自上次 emit 以来像素是否被写过（Blt/Lock/Flip/GDI/换调色板置位）——游戏一帧
-   *  里 Blt+vblank×2 会触发三次 emit，内容没变的重复快照纯属垃圾（每帧 3×480KB
-   *  分配 + 跨线程消息，60fps 下 GC 压力周期性卡顿）。 */
+  /**
+   * Whether pixels changed since the last emit, set by Blt/Lock/Flip/GDI/palette changes. Blt plus two vblanks can emit three times per game frame; duplicate unchanged snapshots waste three 480KB allocations plus cross-thread messages, causing periodic GC stalls at 60fps.
+   */
   dirty: boolean;
 }
 
@@ -303,7 +306,7 @@ export interface SoundBufferState {
   object: number;
   data: number;
   size: number;
-  /** position 对应的宿主单调时钟锚点；Worker 无法同步读取 WebAudio 时用于估算播放头。 */
+  /** Host monotonic anchor corresponding to position, estimating playback cursors when Workers cannot synchronously read WebAudio. */
   startedAt: number;
   position: number;
   playing: boolean;
@@ -316,7 +319,7 @@ export interface SoundBufferState {
 
 export interface GdiDcState {
   surface: number;
-  /** Window DC 的客户区原点（相对 DirectDraw 主表面）。Surface DC 为 0,0。 */
+  /** Window DC client origin relative to the DirectDraw primary surface; surface DCs use 0,0. */
   originX: number;
   originY: number;
   selectedFont: number;
@@ -326,9 +329,9 @@ export interface GdiDcState {
   backgroundColor: number;
 }
 
-/** 抗锯齿文字改过的像素：offset 相对 run 矩形起点（按 surface pitch 计行），
- * original 为绘制前的背景索引，written 为写下的混合色索引。
- * 调色板换页时据此恢复背景并重新混合，保证重映射幂等。 */
+/**
+ * Pixels changed by antialiased text: offset is relative to the run rectangle with surface-pitch rows; original stores the previous background index, written the blended index. On palette changes, restore background and reblend for idempotent remapping.
+ */
 export interface GdiTextPixelChange {
   offset: number;
   original: number;
@@ -341,21 +344,21 @@ export interface GdiTextRun {
   bitmap: VmTextBitmap;
   colorRef: number;
   paletteIndex: number;
-  /** null = 超出记录上限，退化为纯实心重映射（边缘混合像素换页后不再修正）。 */
+  /** null means the record limit was exceeded; fall back to solid-only remapping without correcting blended edges after palette changes. */
   changed: GdiTextPixelChange[] | null;
 }
 
 export interface FileState {
   path: string;
-  /** 容量可大于 size，避免小块追加时反复复制整个文件。 */
+  /** Capacity may exceed size to avoid copying entire files on small appends. */
   bytes: Uint8Array;
   size: number;
   position: number;
   writable: boolean;
   dirty: boolean;
-  /** 只读文件在客体内的镜像，供 _lread 快速桩直接拷贝。 */
+  /** Guest mirror of a read-only file, copied directly by fast _lread stubs. */
   mirror?: number;
-  /** 指向独立持久镜像区；关闭句柄时不能当普通堆块释放。 */
+  /** Points into a separate persistent mirror region; never free it as an ordinary heap block on handle close. */
   sharedMirror?: boolean;
 }
 
@@ -390,7 +393,7 @@ export interface MessageState {
   time: number;
   x: number;
   y: number;
-  /** 鼠标消息入队时的左右 Shift/Ctrl 快照，保持异步队列中的物理键时间线。 */
+  /** Left/right Shift/Ctrl snapshot at mouse-message enqueue time, preserving physical-key timelines in asynchronous queues. */
   modifierKeyState?: number;
 }
 
@@ -452,7 +455,7 @@ import {
 export { DRIVE_CDROM, DRIVE_FIXED, DRIVE_NO_ROOT_DIR } from './shim/state';
 export type { PeImport } from './pe';
 
-/** 纯共用 Win32 门面；具体游戏扩展由 `games/win32Shim.ts` 在外层组合。 */
+/** Generic Win32 facade; games/win32Shim.ts composes game extensions outside it. */
 const CommonWin32Shim = withOle32(
   withDplayx(
     withDirectx(
@@ -465,9 +468,9 @@ const CommonWin32Shim = withOle32(
 
 export class Win32ShimBase extends CommonWin32Shim {
   dispatch(call: Win32Call): Win32Result | null {
-    // _BinkClose 的重定向桩已经开始执行后再释放跨调用锁：若 DLL
-    // 内部进口 Win32，本次 dispatch 仍处于 atomicGuestCall 的内层锁中；
-    // 若没有进口，则这里已经是 BinkClose 返回后的下一条 Win32 调用。
+    // Release the cross-call lock only after the _BinkClose redirected stub starts. If the DLL
+    // imports Win32 internally, this dispatch still holds atomicGuestCall's inner lock;
+    // otherwise it is already the next Win32 call after BinkClose returned.
     if (this.nativeBinkThreadReleasePending) {
       this.nativeBinkThreadReleasePending = false;
       this.releaseNativeBinkThread();
@@ -477,24 +480,24 @@ export class Win32ShimBase extends CommonWin32Shim {
     if (exclusive) return exclusive;
     const { key, name } = call.imported;
     const a = call.args;
-    // 游戏专属的成功短路必须在 profile 登记；未知游戏即使导入同名 DLL 也停在边界。
+    // Register game-specific successful short circuits in profiles; unknown games still stop at boundaries even with same-named DLL imports.
     if (this.gameProfile.successfulImports?.includes(key)) return { eax: 0 };
-    // Bink 过场：返回指向客体内存假 BINK 结构的有效句柄，并把 FrameNum 置为
-    // >= Frames，使播放循环的 `FrameNum < Frames` 结束判定立即成立——视频视为
-    // “已播完”，游戏沿原生路径推进。若 Open 返回空句柄，游戏仍建播放器并直读
-    // [0x8]=Frames/[0xc]=FrameNum（空指针读到 IVT 垃圾值），`FrameNum<Frames`
-    // 恒真形成 BinkWait/BinkGoto 死循环，加载屏永远无法退出。
+    // Bink transitions: return a valid handle pointing to a synthetic guest BINK structure and set FrameNum
+    // to >= Frames, immediately ending the playback loop's FrameNum < Frames condition. The game treats video as
+    // finished and advances natively. A null Open handle still creates a player that directly reads
+    // [0x8]=Frames/[0xc]=FrameNum from IVT garbage, making FrameNum<Frames
+    // permanently true and trapping BinkWait/BinkGoto so loading never completes.
     if (key.startsWith('BINKW32.DLL!')) {
       const exportName = key.slice(key.indexOf('!') + 1);
-      // RA2/YR 会在每个影片窗口重复调用 SetSoundSystem，但旧 Bink DLL 的后端
-      // 是进程级全局对象。第二次进入原生初始化会破坏已缓存回调（YR 可稳定触发
-      // #UD）；保留第一次建立的 DirectSound 后端，后续调用按成功返回。
+      // RA2/YR call SetSoundSystem for every movie window, but old Bink backends
+      // are process-global. Reinitialization corrupts cached callbacks, reliably causing #UD in YR;
+      // retain the first DirectSound backend and report success for later calls.
       if (exportName === '_BinkSetSoundSystem@8' && this.nativeBinkSoundSystemReady) {
         return { eax: 1 };
       }
       if (exportName === '_BinkOpen@8') {
-        // 协作式 VM 不允许 Bink 后台 I/O 线程与解码调用真并行，使用其公开的
-        // BINKNOTHREADEDIO 避免后台 I/O 线程；像素转换仍由原版 DLL 完成。
+        // The cooperative VM cannot truly run Bink background I/O alongside decoding; use public
+        // BINKNOTHREADEDIO to avoid background I/O threads while retaining original-DLL pixel conversion.
         this.writeU32(call.stack + 8, (a[1] ?? 0) | 0x0800_0000);
       }
       const binkHandle = a[0] ?? 0;
@@ -515,16 +518,16 @@ export class Win32ShimBase extends CommonWin32Shim {
           : this.nativeBinkPlaybackActive);
       if (useNativeBink && GUEST_BINK_VIDEO_EXPORTS.has(exportName)) {
         if (exportName === '_BinkSetSoundSystem@8') {
-          // 游戏传入的是 IAT/hypercall 桩里的 BinkOpenDirectSound 地址。原生 DLL 会
-          // 缓存并在解码线程调用它；必须在进入客体 BinkSetSoundSystem 前改成真正
-          // 的客体导出，否则宿主短路返回 0，影片有画面却永远不建立声音缓冲。
+          // The game passes an IAT/hypercall-stub BinkOpenDirectSound address, which native Bink caches
+          // and calls from its decoding thread. Replace it with the actual guest export before BinkSetSoundSystem,
+          // or host short-circuiting returns 0 and movies display without ever creating audio buffers.
           const openDirectSound = this.loadGuestDll('BINKW32.DLL')?.exports.get('_BinkOpenDirectSound@4');
           if (openDirectSound) this.writeU32(call.stack + 4, openDirectSound);
         }
-        // SetSoundSystem 与 BinkOpen 都会从 hypercall 返回到客体 DLL。仅靠动态
-        // 桥开头的 CLI 仍留下“host 已返回、CLI 尚未执行”的一条指令窗口，PIT
-        // 可在此切换线程并让 v86 的 IRQ 状态失配。声音初始化开始就固定当前
-        // 客体线程，并一直保持到对应 BinkClose；Open 会复用同一固定深度。
+        // SetSoundSystem and BinkOpen both return from hypercalls into guest DLLs. CLI at the dynamic bridge's start
+        // still leaves one instruction after host return but before CLI, allowing PIT
+        // to switch threads and desynchronize v86 IRQ state. Pin the guest thread at sound initialization
+        // through its matching BinkClose; Open reuses the same pin depth.
         if (exportName === '_BinkSetSoundSystem@8' || exportName === '_BinkOpen@8') {
           this.pinNativeBinkThread();
         }
@@ -541,8 +544,8 @@ export class Win32ShimBase extends CommonWin32Shim {
             this.routeStaticGuestDllExports('BINKW32.DLL', DIRECT_NATIVE_BINK_EXPORTS, true);
           } else if (exportName === '_BinkClose@4') {
             this.nativeBinkPlaybackActive = false;
-            // 此刻只改写了返回地址，客体 BinkClose 尚未执行。保持外层锁，
-            // 等关闭代码进入 atomicGuestCall（或已经完整返回后的下一进口）再放。
+            // Only the return address has changed so far; guest BinkClose has not run. Keep the outer lock
+            // until cleanup enters atomicGuestCall or the next import after full return.
             this.nativeBinkThreadReleasePending = true;
             this.binkNextFrameAt.delete(binkHandle);
           } else if (DIRECT_NATIVE_BINK_EXPORTS.has(exportName)) {
@@ -567,17 +570,17 @@ export class Win32ShimBase extends CommonWin32Shim {
           this.writeU32(handle + 0x00, 640); // Width
           this.writeU32(handle + 0x04, 480); // Height
           this.writeU32(handle + 0x08, 1); // Frames
-          this.writeU32(handle + 0x0c, 1); // FrameNum（>= Frames，立即完成）
+          this.writeU32(handle + 0x0c, 1); // FrameNum >= Frames means immediate completion.
           this.writeU32(handle + 0x10, 1); // LastFrameNum
           this.writeU32(handle + 0x14, 15); // FrameRate
-          this.writeU32(handle + 0x18, 1); // FrameRateDiv（非零，避免算帧间隔时除零）
+          this.writeU32(handle + 0x18, 1); // FrameRateDiv must be nonzero to avoid division by zero when computing frame intervals.
           this.binkVideos.add(handle);
           this.binkNextFrameAt.set(handle, this.clock.now());
           return { eax: handle };
         }
-        // BinkWait 按帧率做 pacing：到点返回 0（帧就绪，游戏随之 DoFrame/NextFrame），
-        // 否则返回 1（等待）。恒返回 1 会让视频更新虚函数永远返回 al=0，若调用方
-        // 循环等待「播了一帧」就形成死循环（战场冻结的根因之一）。
+        // BinkWait paces by frame rate: return 0 when due so the game calls DoFrame/NextFrame,
+        // otherwise 1 to wait. Always returning 1 makes the video-update virtual method return al=0 forever,
+        // hanging callers waiting for one played frame, a cause of frozen battlefields.
         case 'BINKW32.DLL!_BinkWait@4': {
           const h = a[0] ?? 0;
           if (!this.binkVideos.has(h) && !this.nativeBinkPlaybackActive) return { eax: 0 };
@@ -601,7 +604,7 @@ export class Win32ShimBase extends CommonWin32Shim {
           return { eax: 0 };
         }
         case 'BINKW32.DLL!_BinkGoto@12': {
-          // 循环背景视频会 seek 回第 1 帧；钳到不早于 Frames，保持“已播完”。
+          // Looping background video seeks back to frame 1; clamp to at least Frames to retain completed-playback state.
           const h = a[0] ?? 0;
           if (shimTraceEnabled('VM_TRACE_BINK')) {
             const caller = this.readU32(call.stack);
@@ -636,7 +639,7 @@ export class Win32ShimBase extends CommonWin32Shim {
           return { eax: 0 };
         case 'OLEAUT32.DLL!ord9':
           return { eax: 0 }; // VariantClear
-        case 'OLEAUT32.DLL!ord161': // LoadTypeLib：RA2 的可选 Automation 元数据不存在
+        case 'OLEAUT32.DLL!ord161': // LoadTypeLib: RA2 optional Automation metadata is absent.
           if (a[1]) this.writeU32(a[1], 0);
           return { eax: 0x8002_9c4a }; // TYPE_E_CANTLOADLIBRARY
         case 'OLEAUT32.DLL!ord200': // GetErrorInfo
@@ -677,7 +680,7 @@ export class Win32ShimBase extends CommonWin32Shim {
     }
     if (key.startsWith('IMM32.DLL!')) {
       switch (key) {
-        // shim 不建立输入法上下文；禁用窗口 IME 时返回此前同样为空的 HIMC。
+        // The shim creates no IME context; disabling window IME returns the previously empty HIMC.
         case 'IMM32.DLL!ImmAssociateContext':
         case 'IMM32.DLL!ImmGetContext':
           return { eax: 0 };
@@ -690,7 +693,7 @@ export class Win32ShimBase extends CommonWin32Shim {
           return { eax: 1 };
       }
     }
-    // 数值标签在装载时由 annotateWin32Modules 算好；手搓导入（冒烟脚本）走字符串回退。
+    // annotateWin32Modules precomputes numeric tags at load time; handcrafted smoke imports use string fallback.
     const module = call.imported.win32Module ?? win32ModuleOf(call.imported.dll);
     switch (module) {
       case WIN32_DDRAW_COM:
@@ -729,12 +732,12 @@ export class Win32ShimBase extends CommonWin32Shim {
   dispose(): void {
     this.disposeDplayTransport();
     this.disposeGameNetwork();
-    // 页面退出时客体可能还持有句柄；最后再提交一次脏文件。
+    // The guest may still hold handles on page exit; submit dirty files once more.
     for (const file of this.fileHandles.values()) this.flushFile(file);
     this.disposed = true;
     this.frameScheduled = false;
   }
-  /** 调试用：显示 COLORREF 在当前离屏 surface 上实际选中的 8-bit 颜色。 */
+  /** Debug the actual 8-bit index selected for a COLORREF on the current offscreen surface. */
   inspectGdiDc(handle: number): VmGdiDcSnapshot | null {
     const dc = this.gdiDcs.get(handle);
     const surface = dc ? this.surfaces.get(dc.surface) : undefined;
@@ -751,13 +754,13 @@ export class Win32ShimBase extends CommonWin32Shim {
   }
 }
 
-/** 可在客体直接返回的常量导入；这里只决定快速桩行为，不登记游戏 ABI。 */
+/** Constant imports that may return directly in the guest; this selects fast-stub behavior without registering game ABI. */
 const FAST_CONSTANT_IMPORTS: Readonly<Record<string, number>> = {
-  // 当前兼容层对这些函数没有 host 副作用，可直接在客体返回常量。
+  // These functions have no host side effects in the current shim and may return constants in the guest.
   'KERNEL32.DLL!DeleteCriticalSection': 0,
   'KERNEL32.DLL!GlobalUnlock': 1,
-  // 当前 shim 的 host 分支对这三项始终返回“指针有效”；RA2 战场加载会在同一
-  // 对象数组上每秒重复数百次，直接客体返回可省掉无意义的串口/IRQ 往返。
+  // The host branches for these three always report valid pointers. RA2 battlefield loading repeats them
+  // hundreds of times per second on the same object arrays; direct guest returns avoid pointless serial/IRQ crossings.
   'KERNEL32.DLL!IsBadCodePtr': 0,
   'KERNEL32.DLL!IsBadReadPtr': 0,
   'KERNEL32.DLL!IsBadWritePtr': 0,
@@ -766,9 +769,9 @@ const FAST_CONSTANT_IMPORTS: Readonly<Record<string, number>> = {
   // TRUE would tell the caller that the MSG was already dispatched and makes
   // RA2 swallow every shell WM_PAINT/WM_TIMER before DispatchMessageA.
   'USER32.DLL!IsDialogMessageA': 0,
-  // DefWindowProcA 不能走常量桩：退出链依赖它——WndProc 对 WM_CLOSE 走
-  // DefWindowProcA，shim 在该分支执行 DestroyWindow→WM_DESTROY→PostQuitMessage。
-  // 内联成 ret 0 会让这条链（以及真实 DefWindowProc 的其他语义）永远不执行。
+  // DefWindowProcA cannot use a constant stub: WndProc delegates WM_CLOSE to it,
+  // and the shim performs DestroyWindow -> WM_DESTROY -> PostQuitMessage.
+  // Inlining ret 0 would prevent that exit chain and all other real DefWindowProc semantics.
   'DDRAW.COM!IDirectDraw.WaitForVerticalBlank': 0,
   'DDRAW.COM!IDirectDrawSurface.GetBltStatus': 0,
   'DDRAW.COM!IDirectDrawSurface.GetFlipStatus': 0,
@@ -782,13 +785,13 @@ const FAST_FIRST_ARG_IMPORTS = new Set([
   'USER32.DLL!SetCursor',
 ]);
 
-/** 将等价的无副作用 API 留在客体执行，避免地图加载时数万次 VM↔JS 往返。 */
+/** Execute equivalent side-effect-free APIs in the guest to avoid tens of thousands of VM/JS round trips during map loading. */
 export function makeWin32ImportStub(dll: string, name: string, id: number, argBytes: number): Uint8Array {
   const key = `${dll.toUpperCase()}!${name}`;
   if (key === 'KERNEL32.DLL!Sleep') return makeFastSleepStub(id, argBytes);
   if (key === 'USER32.DLL!PeekMessageA') return makeFastPeekMessageStub(id, argBytes);
   if (key === 'USER32.DLL!GetCursorPos') return makeFastGetCursorPosStub(argBytes);
-  // 窗口几何/属性只读查询：读 GUEST_WINDOW_TABLE 镜像，无效/不认识则回退 hypercall。
+  // Read-only window geometry/property queries use GUEST_WINDOW_TABLE mirrors; invalid/unknown entries fall back to hypercalls.
   if (key === 'USER32.DLL!GetClientRect') return makeFastGetClientRectStub(id, argBytes);
   if (key === 'USER32.DLL!GetWindowRect') return makeFastGetWindowRectStub(id, argBytes);
   if (key === 'USER32.DLL!ClientToScreen') return makeFastClientToScreenStub(id, argBytes);
@@ -797,7 +800,7 @@ export function makeWin32ImportStub(dll: string, name: string, id: number, argBy
   return makeImportStub(id, argBytes);
 }
 
-/** 实验性高速 _lread 桩；默认不启用，需单独做完整关卡回归。 */
+/** Experimental fast _lread stub; disabled by default and requiring separate complete-level regressions. */
 export function makeWin32ImportStubWithFastRead(dll: string, name: string, id: number, argBytes: number): Uint8Array {
   const key = `${dll.toUpperCase()}!${name}`;
   if (key === 'KERNEL32.DLL!Sleep') return makeFastSleepStub(id, argBytes);
@@ -827,10 +830,7 @@ export function makeWin32ImportStubWithFastRead(dll: string, name: string, id: n
 }
 
 /**
- * ShowCursor 维护 Win32 光标显示计数器：show 增加、隐藏减少，返回新值。
- * 不能是常量桩——RA2 载入时用 `while (ShowCursor(FALSE) >= 0);` 循环隐藏光标，
- * 恒返回 0 永远不满足 <0，主线程在「PLEASE STAND BY」界面死循环。
- * 计数器放客体共享页，菜单 hover 的高频调用仍无需跨 JS。
+ * ShowCursor maintains the Win32 display count: increment on show, decrement on hide, and return the new value. A constant stub is invalid: RA2 loops while (ShowCursor(FALSE) >= 0); during loading, so constant 0 never reaches <0 and hangs at PLEASE STAND BY. Keep the counter on the shared guest page so frequent menu-hover calls need no JS crossing.
  */
 function makeFastShowCursorStub(argBytes: number): Uint8Array {
   const code: number[] = [];
@@ -839,7 +839,7 @@ function makeFastShowCursorStub(argBytes: number): Uint8Array {
   };
   const count = HYPERCALL_CURSOR_COUNT;
   const countBytes = () => emit32(count);
-  code.push(0x8b, 0x44, 0x24, 0x04); // mov eax, [esp + 4]（show 标志）
+  code.push(0x8b, 0x44, 0x24, 0x04); // mov eax, [esp + 4]: show flag.
   code.push(0x85, 0xc0); // test eax, eax
   code.push(0x74, 0x0e); // jz hide
   code.push(0xff, 0x05);
@@ -857,8 +857,7 @@ function makeFastShowCursorStub(argBytes: number): Uint8Array {
 }
 
 /**
- * 空队列 PeekMessageA 的节流快速路径。host 在消息入队、定时器存在或预算耗尽时
- * 将共享预算清零；其余调用仅递减预算并返回 FALSE，周期性回 host 防止状态饿死。
+ * Throttled PeekMessageA fast path for empty queues. The host clears the shared budget when messages arrive, timers exist, or the budget expires. Other calls decrement it and return FALSE, periodically revisiting the host to avoid state starvation.
  */
 function makeFastPeekMessageStub(id: number, argBytes: number): Uint8Array {
   const code: number[] = [];
@@ -884,7 +883,7 @@ function makeFastPeekMessageStub(id: number, argBytes: number): Uint8Array {
   return new Uint8Array(code);
 }
 
-/** GetCursorPos 直接读取 host 每次更新的共享坐标镜像。 */
+/** GetCursorPos directly reads the shared coordinate mirror updated by the host. */
 function makeFastGetCursorPosStub(argBytes: number): Uint8Array {
   const code: number[] = [];
   const emit32 = (value: number) =>
@@ -892,7 +891,7 @@ function makeFastGetCursorPosStub(argBytes: number): Uint8Array {
   code.push(0x8b, 0x4c, 0x24, 0x04); // mov ecx, [esp + 4]（POINT*）
   code.push(0x85, 0xc9); // test ecx, ecx
   const nullJump = code.length;
-  code.push(0x74, 0x00); // jz success（保持现有 shim 语义）
+  code.push(0x74, 0x00); // jz success (preserve existing shim semantics)
   code.push(0xa1);
   emit32(HYPERCALL_CURSOR_X); // mov eax, [cursorX]
   code.push(0x89, 0x01); // mov [ecx], eax
@@ -907,9 +906,8 @@ function makeFastGetCursorPosStub(argBytes: number): Uint8Array {
 }
 
 /**
- * InterlockedIncrement/Decrement 在战场渲染循环里被 COM 引用计数高频调用。
- * 用 lock xadd 单指令完成「读-加减-写回」，对单 CPU 客体原子（PIT 无法在指令
- * 中途抢占），eax 拿到旧值后再 ±1 得到返回值，与 host 语义一致且无需跨 JS。
+ * COM reference counting calls InterlockedIncrement/Decrement frequently in the battle rendering loop.
+ * A single lock xadd performs read-modify-write atomically for a single-CPU guest (PIT cannot preempt an instruction). EAX receives the old value; adding/subtracting 1 yields the return value, matching host semantics without crossing into JS.
  */
 function makeFastInterlockedStub(argBytes: number, delta: number): Uint8Array {
   const code: number[] = [];
@@ -919,20 +917,20 @@ function makeFastInterlockedStub(argBytes: number, delta: number): Uint8Array {
   code.push(0x8b, 0x4c, 0x24, 0x04); // mov ecx, [esp + 4]（ptr）
   code.push(0xb8);
   emit32(delta >>> 0); // mov eax, delta
-  code.push(0xf0, 0x0f, 0xc1, 0x01); // lock xadd [ecx], eax（eax=旧值，[ecx]+=delta）
-  code.push(delta > 0 ? 0x40 : 0x48); // inc/dec eax → 新值
+  code.push(0xf0, 0x0f, 0xc1, 0x01); // lock xadd [ecx], eax (eax = old value, [ecx] += delta)
+  code.push(delta > 0 ? 0x40 : 0x48); // inc/dec eax -> new value
   code.push(0xc2, argBytes & 0xff, (argBytes >>> 8) & 0xff); // ret argBytes
   return new Uint8Array(code);
 }
 
 /**
- * SetRect 在布局/命中测试里高频调用。纯写 4 个 int 到客体 RECT，无 host 状态。
+ * SetRect is frequently called during layout and hit testing. It writes four integers to the guest RECT and has no host state.
  */
 function makeFastSetRectStub(argBytes: number): Uint8Array {
   const code: number[] = [];
   code.push(0x8b, 0x4c, 0x24, 0x04); // mov ecx, [esp + 4]（rect）
   code.push(0x85, 0xc9); // test ecx, ecx
-  code.push(0x74, 0x1b); // jz done（rect==0 时跳过写入，偏移=27 字节写入序列）
+  code.push(0x74, 0x1b); // jz done (skip writes when rect == 0; offset spans the 27-byte write sequence)
   code.push(0x8b, 0x44, 0x24, 0x08); // mov eax, [esp + 8]（left）
   code.push(0x89, 0x01); // mov [ecx], eax
   code.push(0x8b, 0x44, 0x24, 0x0c); // mov eax, [esp + 0xc]（top）
@@ -947,13 +945,13 @@ function makeFastSetRectStub(argBytes: number): Uint8Array {
   return new Uint8Array(code);
 }
 
-// ===== 窗口几何/属性只读查询的客体快速桩 =====
-// GetClientRect/GetWindowRect/ClientToScreen/GetParent/GetWindowLongA 在 RA2 菜单
-// 与战场循环里各被调用数万次，每次跨 VM↔JS 代价高。shim 已把窗口几何（绝对屏幕
-// 坐标）与常用属性镜像到 GUEST_WINDOW_TABLE，这里直接读表。越界/未同步/不认识的
-// index 一律回退完整 hypercall（makeImportStub），保证语义正确。
+// ===== Guest fast stubs for read-only window geometry/property queries =====
+// GetClientRect/GetWindowRect/ClientToScreen/GetParent/GetWindowLongA are each called tens of thousands
+// of times in RA2 menus and battle loops, making VM-to-JS crossings costly. The shim mirrors window
+// geometry (absolute screen coordinates) and common properties into GUEST_WINDOW_TABLE for direct reads.
+// Out-of-range, unsynchronized, or unknown indices fall back to the full hypercall (makeImportStub) to preserve semantics.
 
-/** 把 [esp+4] 的 hwnd 换算成表项地址放进 ecx；无效则跳 fallback（返回补丁位置）。 */
+/** Convert hwnd at [esp+4] to a table-entry address in ECX; jump to fallback if invalid (return patch positions). */
 function emitWindowEntryPreamble(code: number[]): number[] {
   const emit32 = (value: number) => {
     code.push(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff);
@@ -977,7 +975,7 @@ function emitWindowEntryPreamble(code: number[]): number[] {
   return patches;
 }
 
-/** 把所有 rel32 fallback 跳转补丁到 fallback 地址。 */
+/** Patch all rel32 fallback jumps to the fallback address. */
 function patchWindowFallbackJumps(code: number[], patches: number[], fallback: number): void {
   for (const at of patches) {
     const relative = fallback - (at + 4);
@@ -988,14 +986,14 @@ function patchWindowFallbackJumps(code: number[], patches: number[], fallback: n
   }
 }
 
-/** GetClientRect(hwnd, rect*)：rect=(0,0,width,height)，恒返回 TRUE。 */
+/** GetClientRect(hwnd, rect*): rect = (0, 0, width, height); always returns TRUE. */
 function makeFastGetClientRectStub(id: number, argBytes: number): Uint8Array {
   const code: number[] = [];
   const patches = emitWindowEntryPreamble(code);
   code.push(0x8b, 0x54, 0x24, 0x08); // mov edx, [esp + 8]（rect）
   code.push(0x85, 0xd2); // test edx, edx
   const jzRet = code.length;
-  code.push(0x74, 0x00); // jz ret1（rect==0 只返回）
+  code.push(0x74, 0x00); // jz ret1 (only return when rect == 0)
   code.push(0xc7, 0x02, 0, 0, 0, 0); // mov dword [edx], 0（left）
   code.push(0xc7, 0x42, 0x04, 0, 0, 0, 0); // mov dword [edx + 4], 0（top）
   code.push(0x8b, 0x41, GUEST_WINDOW_WIDTH); // mov eax, [ecx + WIDTH]
@@ -1012,7 +1010,7 @@ function makeFastGetClientRectStub(id: number, argBytes: number): Uint8Array {
   return new Uint8Array(code);
 }
 
-/** GetWindowRect(hwnd, rect*)：rect=(x,y,x+width,y+height)（绝对屏幕坐标），返回 TRUE。 */
+/** GetWindowRect(hwnd, rect*): rect = (x, y, x+width, y+height) in absolute screen coordinates; returns TRUE. */
 function makeFastGetWindowRectStub(id: number, argBytes: number): Uint8Array {
   const code: number[] = [];
   const patches = emitWindowEntryPreamble(code);
@@ -1040,7 +1038,7 @@ function makeFastGetWindowRectStub(id: number, argBytes: number): Uint8Array {
   return new Uint8Array(code);
 }
 
-/** ClientToScreen(hwnd, point*)：point 加上窗口绝对屏幕原点，返回 TRUE。 */
+/** ClientToScreen(hwnd, point*): add the window's absolute screen origin to point; return TRUE. */
 function makeFastClientToScreenStub(id: number, argBytes: number): Uint8Array {
   const code: number[] = [];
   const patches = emitWindowEntryPreamble(code);
@@ -1062,7 +1060,7 @@ function makeFastClientToScreenStub(id: number, argBytes: number): Uint8Array {
   return new Uint8Array(code);
 }
 
-/** GetParent(hwnd)：返回镜像的父 hwnd。 */
+/** GetParent(hwnd): return the mirrored parent hwnd. */
 function makeFastGetParentStub(id: number, argBytes: number): Uint8Array {
   const code: number[] = [];
   const patches = emitWindowEntryPreamble(code);
@@ -1075,15 +1073,14 @@ function makeFastGetParentStub(id: number, argBytes: number): Uint8Array {
 }
 
 /**
- * GetWindowLongA(hwnd, index)：镜像常见 index——额外字节 0/4/8/12、GWL_ID(-12)、
- * GWL_STYLE(-16)、GWL_EXSTYLE(-20)、GWL_WNDPROC(-4)、GWL_USERDATA(-21)；其余回退。
+ * GetWindowLongA(hwnd, index): mirror common indices: extra bytes 0/4/8/12, GWL_ID(-12), GWL_STYLE(-16), GWL_EXSTYLE(-20), GWL_WNDPROC(-4), and GWL_USERDATA(-21); fall back for all others.
  */
 function makeFastGetWindowLongStub(id: number, argBytes: number): Uint8Array {
   const code: number[] = [];
   const patches = emitWindowEntryPreamble(code);
   const ret = () => code.push(0xc2, argBytes & 0xff, (argBytes >>> 8) & 0xff);
   code.push(0x8b, 0x44, 0x24, 0x08); // mov eax, [esp + 8]（index）
-  // 逐个识别负的 GWL_* index（每个不匹配跳过 6 字节的 load+ret）
+  // Recognize negative GWL_* indices individually (each mismatch skips a 6-byte load+ret).
   const negatives: Array<[number, number]> = [
     [0xfffffff4, GUEST_WINDOW_ID], // -12 GWL_ID
     [0xfffffff0, GUEST_WINDOW_STYLE], // -16 GWL_STYLE
@@ -1092,12 +1089,12 @@ function makeFastGetWindowLongStub(id: number, argBytes: number): Uint8Array {
     [0xffffffeb, GUEST_WINDOW_USERDATA], // -21 GWL_USERDATA
   ];
   for (const [index, offset] of negatives) {
-    code.push(0x83, 0xf8, index & 0xff); // cmp eax, imm8（符号扩展）
-    code.push(0x75, 0x06); // jne 跳过下面 6 字节
+    code.push(0x83, 0xf8, index & 0xff); // cmp eax, imm8 (sign-extended)
+    code.push(0x75, 0x06); // jne skips the following 6 bytes
     code.push(0x8b, 0x41, offset); // mov eax, [ecx + offset]
     ret();
   }
-  // 正的窗口额外字节 0/4/8/12：offset = EXTRA0 + index
+  // Nonnegative extra-window-byte indices 0/4/8/12: offset = EXTRA0 + index
   code.push(0x83, 0xf8, 0x0c); // cmp eax, 12
   code.push(0x0f, 0x87);
   patches.push(code.length);
@@ -1114,9 +1111,11 @@ function makeFastGetWindowLongStub(id: number, argBytes: number): Uint8Array {
   return new Uint8Array(code);
 }
 
-/** 零时长 Sleep 使用固件 INT 0x30 立即轮转已就绪线程，不等待 PIT。
- * 与定时抢占共用上下文保存；不推进时钟、唤醒未到期线程或跳过锁。
- * 非零 Sleep 仍走完整 Win32 截止时间路径。 */
+/**
+ * Zero-duration Sleep uses firmware INT 0x30 to rotate ready threads immediately without waiting for PIT.
+ * It shares context saving with timed preemption; it does not advance time, wake threads early, or bypass locks.
+ * Nonzero Sleep still uses the full Win32 deadline path.
+ */
 function makeFastSleepStub(id: number, argBytes: number): Uint8Array {
   const code: number[] = [];
   const emit32 = (value: number) => {
@@ -1125,8 +1124,8 @@ function makeFastSleepStub(id: number, argBytes: number): Uint8Array {
   code.push(0x83, 0x7c, 0x24, 0x04, 0x00); // cmp dword [esp + 4], 0
   code.push(0x0f, 0x85, 0, 0, 0, 0); // jne fallback
   const fallbackPatch = code.length - 4;
-  // 持锁主动让出时也短暂开放硬件中断，使已到期 PIT 能更新休眠线程；
-  // 否则 IF=0 的 Sleep(0) 忙等会永远冻结唤醒计数。返回后按锁深度恢复 IF。
+  // Briefly enable hardware interrupts when yielding while holding a lock so due PIT ticks can update sleeping threads;
+  // otherwise Sleep(0) busy-waiting with IF=0 freezes wake counters forever. Restore IF according to lock depth afterward.
   code.push(0xfb, 0xcd, 0x30, 0xfa); // sti; int 0x30; cli
   code.push(0xa1);
   emit32(HYPERCALL_THREAD_CURRENT); // eax=current id
@@ -1134,7 +1133,7 @@ function makeFastSleepStub(id: number, argBytes: number): Uint8Array {
   emit32(GUEST_THREAD_CRITICAL_DEPTH);
   code.push(0x00);
   code.push(0x75, 0x01); // jne immediate
-  code.push(0xfb); // 无锁时 sti
+  code.push(0xfb); // sti when no lock is held
   code.push(0x31, 0xc0); // immediate: xor eax,eax
   code.push(0xc2, argBytes & 0xff, (argBytes >>> 8) & 0xff);
   const fallback = code.length;
@@ -1200,7 +1199,7 @@ function makeFastTlsGetValueStub(id: number, argBytes: number): Uint8Array {
     0x00, // mov ecx,[current thread]
     0xc1,
     0xe1,
-    0x08, // shl ecx,8 (每线程 64×DWORD)
+    0x08, // shl ecx,8 (64 DWORDs per thread)
     0x8b,
     0x84,
     0x81,
@@ -1217,9 +1216,9 @@ function makeFastTlsGetValueStub(id: number, argBytes: number): Uint8Array {
 }
 
 /**
- * RA2 启动时反复用 QPC 测 RDTSC，最多做 20 轮 1 秒忙等。若每次查询都跨到
- * JS，浏览器会花几十秒处理数百万次同步调用。共享计数器由 100Hz PIT 每次
- * 增加 10ms；此桩只读取，时间绝不能随查询次数推进。
+ * During startup, RA2 repeatedly measures RDTSC using QPC, with up to twenty one-second busy waits.
+ * Crossing into JS for every query makes the browser spend tens of seconds handling millions of synchronous calls.
+ * The 100 Hz PIT advances the shared counter by 10 ms per tick. This stub only reads it; query count must never advance time.
  */
 function makeFastPerformanceCounterStub(argBytes: number): Uint8Array {
   const code: number[] = [];
@@ -1273,7 +1272,7 @@ function makeFastPerformanceFrequencyStub(argBytes: number): Uint8Array {
   ]);
 }
 
-/** ReadFile(handle, buffer, count, outCount, overlapped) 的同步只读快速路径。 */
+/** Synchronous read-only fast path for ReadFile(handle, buffer, count, outCount, overlapped). */
 function makeFastReadFileStub(id: number, argBytes: number): Uint8Array {
   const code: number[] = [];
   const fallbackBranches: number[] = [];
@@ -1297,7 +1296,7 @@ function makeFastReadFileStub(id: number, argBytes: number): Uint8Array {
     }
   };
 
-  // 异步 OVERLAPPED 读保留给 host；RA2/Blowfish 使用同步路径。
+  // Leave asynchronous OVERLAPPED reads to the host; RA2/Blowfish use the synchronous path.
   code.push(0x83, 0x7c, 0x24, 0x14, 0x00); // cmp dword [esp + 20], 0
   branch(0x85, fallbackBranches); // jne fallback
   code.push(0x8b, 0x44, 0x24, 0x04); // mov eax, [esp + 4] (handle)
@@ -1323,10 +1322,10 @@ function makeFastReadFileStub(id: number, argBytes: number): Uint8Array {
   code.push(0x56, 0x57); // push esi; push edi
   code.push(0x8b, 0x30); // mov esi, [eax]
   code.push(0x01, 0xd6); // add esi, edx
-  code.push(0x8b, 0x7c, 0x24, 0x10); // mov edi, [esp + 16] (原 buffer)
+  code.push(0x8b, 0x7c, 0x24, 0x10); // mov edi, [esp + 16] (original buffer)
   code.push(0x01, 0xca); // add edx, ecx
   code.push(0x89, 0x50, 0x08); // mov [eax + 8], edx
-  code.push(0x8b, 0x54, 0x24, 0x18); // mov edx, [esp + 24] (原 outCount)
+  code.push(0x8b, 0x54, 0x24, 0x18); // mov edx, [esp + 24] (original outCount)
   code.push(0x85, 0xd2); // test edx, edx
   branch(0x84, noCountBranches); // je copy
   code.push(0x89, 0x0a); // mov [edx], ecx
@@ -1359,7 +1358,7 @@ function makeFastReadFileStub(id: number, argBytes: number): Uint8Array {
   return new Uint8Array(code);
 }
 
-/** SetFilePointer 的 32-bit 同步快速路径；大偏移/非法模式仍交回 host。 */
+/** 32-bit synchronous SetFilePointer fast path; large offsets and invalid modes still go to the host. */
 function makeFastSetFilePointerStub(id: number, argBytes: number): Uint8Array {
   const code: number[] = [];
   const fallbackBranches: number[] = [];
@@ -1443,8 +1442,8 @@ function makeFastSetFilePointerStub(id: number, argBytes: number): Uint8Array {
 }
 
 /**
- * _lread 是地图加载的最大静态边界之一：原版会数万次读 1/2/4 字节字段。
- * 已镜像的只读文件在客体内 rep movsb；其他句柄跳回原 hypercall 桩。
+ * _lread is one of the largest static boundaries during map loading: the original game reads 1/2/4-byte fields tens of thousands of times.
+ * Mirrored read-only files use guest rep movsb; other handles jump back to the original hypercall stub.
  */
 function makeFastLegacyReadStub(id: number, argBytes: number): Uint8Array {
   const code: number[] = [];
@@ -1509,7 +1508,7 @@ function makeFastLegacyReadStub(id: number, argBytes: number): Uint8Array {
   return new Uint8Array(code);
 }
 
-/** 无竞争的临界区仅在更新结构时 CLI；有竞争或等待者时交给 host 调度。 */
+/** Uncontended critical sections use CLI only while updating their structure; contention or waiters require host scheduling. */
 function makeFastCriticalSectionStub(name: string, id: number, argBytes: number): Uint8Array {
   if (name === 'DeleteCriticalSection') return makeImportStub(id, argBytes);
   const code: number[] = [];
@@ -1526,7 +1525,7 @@ function makeFastCriticalSectionStub(name: string, id: number, argBytes: number)
   };
   code.push(0x8b, 0x44, 0x24, 0x04, 0x85, 0xc0); // mov eax,[esp+4]; test eax,eax
   fallbackIf(0x84);
-  code.push(0xfa); // cli，仅保护结构更新
+  code.push(0xfa); // cli protects only the structure update
   if (name === 'InitializeCriticalSection') {
     for (const offset of [0, 4, 8, 12, 16, 20]) store(offset, offset === 4 ? 0xffff_ffff : 0);
   } else {
@@ -1534,22 +1533,22 @@ function makeFastCriticalSectionStub(name: string, id: number, argBytes: number)
     emit32(HYPERCALL_THREAD_CURRENT);
     code.push(0x41); // ecx = Win32 thread id
     if (name === 'EnterCriticalSection') {
-      code.push(0x83, 0x78, 0x0c, 0x00, 0x74, 0x09); // owner=0 时跳过 owner 比较
+      code.push(0x83, 0x78, 0x0c, 0x00, 0x74, 0x09); // Skip the owner comparison when owner == 0
       code.push(0x39, 0x48, 0x0c); // cmp [eax+12],ecx
       fallbackIf(0x85);
       code.push(0x89, 0x48, 0x0c, 0xff, 0x40, 0x08, 0xff, 0x40, 0x04);
     } else {
       code.push(0x39, 0x48, 0x0c);
-      fallbackIf(0x85); // 只有 owner 可以 Leave
+      fallbackIf(0x85); // Only the owner may Leave
       code.push(0x83, 0x78, 0x10, 0);
-      fallbackIf(0x85); // 有等待者时由 host 唤醒
+      fallbackIf(0x85); // Let the host wake any waiters
       code.push(0x83, 0x78, 0x08, 0);
       fallbackIf(0x84);
       code.push(0xff, 0x48, 0x04, 0xff, 0x48, 0x08, 0x75, 0x07); // dec lock; dec recursion; jnz done
       store(12, 0);
     }
   }
-  code.push(0x31, 0xc0); // void API 的确定性返回值
+  code.push(0x31, 0xc0); // Deterministic return value for a void API
   code.push(0x8b, 0x0d);
   emit32(HYPERCALL_THREAD_CURRENT);
   code.push(0x83, 0x3c, 0x8d);
@@ -1566,13 +1565,13 @@ function makeFastCriticalSectionStub(name: string, id: number, argBytes: number)
 }
 
 /**
- * 第一阶段 Win32 兼容层：足以运行 MSVC CRT 初始化，并在首个未实现 API 处精确暂停。
- * 不对未实现 API 猜测返回值，否则错误会在几千条指令后才显现。
+ * First-stage Win32 compatibility layer: enough for MSVC CRT initialization, with a precise pause at the first unimplemented API.
+ * Do not guess return values for unimplemented APIs: errors would surface thousands of instructions later.
  */
 export function readStackArgs(memory: GuestMemory, stack: number, argBytes: number): number[] {
   const count = argBytes >>> 2;
   if (count === 0) return [];
-  const b = memory.read_memory(stack + 4, count * 4); // [esp] 是 import stub 的返回地址
+  const b = memory.read_memory(stack + 4, count * 4); // [esp] holds the import stub's return address
   const out: number[] = [];
   for (let i = 0; i < count; i++) {
     const p = i * 4;
@@ -1581,7 +1580,7 @@ export function readStackArgs(memory: GuestMemory, stack: number, argBytes: numb
   return out;
 }
 
-/** PE 装载后给每个导入算好 DLL 数值标签，让 dispatch 不做字符串解析。 */
+/** Precompute numeric DLL tags for each import after PE loading so dispatch does not parse strings. */
 export function annotateWin32Modules(importList: PeImport[]): void {
   for (const imported of importList) imported.win32Module = win32ModuleOf(imported.dll);
 }

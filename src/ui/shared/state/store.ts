@@ -1,4 +1,4 @@
-/** VM 服务只发布不可变快照，不持有 DOM、React 节点或渲染函数。 */
+/** VM services publish immutable snapshots without retaining DOM, React nodes, or render functions. */
 export function createStore<T>(initial: T) {
   let value = initial;
   const listeners = new Set<() => void>();

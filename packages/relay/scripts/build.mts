@@ -1,9 +1,9 @@
-/** 分离浏览器与服务端入口，共享协议代码只生成一份，不把 Node 依赖带入网页。 */
+/** Separate browser and server entry points; emit shared protocol code once without including Node dependencies in the page. */
 import { build } from 'esbuild';
 import { rm } from 'node:fs/promises';
 import { resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '..');
-// 构建目录完全由本脚本生成，清除旧入口和失去引用的分块。
+// This script owns the entire build directory; remove stale entry points and unreferenced chunks.
 await rm(resolve(root, 'dist/lib'), { recursive: true, force: true });
 await build({
   absWorkingDir: root,

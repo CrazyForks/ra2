@@ -3,7 +3,7 @@ import type { GameSource } from '../../../../games/source';
 import { createGameSourcePicker } from '../gameSourcePicker';
 import { useStore } from '../../../shared/state/useStore';
 
-/** file input 必须在用户手势里 click；除此之外由 React 接管普通 UI 事件与显示。 */
+/** Click the file input within a user gesture; React handles all other ordinary UI events and display. */
 export function useGameSourcePicker(onSelected: (source: GameSource) => void) {
   const [service] = useState(() => createGameSourcePicker(onSelected));
   const state = useStore(service);
@@ -25,7 +25,7 @@ export function useGameSourcePicker(onSelected: (source: GameSource) => void) {
       }, 200);
     };
     window.addEventListener('focus', focus);
-    // React 尚未为 file input 暴露 cancel；在 hook 内对这一个浏览器 API 补充监听。
+    // React does not expose file-input cancel yet; supplement this one browser API with a listener inside the hook.
     const inputs = [archiveRef.current, folderRef.current];
     for (const input of inputs) input?.addEventListener('cancel', cancelPick);
     return () => {
@@ -52,7 +52,7 @@ export function useGameSourcePicker(onSelected: (source: GameSource) => void) {
       service.cancelPick();
       return;
     }
-    // 焦点兜底可能先按取消结算；迟到的 change 仍必须走完整导入，不能丢掉用户选择。
+    // The focus fallback may settle as canceled first; a late change must still perform the full import and preserve the user's selection.
     if (kind === 'archive') void service.importArchive(files[0]!);
     else void service.importFolder(files);
   };

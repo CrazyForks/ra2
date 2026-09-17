@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
-/** 网页主菜单/调试面板的滚轮加速。VM 在 Worker 高负载时浏览器默认的一小格
- *  滚动显得尤其迟缓；这里只接管网页面板，不影响画布内传给游戏的 WM_MOUSEWHEEL。 */
+/**
+ * Accelerate wheel scrolling in page menus/debug panels. Default small steps feel especially slow under heavy VM Worker load; affect only page panels, preserving canvas WM_MOUSEWHEEL forwarded to the game.
+ */
 export function usePanelWheelAcceleration(): void {
   useEffect(() => {
     const onWheel = (event: WheelEvent) => {

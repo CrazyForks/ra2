@@ -1,15 +1,13 @@
 /**
- * 最小 PE32 构造器：供测试在不依赖原版游戏资源的情况下生成可装载的 EXE。
+ * Minimal PE32 builder for tests to generate loadable EXEs without original game assets.
  *
- * 只实现 loadPe 需要的子集（DOS/PE 头、section 表、导入目录），但产出的
- * 每个字段都按 PE 规范填写，因此同一份产物既能喂给 src/vm86/pe.ts 的
- * loadPe，也能被 peImportKeys 等只读解析路径消费。
+ * Implements only the subset loadPe needs (DOS/PE headers, section table, import directory), but fills every emitted field according to the PE specification. The same artifact works with loadPe in src/vm86/pe.ts and read-only parsers such as peImportKeys.
  */
 
 export interface PeBuilderSection {
-  /** 8 字节以内的 section 名（如 .text）。 */
+  /** Section name of at most 8 bytes, such as .text. */
   name: string;
-  /** section 内容（文件原始数据）；VirtualSize 取内容长度。 */
+  /** Section contents (raw file data); VirtualSize equals the content length. */
   data: Uint8Array;
   characteristics: number;
 }
@@ -22,11 +20,11 @@ export interface PeBuilderImport {
 export interface BuiltPe {
   exe: Uint8Array;
   imageBase: number;
-  /** 入口绝对地址（imageBase + entryRva）。 */
+  /** Absolute entry address (imageBase + entryRva). */
   entry: number;
-  /** section 名 → RVA。 */
+  /** Section name -> RVA. */
   sectionRva: Readonly<Record<string, number>>;
-  /** `DLL!NAME`（大写）→ IAT 槽绝对地址（loadPe 打桩的位置）。 */
+  /** Uppercase DLL!NAME -> absolute IAT slot address (where loadPe installs the stub). */
   iat: ReadonlyMap<string, number>;
 }
 
@@ -78,8 +76,7 @@ class ByteWriter {
 }
 
 /**
- * 构造一个 PE32 EXE。section 按给定顺序从 RVA 0x1000 起依次对齐排放；
- * 导入目录单独占用最后一个 section（.idata）。
+ * Build a PE32 EXE. Lay out sections in the given order, aligned from RVA 0x1000; the import directory occupies the final section (.idata).
  */
 export function buildPe32(options: {
   entryRva: number;
@@ -90,7 +87,7 @@ export function buildPe32(options: {
   const imageBase = options.imageBase ?? 0x0040_0000;
   const sections = [...options.sections];
 
-  // ── 先排布调用方 section，再生成 .idata ──
+  // -- Lay out caller sections, then generate .idata --
   const sectionRva: Record<string, number> = {};
   let nextRva = SECTION_ALIGNMENT;
   for (const section of sections) {
@@ -103,25 +100,25 @@ export function buildPe32(options: {
   sections.push({
     name: '.idata',
     data: idata.bytes,
-    characteristics: 0xc000_0040, // INITIALIZED_DATA | READ | WRITE（IAT 需运行期改写）
+    characteristics: 0xc000_0040, // INITIALIZED_DATA | READ | WRITE (the IAT is modified at runtime)
   });
   sectionRva['.idata'] = idataRva;
 
   const sizeOfImage = idataRva + align(Math.max(1, idata.bytes.length), SECTION_ALIGNMENT);
 
-  // ── 头：DOS(0x80) + PE 签名 + COFF + optional + section 表 ──
+  // -- Headers: DOS(0x80) + PE signature + COFF + optional header + section table --
   const header = new ByteWriter();
   header.ascii('MZ').pad(0x3c).u32(0x80).pad(0x80);
   header.u32(IMAGE_NT_SIGNATURE);
   header.u16(IMAGE_FILE_MACHINE_I386);
   header.u16(sections.length);
-  header.u32(0).u32(0).u32(0); // 时间戳 / 符号表
+  header.u32(0).u32(0).u32(0); // Timestamp / symbol table
   header.u16(OPTIONAL_HEADER_SIZE);
   header.u16(IMAGE_FILE_EXECUTABLE_IMAGE | IMAGE_FILE_32BIT_MACHINE);
 
   const optional = new ByteWriter();
   optional.u16(PE32_MAGIC);
-  optional.u8(6).u8(0); // linker 版本
+  optional.u8(6).u8(0); // Linker version
   optional.u32(0).u32(0).u32(0); // SizeOfCode/InitializedData/UninitializedData
   optional.u32(options.entryRva); // AddressOfEntryPoint
   optional.u32(sectionRva[sections[0]!.name] ?? 0); // BaseOfCode
@@ -129,15 +126,15 @@ export function buildPe32(options: {
   optional.u32(imageBase);
   optional.u32(SECTION_ALIGNMENT);
   optional.u32(FILE_ALIGNMENT);
-  optional.u16(4).u16(0).u16(0).u16(0).u16(4).u16(0); // OS/影像/子系统版本
+  optional.u16(4).u16(0).u16(0).u16(0).u16(4).u16(0); // OS/image/subsystem versions
   optional.u32(0); // Win32VersionValue
   optional.u32(sizeOfImage);
   const sizeOfHeaders = align(header.length + OPTIONAL_HEADER_SIZE + sections.length * 40, FILE_ALIGNMENT);
   optional.u32(sizeOfHeaders);
   optional.u32(0); // CheckSum
-  optional.u16(3); // Subsystem: console（兼容层不读）
+  optional.u16(3); // Subsystem: console (not read by the compatibility layer)
   optional.u16(0); // DllCharacteristics
-  optional.u32(0x10_0000).u32(0x1000).u32(0x10_0000).u32(0x1000); // 栈/堆保留与提交
+  optional.u32(0x10_0000).u32(0x1000).u32(0x10_0000).u32(0x1000); // Stack/heap reservation and commitment
   optional.u32(0); // LoaderFlags
   optional.u32(NUMBER_OF_RVA_AND_SIZES);
   optional.u32(0).u32(0); // [0] export
@@ -145,7 +142,7 @@ export function buildPe32(options: {
   optional.pad(OPTIONAL_HEADER_SIZE);
   header.raw(optional.toBytes());
 
-  // ── section 表与原始数据 ──
+  // -- Section table and raw data --
   let nextRaw = sizeOfHeaders;
   const rawOffsets: number[] = [];
   for (const section of sections) {
@@ -160,14 +157,14 @@ export function buildPe32(options: {
     header.u32(sectionRva[section.name]!);
     header.u32(section.data.length ? align(section.data.length, FILE_ALIGNMENT) : 0);
     header.u32(section.data.length ? rawOffsets[index]! : 0);
-    header.u32(0).u32(0).u16(0).u16(0); // 重定位/行号
+    header.u32(0).u32(0).u16(0).u16(0); // Relocations / line numbers
     header.u32(section.characteristics);
   });
   header.pad(sizeOfHeaders);
   sections.forEach((section, index) => {
     header.pad(rawOffsets[index]!);
     header.raw(section.data);
-    // 真实 PE 的磁盘数据补齐到 FileAlignment；loadPe 按 SizeOfRawData 整体拷贝。
+    // Real PE disk data is padded to FileAlignment; loadPe copies the full SizeOfRawData.
     if (section.data.length) header.pad(rawOffsets[index]! + align(section.data.length, FILE_ALIGNMENT));
   });
 
@@ -193,7 +190,7 @@ interface IatLayout {
   iatRva: number;
 }
 
-/** 生成导入目录 section：描述符表 + 每 DLL 的 ILT/IAT/名称串。 */
+/** Generate the import-directory section: descriptor table plus per-DLL ILT/IAT/name strings. */
 function buildImportSection(
   imports: PeBuilderImport[],
   sectionRvaBase: number,
@@ -215,7 +212,7 @@ function buildImportSection(
     const nameRvas: number[] = [];
     for (const name of names) {
       nameRvas.push(sectionRvaBase + cursor);
-      // IMAGE_IMPORT_BY_NAME：2 字节 hint + NUL 结尾名称，按 2 字节对齐。
+      // IMAGE_IMPORT_BY_NAME: 2-byte hint + NUL-terminated name, aligned to 2 bytes.
       cursor += 2 + name.length + 1;
       cursor = align(cursor, 2);
     }
@@ -244,10 +241,10 @@ function buildImportSection(
     });
     bodies.push({ rva: dllNameRva, write: (writer) => writer.ascii(dll).u8(0) });
 
-    // 描述符在头部，稍后统一回填。
+    // Descriptors are at the beginning and will be backfilled together later.
     out.u32(iltRva).u32(0).u32(0).u32(dllNameRva).u32(iatRva);
   }
-  out.u32(0).u32(0).u32(0).u32(0).u32(0); // 终止描述符
+  out.u32(0).u32(0).u32(0).u32(0).u32(0); // Terminating descriptor
 
   for (const body of bodies) {
     out.pad(body.rva - sectionRvaBase);

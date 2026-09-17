@@ -4,7 +4,7 @@ import { createGuestMemory, createTestShim } from '../helpers/guestMemory';
 
 function fixture(packedRgb565Frames = false) {
   const memory = createGuestMemory();
-  // Campaign 页补偿按游戏 profile 生效，这里用与冒烟相同的 RA2 登记值。
+  // Campaign-page compensation is game-profile-specific; use the same RA2 registration as the smoke test.
   const shim = createTestShim(memory, { gameId: 'ra2', onFrame: () => {}, packedRgb565Frames }) as unknown as {
     displayBpp: number;
     primarySurface: number;

@@ -67,11 +67,11 @@ it('Basic 显式选择无素材目录，有资源入口仍执行原始 EXE 契�
   expect(script).toContain("existsSync('game') || existsSync('.tmp-third-party')");
   expect(script).toContain("VM_REQUIRE_GAME_RESOURCES: '1'");
   expect(script).toContain('tests/real-game/ra2/shortGame.test.ts');
-  // 不继承本机 VM_* 调试开关；缺 secret 时点名变量，不落到通用下载失败分支。
+  // Do not inherit local VM_* debug switches; identify missing secret variables instead of falling into a generic download-failure branch.
   expect(script).toMatch(/key\.startsWith\('VM_'\)/);
   expect(script).toContain('缺少 ${prefix}_URL');
   expect(read('scripts/ci/processes.ts')).toContain('--strictPort');
-  // 显式真实游戏入口默认严格，跳过只能发生在 pnpm test 的全量运行里。
+  // Explicit real-game entries are strict by default; skipping is allowed only in the full pnpm test run.
   for (const name of ['test:e2e', 'test:vm', 'test:vm:ra2', 'test:vm:yr']) {
     expect(pkg.scripts[name], name).toContain('VM_REQUIRE_GAME_RESOURCES=1');
   }

@@ -1,11 +1,11 @@
-/** 无游戏资源的真实浏览器输入回归：不模拟 Keyboard Lock 或 Pointer Lock API。 */
+/** Real browser input regression without game assets: do not mock Keyboard Lock or Pointer Lock APIs. */
 import { chromium, expect } from '@playwright/test';
 const origin = process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15174';
-// 无头模式可能不给后台页真实 visibilitychange；用有界面 Chromium 验证切标签。
-// Linux 无显示器时：xvfb-run -a pnpm exec tsx tests/basic/browser/keyboardLockBrowserSmoke.mts
+// Headless mode may not deliver real visibilitychange to background pages; use headed Chromium to verify tab switching.
+// On Linux without a display: xvfb-run -a pnpm exec tsx tests/basic/browser/keyboardLockBrowserSmoke.mts
 const browser = await chromium.launch({ headless: false, args: ['--no-sandbox'] });
 try {
-  const context = await browser.newContext({ ignoreHTTPSErrors: true });
+  const context = await browser.newContext({ locale: 'zh-CN', ignoreHTTPSErrors: true });
   await context.route('**/keyboard-lock-smoke', (route) =>
     route.fulfill({
       contentType: 'text/html',
@@ -57,12 +57,12 @@ try {
   await page.evaluate(() => {
     (window as any).inputMessages.length = 0;
   });
-  // 通过真实浏览器激活另一标签页，不用脚本伪造 blur/visibilitychange。
+  // Activate another tab through the real browser, without scripting fake blur/visibilitychange events.
   const other = await context.newPage();
   await other.goto('about:blank');
   await other.bringToFront();
-  // Xvfb 无窗口管理器时 hidden/hasFocus 不一定随切页变化，但必须实际解除
-  // 指针锁，才能验证原来的「解锁补发 Esc」回归；失焦事件排列另有单元测试。
+  // Under Xvfb without a window manager, hidden/hasFocus may not change on tab switches, but pointer lock must actually
+  // be released to verify the previous extra-Esc-on-unlock regression. Unit tests cover focus-loss event ordering separately.
   await page.waitForFunction(() => !document.pointerLockElement, null, { timeout: 5000 });
   await page.waitForTimeout(200);
   expect(

@@ -18,19 +18,19 @@ export interface RelayPeer {
   metadata: Uint8Array;
 }
 export interface RelayClientHandlers {
-  /** welcome 后就绪；已有成员随后逐个触发 onPeerJoin。 */
+  /** Ready after welcome; existing members then trigger onPeerJoin individually. */
   onReady?(self: RelayPeer, peers: RelayPeer[]): void;
   onPeerJoin?(peer: RelayPeer): void;
   onPeerLeave?(id: string, addr: number): void;
   onDatagram?(srcAddr: number, srcPort: number, destPort: number, payload: Uint8Array): void;
   onClose?(reason: string): void;
   onError?(error: unknown): void;
-  /** 到 relay 的应用层 RTT，不是到其他玩家的 RTT。 */
+  /** Application-level RTT to the relay, not to other players. */
   onLatency?(rttMs: number): void;
 }
 export interface RelayClientOptions {
   url: string;
-  /** URL 未带路径时的默认房间；显式路径优先。 */
+  /** Default room when the URL has no path; an explicit path takes precedence. */
   room?: string;
   compatibilityHash: string;
   metadata?: Uint8Array;
@@ -50,7 +50,7 @@ function newClientId(): string {
   return `vm-${[...random].map((part) => part.toString(16).padStart(8, '0')).join('')}-${Math.random().toString(36).slice(2)}`;
 }
 
-/** 自动连接、握手和心跳；close 释放会话，不自动重连或重放旧数据报。 */
+/** Connect, handshake, and send heartbeats automatically; close releases the session without reconnecting or replaying old datagrams. */
 export class RelayClient {
   readonly clientId: string;
   private readonly urls: string[];
@@ -83,7 +83,7 @@ export class RelayClient {
       metadata: (options.metadata ?? new Uint8Array()).slice(),
       compatibilityHash: options.compatibilityHash,
     };
-    // 在创建连接之前校验全部握手字段；非法配置不留下连接或计时器。
+    // Validate every handshake field before connecting; invalid configuration must not leave connections or timers behind.
     encodeRelayFrame({
       t: 'hello',
       room: this.join.room,
@@ -135,7 +135,7 @@ export class RelayClient {
     };
     socket.binaryType = 'arraybuffer';
     this.socket = socket;
-    // 每种协议各有建连/握手预算；仅在 WS 打开前回退，不重连已建立的游戏会话。
+    // Each protocol gets its own connection/handshake budget; fall back only before WS opens, never reconnect an established game session.
     this.handshakeTimer = setTimeout(() => {
       if (!this.closed && !this.welcomed && this.socket === socket && !tryNext()) {
         this.closeWithReason(socket, 4000, 'handshake timeout');
@@ -148,8 +148,8 @@ export class RelayClient {
         t: 'hello',
         room: this.join.room,
         exe: this.join.compatibilityHash,
-        // 客户端 ID 允许 128 字符，但线协议 nonce 最多 32；默认 UUID 为 36，
-        // 不能原样发送，否则真实浏览器会被中继以「hello 字段无效」拒绝。
+        // Client IDs allow 128 characters, but the wire nonce allows only 32; the default UUID has 36,
+        // so sending it unchanged makes the relay reject real browsers with an invalid-hello-fields error.
         nonce: this.clientId.slice(0, 32),
         n: this.join.metadata,
       });
@@ -159,8 +159,8 @@ export class RelayClient {
       void this.receive(event.data, socket);
     };
     socket.onerror = (event: Event) => {
-      // Node 的原生 WebSocket 在 TLS 探测失败时可能只发 error、不发 close。
-      // 打开前立即尝试下个候选；tryNext 同时解绑旧 socket，迟到事件不会影响新连接。
+      // Node's native WebSocket may emit only error, without close, when TLS probing fails.
+      // Try the next candidate immediately before opening; tryNext also detaches the old socket so late events cannot affect the new connection.
       if (this.closed || this.socket !== socket || tryNext()) return;
       if (opened || this.attempt + 1 >= this.urls.length) report(this.handlers, event);
     };
@@ -183,7 +183,7 @@ export class RelayClient {
     }
     try {
       const frame = (this.options.codec?.encode ?? encodeRelayFrame)(message);
-      // 只有内置编码器保证每次分配独占帧；自定义编码器可能返回共享视图。
+      // Only the built-in encoder guarantees an exclusively owned frame per call; custom encoders may return shared views.
       if (!this.options.codec && socket.sendOwned) socket.sendOwned(frame);
       else socket.send(frame);
       return true;
@@ -236,7 +236,7 @@ export class RelayClient {
         this.handlers.onReady?.({ id: message.peer, addr: message.addr, metadata: this.join.metadata.slice() }, []);
         if (this.closed) return;
         this.latencyTimer = setInterval(() => {
-          // 只用于观测；浏览器调度慢不能仅因 ping 迟到就把整局踢掉。
+          // Observation only; slow browser scheduling and a late ping alone must not disconnect an entire game.
           const ping = { n: ++this.pingSequence >>> 0, sentAt: performance.now() };
           this.pendingPing = ping;
           this.sendFrame({ t: 'ping', n: ping.n, at: Date.now() });

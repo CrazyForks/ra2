@@ -84,7 +84,7 @@ describe('动态客体代码内存边界', () => {
     for (let i = 0; i < GUEST_CALLBACK_SLOTS; i++) {
       expect(readU32(memory, GUEST_CALLBACK_BASE + i * GUEST_CALLBACK_STRIDE)).toBe(i + 100);
     }
-    // 模拟槽 7 的客体尾部先返回；分配不要求不同线程按 LIFO 顺序结束。
+    // Simulate slot 7's guest tail returning first; allocations do not require different threads to finish in LIFO order.
     writeU32(memory, GUEST_CALLBACK_OWNERS + 7 * 4, 0);
     writeU32(memory, HYPERCALL_CALLBACK_DEPTH, GUEST_CALLBACK_SLOTS - 1);
     expect(shim.reserveCallback().depth).toBe(7);

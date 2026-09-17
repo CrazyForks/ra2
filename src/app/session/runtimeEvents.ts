@@ -8,15 +8,15 @@ export interface VmStatus {
 }
 
 export interface VmCallBatch {
-  /** 批次结束时的全局调用序号。 */
+  /** Global call sequence number at the end of the batch. */
   ordinal: number;
-  /** 本批次调用数（用于 HC/s，不逐次跨线程发消息）。 */
+  /** Calls in this batch, used for HC/s without sending a cross-thread message per call. */
   delta: number;
-  /** 本批次 DirectDraw 帧边界数，不等同于原生模拟帧。 */
+  /** DirectDraw frame boundaries in this batch, distinct from native simulation frames. */
   logicFrames: number;
-  /** 本批次按 API 聚合的调用数。 */
+  /** Calls in this batch aggregated by API. */
   histogram: Array<[key: string, count: number]>;
-  /** 调试日志沿用“前 200 次 + 每 256 次”的稀疏样本。 */
+  /** Debug logs retain sparse sampling: the first 200 calls, then every 256th call. */
   samples: Array<{ call: Win32Call; ordinal: number }>;
 }
 
@@ -24,12 +24,12 @@ export interface GameVmCallbacks {
   onNetworkStatus?: (status: VmNetworkStatus) => void;
   onStatus?: (status: VmStatus) => void;
   onCall?: (call: Win32Call, ordinal: number) => void;
-  /** Worker 路径每 500ms 聚合回传；主线程回退路径继续使用 onCall。 */
+  /** Workers return aggregates every 500ms; main-thread fallback continues using onCall. */
   onCallBatch?: (batch: VmCallBatch) => void;
   onBlocked?: (call: Win32Call) => void;
   onFrame?: (frame: VmFrame) => void;
-  /** DirectDraw 帧边界：主线程 count 为 1，Worker 每 500ms 批量回传；原生逻辑帧另用 getGamePerformance。 */
+  /** DirectDraw frame boundaries: main-thread count is 1; Workers return batches every 500ms. Use getGamePerformance for native logic frames. */
   onLogicFrame?: (count: number) => void;
-  /** RA2/YR shell 页面标题变化（如 GUI:MainMenu/CampaignMenu），供 UI 诊断与浏览器回归。 */
+  /** RA2/YR shell-title changes, such as GUI:MainMenu/CampaignMenu, for UI diagnostics and browser regressions. */
   onShellPage?: (title: string) => void;
 }

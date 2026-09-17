@@ -1,4 +1,4 @@
-"""独立 CPU 初筛：比较真实截图与本地 UltraSharpV2 Lite ONNX，不进入游戏渲染链。"""
+"""Independent CPU screening: compare real screenshots with local UltraSharpV2 Lite ONNX, outside the game rendering pipeline."""
 import argparse
 import hashlib
 import json
@@ -32,7 +32,7 @@ def main():
     input_info = session.get_inputs()[0]
     if input_info.type != "tensor(float)":
         parser.error("本初筛仅支持官方 FP32 ONNX")
-    # 从原图多取 16 像素上下文，边缘反射填充；比较时去掉边界，减少瓦片边缘伪影。
+    # Add 16 pixels of source context with reflected edge padding; remove borders for comparison to reduce tile-edge artifacts.
     pad = 16
     pixels = np.pad(np.asarray(source), ((pad, pad), (pad, pad), (0, 0)), mode="reflect")
     tile = pixels[y:y + size + 2 * pad, x:x + size + 2 * pad]

@@ -23,12 +23,12 @@ const HEARTBEAT_INTERVAL_MS = 15_000;
 const HELLO_TIMEOUT_MS = 5_000;
 const CLOSE_GRACE_MS = 2_000;
 const MAX_ROOMS = 256;
-/** 每连接限速：令牌桶，超限丢包，持续滥用断开。 */
+/** Per-connection token-bucket rate limit: drop excess packets and disconnect sustained abusers. */
 const RATE_PACKETS_PER_SEC = 512;
 const RATE_BYTES_PER_SEC = 1024 * 1024;
 const RATE_ABUSE_CLOSE_PACKETS = 8192;
 
-/** 房间层只要求消息边界与连接生命周期；由 WS 适配。 */
+/** The room layer requires only message boundaries and connection lifecycle; WS provides the adapter. */
 export interface RelayConnectionSocket {
   readonly readyState: number;
   readonly bufferedAmount: number;
@@ -58,7 +58,7 @@ export interface GameRelaySocketAdapter {
 export interface GameRelayOptions {
   maxConnections?: number;
   codec?: { encode: typeof encodeRelayFrame; decode: typeof decodeRelayFrame };
-  /** 服务端显式启用；客户端不能通过 URL 开启或修改弱网规则。 */
+  /** Enabled explicitly by the server; clients cannot enable or change network fault rules through the URL. */
   faults?: RelayFaultConfig;
   heartbeatIntervalMs?: number;
   helloTimeoutMs?: number;
@@ -99,7 +99,7 @@ interface RelayRoom {
   id: string;
   epoch: number;
   members: Set<RelayConnection>;
-  /** 单播按虚拟地址直达，避免每个数据报分配成员数组并线性搜索。 */
+  /** Route unicast directly by virtual address, avoiding member-array allocation and linear lookup for every datagram. */
   byAddress: Map<number, RelayConnection>;
   usedAddrs: Set<number>;
   compatibilityHash: string;
@@ -156,8 +156,10 @@ export function sendGameRelayFrame(
   }
 }
 
-/** 房间虚拟地址：10.247.high.low，两个主机号八位组都避开 0/255（与客户端自分配同界）；
- *  中继按连接分配，客户端不可自选。 */
+/**
+ * Room virtual address: 10.247.high.low; both host octets exclude 0/255, matching client self-allocation bounds.
+ * The relay assigns addresses per connection; clients cannot choose their own.
+ */
 function allocateAddress(room: RelayRoom): number | null {
   for (let high = RELAY_HOST_OCTET_MIN; high <= RELAY_HOST_OCTET_MAX; high++) {
     for (let low = RELAY_HOST_OCTET_MIN; low <= RELAY_HOST_OCTET_MAX; low++) {
@@ -169,8 +171,8 @@ function allocateAddress(room: RelayRoom): number | null {
 }
 
 /**
- * 通用虚拟局域网房间中继：内存房间表、虚拟地址分配、数据报路由与限速。
- * 中继不解释客体 payload；源地址一律按连接覆写，客户端声明不被信任。
+ * General-purpose virtual LAN room relay: in-memory rooms, virtual address allocation, datagram routing, and rate limiting.
+ * The relay does not interpret guest payloads; it always overwrites the source address based on the connection and distrusts client claims.
  */
 export class GameRelay {
   private readonly encode: typeof encodeRelayFrame;
@@ -256,7 +258,7 @@ export class GameRelay {
     };
   }
 
-  /** 维护时只停止接纳新玩家；现有对局继续路由，不把部署变成全员掉线。 */
+  /** During maintenance, stop admitting new players while continuing to route existing games, avoiding a deployment-wide disconnect. */
   beginDrain(): void {
     this.draining = true;
     this.log('[game-relay] 停止接纳新玩家，等待已有连接退出');
@@ -266,10 +268,10 @@ export class GameRelay {
     return this.faults?.getStats() ?? { queuedPackets: 0, queuedBytes: 0, dropped: 0, delayed: 0 };
   }
 
-  /** 管理端/测试代码在开局后注入故障；不暴露客户端可调用的网络接口。 */
+  /** Administration/test code can inject faults after a game starts; no client-callable network interface is exposed. */
   setFaults(config?: RelayFaultConfig): void {
     if (this.closed) throw new Error('中继已关闭');
-    // 未发消息不能因切换规则被提前放行或丢弃，否则会掩盖故障及破坏保序。
+    // Switching rules must not release pending messages early or drop them; that would hide faults and break ordering.
     if (this.faults?.getStats().queuedPackets) throw new Error('弱网队列未排空，不能切换规则');
     const next = config ? new RelayFaults(config) : undefined;
     this.faults?.close();
@@ -287,7 +289,7 @@ export class GameRelay {
       const socket = connection.socket;
       if (socket.readyState !== WebSocket.CLOSED) {
         this.trackShutdown(connection);
-        // 服务关闭先接管连接，再清掉协议拒绝计时器，避免 CLOSING 连接失去兜底。
+        // Take ownership of connections before clearing protocol-rejection timers on shutdown, preserving the fallback for CLOSING connections.
         this.clearProtocolCloseTimer(connection);
         if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
           socket.close(1001, 'relay closing');
@@ -302,7 +304,7 @@ export class GameRelay {
     this.server.close();
   }
 
-  /** 等待 close() 的所有连接真正收口（对端回 close 帧或 2s 强杀），最多等 timeoutMs。 */
+  /** Wait up to timeoutMs for all close() connections to finish: a peer close frame or forced termination after 2s. */
   async drained(timeoutMs = 2500): Promise<void> {
     if (this.closingCount === 0) return;
     await new Promise<void>((resolve) => {
@@ -378,7 +380,7 @@ export class GameRelay {
       lastRateAt: this.now(),
       rateDrops: 0,
     };
-    // 首帧必须是 hello；超时未握手即关闭，避免空连接占资源。
+    // The first frame must be hello; close connections that miss the handshake deadline so idle connections cannot consume resources.
     connection.helloTimer = globalThis.setTimeout(() => {
       if (!connection.roomId) this.closeForProtocol(connection, 1008, 'hello timeout');
     }, this.helloTimeoutMs);
@@ -426,7 +428,7 @@ export class GameRelay {
     this.stats.packets++;
     this.stats.bytes += frame.byteLength;
     if (!connection.roomId) {
-      // 握手前只接受 hello。
+      // Accept only hello before the handshake.
       if (message.t !== 'hello') {
         this.closeForProtocol(connection, 1008, 'hello required');
         return;
@@ -448,7 +450,7 @@ export class GameRelay {
         connection.alive = true;
         return;
       default:
-        // welcome/peer-join/peer-leave/room-close 只能由中继发出。
+        // Only the relay may send welcome/peer-join/peer-leave/room-close.
         this.closeForProtocol(connection, 1008, `client must not send ${message.t}`);
     }
   }
@@ -466,7 +468,7 @@ export class GameRelay {
       this.closeForProtocol(connection, 1008, 'valid compatibility hash required');
       return;
     }
-    // 路径是服务端约束，不能靠伪造 hello 加入另一房间。
+    // The server enforces the path; a forged hello cannot join another room.
     const roomId = connection.pathRoom ?? message.room;
     let room = this.rooms.get(roomId);
     if (!room) {
@@ -484,7 +486,7 @@ export class GameRelay {
       };
       this.rooms.set(roomId, room);
     }
-    // 版本隔离：同一房间只允许相同且非空的应用兼容性 SHA-256。
+    // Version isolation: all room members must supply the same nonempty application compatibility SHA-256.
     if (room.compatibilityHash !== message.exe) {
       this.closeForProtocol(connection, 1008, 'version mismatch');
       return;
@@ -504,7 +506,7 @@ export class GameRelay {
     connection.name = message.n.slice();
     connection.compatibilityHash = message.exe;
     this.send(connection, this.encode({ t: 'welcome', peer: connection.clientId, addr, epoch: room.epoch }));
-    // 先入成员逐个通知新成员，再把新成员广播给先入成员。
+    // Notify the newcomer of existing members individually, then broadcast the newcomer to existing members.
     for (const member of room.members) {
       this.send(
         connection,
@@ -548,7 +550,7 @@ export class GameRelay {
       }
       return;
     }
-    // 源地址按连接覆写：客户端不能伪造其他玩家身份。
+    // Overwrite the source address from the connection so clients cannot impersonate other players.
     const frame = this.encode({
       t: 'datagram',
       src: connection.addr,
@@ -565,7 +567,7 @@ export class GameRelay {
     }
     const target = room.byAddress.get(message.dest);
     if (!target) {
-      // 目标不在房间：按 UDP 语义静默丢弃。
+      // Destination absent from the room: silently drop, following UDP semantics.
       this.stats.datagramsDropped++;
       return;
     }
@@ -574,7 +576,7 @@ export class GameRelay {
 
   private routeDatagram(room: RelayRoom, source: RelayConnection, target: RelayConnection, frame: Uint8Array): void {
     const finish = (deliver: boolean): void => {
-      // 延迟期间退出的旧连接不能把消息投递给地址复用后的新玩家。
+      // An old connection that leaves during a delay must not deliver messages to a new player reusing its address.
       if (deliver && !this.closed && room.members.has(source) && room.members.has(target) && this.send(target, frame)) {
         this.stats.datagramsRouted++;
       } else this.stats.datagramsDropped++;
@@ -583,7 +585,7 @@ export class GameRelay {
     else finish(true);
   }
 
-  /** 令牌桶限速：按秒补充；突发允许到一倍桶容。 */
+  /** Token-bucket rate limit: refill per second and allow bursts up to one bucket capacity. */
   private allowRate(connection: RelayConnection, bytes: number): boolean {
     const now = Math.max(connection.lastRateAt, this.now());
     const elapsed = Math.max(0, now - connection.lastRateAt) / 1000;
@@ -654,7 +656,7 @@ export class GameRelay {
         }),
         null,
       );
-      // 房间人去楼空即销毁：旧 epoch 不会跨房间重放。
+      // Destroy empty rooms so old epochs cannot be replayed across room lifetimes.
       if (room.members.size === 0) this.rooms.delete(room.id);
     }
     this.finishShutdown(connection);
@@ -670,7 +672,7 @@ export class GameRelay {
       }
       connection.alive = false;
       if (isOpen(connection.socket)) connection.socket.ping();
-      // 令牌桶按心跳周期补充（15s 一次充满，允许短时突发）。
+      // Refill the token bucket on the heartbeat cycle, filling it every 15s and allowing short bursts.
     }
   }
 }

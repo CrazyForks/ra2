@@ -41,7 +41,7 @@ it('流式清单覆盖嵌套文件与零字节文件，顺序稳定', async () =
   await writeFile(manifest, content);
   await expect(verifyResources(roots, manifest, 'bad')).rejects.toThrow('可信');
   await expect(verifyResources(roots, manifest, sha256('wrong'))).rejects.toThrow('清单 SHA');
-  // 完整性正确但不是完整游戏，仍必须失败，不能把合成素材当作真实验收。
+  // Valid integrity does not make this a complete game; it must still fail so synthetic assets cannot count as real-game acceptance.
   await expect(verifyResources(roots, manifest, sha256(content))).rejects.toThrow('缺少真实游戏资源');
 });
 

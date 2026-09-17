@@ -2,7 +2,7 @@ import { describeShortGameContract } from '../helpers/shortGameContract';
 import { createGuestMemory } from '../helpers/guestMemory';
 import { le32 } from '../helpers/guestMachine';
 
-// 离线指令夹具，不是游戏 EXE；真实版本/完整 continuation 另由有素材 CI 验证。
+// Offline instruction fixtures, not a game EXE; resource-backed CI separately verifies real versions and full continuations.
 const memory = createGuestMemory();
 memory.write_memory(
   [
@@ -12,7 +12,7 @@ memory.write_memory(
   ],
   0x4e4a9c,
 );
-// 独立表达“基地车数 + 建筑数非零则存活”，不复制生产补丁实现。
+// Independently express survival as a nonzero sum of MCVs and buildings, without copying the production patch.
 const continuation = [0x8b, 0x86, 0x30, 0x02, 0, 0, 0x01, 0xf8, 0x85, 0xc0];
 continuation.push(0x0f, 0x85, ...le32(0x4e4b72 - (0x4e4ad3 + continuation.length + 6)));
 continuation.push(0xe9, ...le32(0x4e4b64 - (0x4e4ad3 + continuation.length + 5)));

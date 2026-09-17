@@ -2,8 +2,9 @@ import { makeLanStartupTiming, lanTimingCall } from '../shared/lanStartupTiming'
 import type { GuestMemory } from '../../vm86/win32';
 import { RA2_STARTUP_PAGE_HASH } from './startupPage';
 
-/** RA2 1.006 的四条 LAN 开局路径。初始间隔也参与原生最小窗口计算；
- * 后续 Timing 事件仍由原版协商，不固定 MaxAhead 或绕过确认。 */
+/**
+ * RA2 1.006's four LAN startup paths. Initial intervals also feed the native minimum-window calculation; subsequent Timing events retain original negotiation without fixing MaxAhead or bypassing acknowledgments.
+ */
 const sites = [
   { address: 0x597ba6, expected: [185, 5, 0, 0, 0, 59, 198, 137, 13, 100, 213, 163, 0] },
   {
@@ -14,7 +15,7 @@ const sites = [
   { address: 0x5bdfd0, expected: [184, 5, 0, 0, 0, 59, 207, 163, 100, 213, 163, 0] },
 ] as const;
 
-// 缩短原生测量/协商的调度周期，仍等双方真实报告并按房间速度和 RTT 计算窗口。
+// Shorten native measurement/negotiation scheduling periods while awaiting real reports from both sides and calculating windows from room speed and RTT.
 // test cl,127 → test cl,31；mov al,[Frame]; test al,al → test al,63。
 const negotiationSites = [
   { address: 0x623bcf, expected: [246, 193, 127, 15, 133, 186, 4, 0, 0], offset: 2, replacement: [31] },
@@ -31,7 +32,7 @@ export function installRa2LanTiming(
   exeHash: string,
   allocateCode: (code: number[]) => number,
 ): boolean {
-  // YR 和未知 EXE 保留原行为；不能把 RA2 地址写进其他映像。
+  // Preserve behavior for YR and unknown EXEs; never write RA2 addresses into other images.
   if (exeHash !== RA2_STARTUP_PAGE_HASH) return false;
   for (const { address, expected } of [...sites, ...negotiationSites]) {
     const bytes = memory.read_memory(address, expected.length);
@@ -39,8 +40,8 @@ export function installRa2LanTiming(
       throw new Error('RA2 LAN 时序：指令签名不匹配或重复安装');
     }
   }
-  // 50ms RTT 对照保留 3 帧作为等待与同步余量的折中；不改时钟或确认消息。
-  // 所有签名通过后分配独占客体桩；每次开局按房间档位初始化，协商仍可降速。
+  // The 50ms RTT comparison retains 3 frames to balance waiting and synchronization margin; clocks and acknowledgments stay unchanged.
+  // Allocate exclusively owned guest stubs after all signatures pass; initialize from room speed on every start, allowing negotiation to slow down later.
   const patches = sites.map(({ address, expected }) => ({
     address,
     bytes: lanTimingCall(address, allocateCode(makeLanStartupTiming(0xa3d2c8, 0xa3d568, expected[0], 3))),

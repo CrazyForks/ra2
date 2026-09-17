@@ -1,5 +1,7 @@
-/** 固定 hypercall 返回工作量；测宿主调度开销，不代表游戏 FPS。
- * 可传旧版 worktree 路径，用同一工作量重测基线。 */
+/**
+ * Fixed hypercall-return workload measuring host scheduling overhead, not game FPS.
+ * An old worktree path can be supplied to remeasure the baseline with the same workload.
+ */
 import { performance } from 'node:perf_hooks';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';

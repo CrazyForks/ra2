@@ -190,7 +190,7 @@ function harness(
     source?: GameSource;
     core?: FakeCore;
     discoverError?: Error;
-    /** 用真实 discoverGameSources 与 buildProvider（测试 init 消息的文件后端重建）。 */
+    /** Use real discoverGameSources and buildProvider to test file-backend reconstruction from init messages. */
     raw?: boolean;
     captureSource?: (source: GameSource) => void;
     transferFrames?: boolean;

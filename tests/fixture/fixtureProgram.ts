@@ -1,24 +1,21 @@
 /**
- * 合成测试程序：一个手工生成的最小 Win32 PE32，不依赖任何原版游戏资源，
- * 用于在 CI 上端到端验证「PE 装载 → IAT hypercall → Win32 shim → 客体回调」
- * 全链路。
+ * Synthetic test program: a manually generated minimal Win32 PE32 with no original game assets, used in CI to verify the full PE loading -> IAT hypercall -> Win32 shim -> guest callback chain.
  *
- * 程序逻辑（入口由固件 call 进来，FS=TEB，ESP=0x700000）：
- *   1. GetVersion / GetCommandLineA+lstrlenA —— 基本调用与字符串返回
- *   2. HeapCreate/HeapAlloc/HeapFree —— shim 堆与 HEAP_ZERO_MEMORY
- *   3. VirtualAlloc/VirtualFree —— 虚拟保留区 arena
- *   4. CRITICAL_SECTION 四件套 —— 锁计数字段语义（快速桩与 host 路径同断言）
- *   5. _lopen/_lread/_llseek/_lclose —— 挂载文件读取与位置同步
- *   6. CreateFileA(OPEN_EXISTING) 缺失文件 —— INVALID_HANDLE + GetLastError=2
- *   7. RegisterClassA/CreateWindowExA/SendMessageA —— WndProc 回调跳板（同步）
- *   8. PostMessageA×3 + PostQuitMessage + GetMessageA/DispatchMessageA 泵
- *      —— 消息队列与 DispatchMessage 回调跳板
- *   9. Sleep(1) —— delayMs 挂起/唤醒路径
- *  10. ExitProcess(0)；任一检查失败以步骤号为退出码退出，定位失败环节。
+ * Program flow (firmware calls the entry with FS=TEB, ESP=0x700000):
+ * 1. GetVersion / GetCommandLineA+lstrlenA: basic calls and string returns.
+ * 2. HeapCreate/HeapAlloc/HeapFree: shim heap and HEAP_ZERO_MEMORY.
+ * 3. VirtualAlloc/VirtualFree: virtual reservation arena.
+ * 4. Four CRITICAL_SECTION APIs: lock-counter semantics, with identical assertions for fast stubs and host paths.
+ * 5. _lopen/_lread/_llseek/_lclose: mounted-file reads and position synchronization.
+ * 6. CreateFileA(OPEN_EXISTING) on a missing file: INVALID_HANDLE + GetLastError=2.
+ * 7. RegisterClassA/CreateWindowExA/SendMessageA: synchronous WndProc callback trampoline.
+ * 8. PostMessageA x3 + PostQuitMessage + GetMessageA/DispatchMessageA pump: message queue and DispatchMessage callback trampoline.
+ * 9. Sleep(1): delayMs suspend/wake path.
+ * 10. ExitProcess(0); any failed check exits with its step number to identify the failure.
  */
 import { buildPe32, type BuiltPe } from './peBuilder';
 
-/** fixture 自包含的 stdcall ABI（参数字节数）；与游戏 ABI 表解耦，避免互相拖累。 */
+/** Self-contained fixture stdcall ABI (argument byte counts), decoupled from game ABI tables to avoid mutual interference. */
 export const FIXTURE_ABI: Record<string, number> = {
   'KERNEL32.DLL!GetVersion': 0,
   'KERNEL32.DLL!GetCommandLineA': 0,
@@ -51,7 +48,7 @@ export const FIXTURE_ABI: Record<string, number> = {
 };
 
 export const FIXTURE_MODULE_NAME = 'fixture.exe';
-/** 挂载给 fixture 读取的文件路径与内容（C:\GAME\hello.txt = "HELLO"）。 */
+/** Mounted fixture file path and contents (C:\GAME\hello.txt = "HELLO"). */
 export const FIXTURE_FILE_PATH = 'C:\\GAME\\hello.txt';
 export const FIXTURE_FILE_BYTES = new Uint8Array([0x48, 0x45, 0x4c, 0x4c, 0x4f]);
 
@@ -64,13 +61,13 @@ const MEM_RELEASE = 0x8000;
 const GENERIC_READ = 0x8000_0000;
 const OPEN_EXISTING = 3;
 const WIN98_VERSION = 0x8000_0a04;
-/** "HELL" 的小端 dword（_lread 全量读取校验）。 */
+/** Little-endian DWORD for "HELL" (full _lread validation). */
 const HELLO_HEAD_DWORD = 0x4c4c_4548;
 
 const REG = { eax: 0, ecx: 1, edx: 2, ebx: 3, esp: 4, ebp: 5, esi: 6, edi: 7 } as const;
 type Reg32 = keyof typeof REG;
 
-/** 极简 x86 发射器：只覆盖 fixture 程序用到的指令，跳转用 rel32 标签修补。 */
+/** Minimal x86 emitter covering only fixture instructions; patch jumps through rel32 labels. */
 class X86Emitter {
   private bytes: number[] = [];
   private labels = new Map<string, number>();
@@ -118,7 +115,7 @@ class X86Emitter {
   movRegImm(reg: Reg32, value: number): this {
     return this.u8(0xb8 + REG[reg]).u32(value);
   }
-  /** mov dst, src（89 /r，reg 字段 = src）。 */
+  /** mov dst, src (89 /r, reg field = src). */
   movRegReg(dst: Reg32, src: Reg32): this {
     return this.u8(0x89).u8(0xc0 | (REG[src] << 3) | REG[dst]);
   }
@@ -129,7 +126,7 @@ class X86Emitter {
     return this.u8(0x31).u8(0xc0);
   }
   cmpEaxImm(value: number): this {
-    // imm8 可表示的值用 83 /7 短形式，其余 3D imm32。
+    // Use the short 83 /7 form for values representable by imm8; otherwise use 3D imm32.
     if (value >= -0x80 && value <= 0x7f) return this.u8(0x83).u8(0xf8).u8(value);
     return this.u8(0x3d).u32(value);
   }
@@ -162,7 +159,7 @@ class X86Emitter {
   movEaxEspPlus(offset: number): this {
     return this.u8(0x8b).u8(0x44).u8(0x24).u8(offset);
   }
-  /** 条件跳转（0F 84 je / 85 jne / 82 jb / 83 jae …），rel32 后补。 */
+  /** Conditional jumps (0F 84 je / 85 jne / 82 jb / 83 jae, etc.); patch rel32 later. */
   jcc(opcode: number, label: string): this {
     this.u8(0x0f).u8(opcode);
     this.rel32Fixups.push({ at: this.bytes.length, label });
@@ -202,7 +199,7 @@ class X86Emitter {
   }
 }
 
-/** .data 段内容构造器：标签记录偏移，绝对地址由调用方按 dataBase 换算。 */
+/** .data content builder: labels record offsets, and callers derive absolute addresses from dataBase. */
 class DataBuilder {
   private bytes: number[] = [];
   private labels = new Map<string, number>();
@@ -243,8 +240,7 @@ export interface FixturePe {
 }
 
 /**
- * 两遍构造：第一遍用占位 IAT 地址发射（长度与最终一致），从 buildPe32
- * 拿到真实 IAT 布局后第二遍定稿。
+ * Two-pass construction: first emit with placeholder IAT addresses at the final length; finalize on the second pass after buildPe32 supplies the actual IAT layout.
  */
 export function buildFixturePe(): FixturePe {
   const imports = [
@@ -292,7 +288,7 @@ export function buildFixturePe(): FixturePe {
     const code = new X86Emitter();
     const data = new DataBuilder();
 
-    // ── .data 布局 ──
+    // -- .data layout --
     data.label('WNDCLASS').reserve(40);
     data.label('CLASS_NAME').asciiz('FIXTURE');
     data.label('WINDOW_TITLE').asciiz('Fixture');
@@ -307,12 +303,12 @@ export function buildFixturePe(): FixturePe {
     data.label('MSG').reserve(28);
 
     const imageBase = 0x0040_0000;
-    const textBase = imageBase + 0x1000; // buildPe32 按声明顺序从 0x1000 排 section
+    const textBase = imageBase + 0x1000; // buildPe32 lays out sections from 0x1000 in declaration order
     const dataBase = imageBase + 0x2000;
     const D = (name: string): number => dataBase + data.offsetOf(name);
 
     const failCodes = new Set<number>();
-    /** 每个失败点跳到独立 fail 块：push 步骤码后 ExitProcess，host 按退出码定位。 */
+    /** Each failure jumps to its own fail block, pushing the step code before ExitProcess so the host can identify the failure. */
     const fail = (code: number): string => {
       failCodes.add(code);
       return `fail_${code}`;
@@ -339,7 +335,7 @@ export function buildFixturePe(): FixturePe {
     code.jz(fail(3));
     code.movRegReg('ebx', 'eax');
 
-    // ── 4/5. HeapAlloc(hHeap, HEAP_ZERO_MEMORY, 64)：零初始化 + 写入回读 ──
+    // -- 4/5. HeapAlloc(hHeap, HEAP_ZERO_MEMORY, 64): zero initialization and write/readback --
     code.pushImm(64).pushImm(HEAP_ZERO_MEMORY).pushReg('ebx');
     code.callIat(K('HeapAlloc'));
     code.testEaxEax();
@@ -357,7 +353,7 @@ export function buildFixturePe(): FixturePe {
     code.cmpEaxImm(1);
     code.jne(fail(6));
 
-    // ── 7/8. VirtualAlloc(NULL, 0x1000, COMMIT|RESERVE, RW)：写入回读 ──
+    // -- 7/8. VirtualAlloc(NULL, 0x1000, COMMIT|RESERVE, RW): write/readback --
     code.pushImm(PAGE_READWRITE).pushImm(MEM_COMMIT_RESERVE).pushImm(0x1000).pushImm(0);
     code.callIat(K('VirtualAlloc'));
     code.testEaxEax();
@@ -374,7 +370,7 @@ export function buildFixturePe(): FixturePe {
     code.jne(fail(9));
 
     // ── 10-13. CRITICAL_SECTION：init → LockCount=-1；enter×2 → Recursion=2；
-    //    leave → 1；再 leave → LockCount 回 -1；delete。快速桩与 host 路径同断言。 ──
+    // leave -> 1; leave again -> LockCount returns to -1; delete. Same assertions for fast stubs and host paths. --
     code.pushImm(D('CS'));
     code.callIat(K('InitializeCriticalSection'));
     code.cmpDwordAbsImm(D('CS') + 4, 0xffff_ffff);
@@ -396,14 +392,14 @@ export function buildFixturePe(): FixturePe {
     code.pushImm(D('CS'));
     code.callIat(K('DeleteCriticalSection'));
 
-    // ── 14. _lopen("C:\GAME\hello.txt", OF_READ) → ebx=句柄 ──
+    // -- 14. _lopen("C:\GAME\hello.txt", OF_READ) -> ebx = handle --
     code.pushImm(0).pushImm(D('PATH_HELLO'));
     code.callIat(K('_lopen'));
     code.cmpEaxImm(-1);
     code.je(fail(14));
     code.movRegReg('ebx', 'eax');
 
-    // ── 15/16. _lread 全量 5 字节 == "HELLO" ──
+    // -- 15/16. Full 5-byte _lread == "HELLO" --
     code.pushImm(5).pushImm(D('BUF')).pushReg('ebx');
     code.callIat(K('_lread'));
     code.cmpEaxImm(5);
@@ -413,7 +409,7 @@ export function buildFixturePe(): FixturePe {
     code.cmpByteAbsImm(D('BUF') + 4, 0x4f); // 'O'
     code.jne(fail(16));
 
-    // ── 17. _llseek(1, FILE_BEGIN) == 1；再读 1 字节 == 'E'（镜像位置同步） ──
+    // -- 17. _llseek(1, FILE_BEGIN) == 1; read one more byte == 'E' (mirror-position synchronization) --
     code.pushImm(0).pushImm(1).pushReg('ebx');
     code.callIat(K('_llseek'));
     code.cmpEaxImm(1);
@@ -473,13 +469,13 @@ export function buildFixturePe(): FixturePe {
     code.jz(fail(22));
     code.movRegReg('ebx', 'eax');
 
-    // ── 23. SendMessageA(hwnd, WM_APP, 5, 0)：WndProc 同步回调返回 0x42 ──
+    // -- 23. SendMessageA(hwnd, WM_APP, 5, 0): synchronous WndProc callback returns 0x42 --
     code.pushImm(0).pushImm(5).pushImm(WM_APP).pushReg('ebx');
     code.callIat(U('SendMessageA'));
     code.cmpEaxImm(0x42);
     code.jne(fail(23));
 
-    // ── 24. SendMessageA(hwnd, WM_APP+1, 0, 0)：WndProc 尾调用 DefWindowProcA → 0 ──
+    // -- 24. SendMessageA(hwnd, WM_APP+1, 0, 0): WndProc tail-calls DefWindowProcA -> 0 --
     code
       .pushImm(0)
       .pushImm(0)
@@ -489,7 +485,7 @@ export function buildFixturePe(): FixturePe {
     code.testEaxEax();
     code.jnz(fail(24));
 
-    // ── 25. PostMessageA(hwnd, WM_USER, 0x11, 0) × 3，再 PostQuitMessage(0) ──
+    // -- 25. PostMessageA(hwnd, WM_USER, 0x11, 0) x3, then PostQuitMessage(0) --
     for (let i = 0; i < 3; i++) {
       code.pushImm(0).pushImm(0x11).pushImm(WM_USER).pushReg('ebx');
       code.callIat(U('PostMessageA'));
@@ -499,7 +495,7 @@ export function buildFixturePe(): FixturePe {
     code.pushImm(0);
     code.callIat(U('PostQuitMessage'));
 
-    // ── 消息泵：GetMessageA 返回 0（WM_QUIT）时退出 ──
+    // -- Message pump: exit when GetMessageA returns 0 (WM_QUIT) --
     code.label('msg_loop');
     code.pushImm(0).pushImm(0).pushImm(0).pushImm(D('MSG'));
     code.callIat(U('GetMessageA'));
@@ -510,21 +506,21 @@ export function buildFixturePe(): FixturePe {
     code.jmp('msg_loop');
     code.label('msg_done');
 
-    // ── 26/27. WndProc 计数校验：3 条 WM_USER，wParam 累计 0x11×3 ──
+    // -- 26/27. WndProc counter checks: three WM_USER messages, accumulated wParam = 0x11 x3 --
     code.cmpDwordAbsImm(D('COUNTER'), 3);
     code.jne(fail(26));
     code.cmpDwordAbsImm(D('WPARAM_SUM'), 0x33);
     code.jne(fail(27));
 
-    // ── 28. Sleep(1)：host delayMs 挂起/唤醒路径 ──
+    // -- 28. Sleep(1): host delayMs suspend/wake path --
     code.pushImm(1);
     code.callIat(K('Sleep'));
 
-    // ── 成功 ──
+    // -- Success --
     code.pushImm(0);
     code.callIat(K('ExitProcess'));
 
-    // ── 失败块：ExitProcess(步骤码) ──
+    // -- Failure blocks: ExitProcess(step code) --
     for (const code_ of [...failCodes].sort((a, b) => a - b)) {
       code.label(`fail_${code_}`);
       code.pushImm(code_);
@@ -547,12 +543,12 @@ export function buildFixturePe(): FixturePe {
     code.movRegImm('eax', 0x42);
     code.ret(16);
     code.label('wndproc_default');
-    // 参数已在栈上且顺序一致：尾调用 DefWindowProcA，由它的 ret 16 一并清理。
+    // Arguments are already on the stack in the same order: tail-call DefWindowProcA and let its ret 16 clean them up.
     code.jmpIat(U('DefWindowProcA'));
 
     const text = code.finalize();
 
-    // WNDCLASSA：+4 lpfnWndProc，+36 lpszClassName；其余字段为 0。
+    // WNDCLASSA: +4 lpfnWndProc, +36 lpszClassName; all other fields are zero.
     const wndclass = data.toBytes().slice();
     const wndprocAddress = textBase + code.labelOffset('wndproc');
     const classNameAddress = D('CLASS_NAME');
@@ -602,7 +598,7 @@ export function buildFixturePe(): FixturePe {
     ],
     imports,
   });
-  // 数据地址在发射时按固定 RVA 烘焙；section 排布若漂移必须在这里炸出来。
+  // Emission bakes data addresses from fixed RVAs; section-layout drift must fail here.
   if (built.sectionRva['.text'] !== 0x1000 || built.sectionRva['.data'] !== 0x2000) {
     throw new Error(`fixture section 布局假设被破坏: ${JSON.stringify(built.sectionRva)}`);
   }

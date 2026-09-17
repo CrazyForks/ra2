@@ -1,8 +1,8 @@
-/** 合成矩形帧 → 真实 Nomos Worker → 2× 整帧结果；不冒充游戏 FPS 测试。 */
+/** Synthetic rectangular frame -> real Nomos Worker -> full 2x frame; this is not a game FPS test. */
 import { chromium, expect } from '@playwright/test';
 const browser = await chromium.launch({ args: ['--no-sandbox', '--enable-unsafe-webgpu', '--use-angle=swiftshader'] });
 try {
-  const page = await browser.newPage({ ignoreHTTPSErrors: true });
+  const page = await browser.newPage({ locale: 'zh-CN', ignoreHTTPSErrors: true });
   await page.goto(process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15175');
   const result = await page.evaluate(async () => {
     const path = '/src/ui/pages/game/experiments/liveModel.ts';

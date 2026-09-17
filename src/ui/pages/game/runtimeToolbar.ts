@@ -1,3 +1,4 @@
+import { t } from '../../shared/i18n/translate';
 import type { ReShadeMode } from '../../../graphics/reshadePreset';
 import { toolbarState } from './state/uiState';
 import type { ToolbarModel } from './components/RuntimeToolbarView';
@@ -17,7 +18,7 @@ export interface RuntimeToolbar {
   setReShadeMode(mode: ReShadeMode): void;
   setUpscaleMode(mode: UpscaleMode): void;
   setMapsAvailable(available: boolean): void;
-  /** 选中时钟倍率（按钮点击与键盘快捷键 [ ] 共用）：同步 aria-pressed 并回调页面。 */
+  /** Select the clock multiplier for both buttons and [ ] shortcuts: synchronize aria-pressed and notify the page. */
   pressClockRate(rate: number): void;
   destroy(): void;
 }
@@ -37,11 +38,11 @@ export interface RuntimeToolbarCallbacks {
   onLiveModel?(file: File | null, modelId?: import('./experiments/modelProbe').LiveModelId): Promise<void>;
   onQuickStart?(): Promise<void>;
   onDownloadSave(): Promise<void>;
-  /** true 表示导入完成并即将重载；false 表示用户取消。 */
+  /** true means import completed and reload is imminent; false means user cancellation. */
   onUploadSave(file: File): Promise<boolean>;
 }
 
-/** 高频计数保留在控制器，500ms 采样后才通知 React；不让组件参与逐帧/逐 hypercall 更新。 */
+/** Keep high-frequency counters in the controller and notify React only after 500ms sampling; components do not handle per-frame/per-hypercall updates. */
 export function installRuntimeToolbar(
   callbacks: RuntimeToolbarCallbacks,
   canvas: HTMLCanvasElement,
@@ -55,12 +56,12 @@ export function installRuntimeToolbar(
     longTaskMs = 0;
   let sampleStarted = performance.now();
   const label = /llvmpipe|swiftshader|software|mesa offscreen/i.test(rendererDetail)
-    ? `${rendererBackend}（软件）`
+    ? t('{0}（软件）', rendererBackend)
     : rendererBackend;
   const model: ToolbarModel = {
     title: 'RA2 VM',
-    fps: `${label} · VM -- · 显示 --`,
-    performance: 'HC --/s · 阻塞 --',
+    fps: t('{0} · VM -- · 显示 --', label),
+    performance: t('HC --/s · 阻塞 --'),
     performanceTitle: '',
     rendererDetail,
     cheatGame: null,
@@ -89,7 +90,7 @@ export function installRuntimeToolbar(
     try {
       localStorage.setItem('vm-clock-rate', String(rate));
     } catch {
-      /* 隐私模式只影响下次恢复。 */
+      /* Private mode affects only restoration next time. */
     }
     callbacks.onClockRate(rate);
     publish();
@@ -101,7 +102,7 @@ export function installRuntimeToolbar(
       callbacks.onClockRate(stored);
     }
   } catch {
-    /* 本地存储可选。 */
+    /* Local storage is optional. */
   }
   const observer =
     typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes.includes('longtask')
@@ -114,12 +115,17 @@ export function installRuntimeToolbar(
   const timer = window.setInterval(() => {
     const now = performance.now(),
       elapsed = Math.max(1, now - sampleStarted);
-    model.fps = `${label} · VM ${((logicFrames * 1000) / elapsed).toFixed(1)} · 显示 ${((presentedFrames * 1000) / elapsed).toFixed(1)}`;
+    model.fps = t(
+      '{0} · VM {1} · 显示 {2}',
+      label,
+      ((logicFrames * 1000) / elapsed).toFixed(1),
+      ((presentedFrames * 1000) / elapsed).toFixed(1),
+    );
     const calls = ((hypercalls * 1000) / elapsed).toFixed(0);
     const blocked = Math.min(100, (Math.max(longTaskMs, Math.max(0, elapsed - 550)) * 100) / elapsed).toFixed(0);
-    model.performance = `HC ${calls}/s · 阻塞 ${blocked}%`;
-    const summary = `${calls} HC/s · 主线程阻塞 ${blocked}%`;
-    model.performanceTitle = `${summary}；此值表示页面主线程，不是整机 CPU 占用`;
+    model.performance = t('HC {0}/s · 阻塞 {1}%', calls, blocked);
+    const summary = t('{0} HC/s · 主线程阻塞 {1}%', calls, blocked);
+    model.performanceTitle = t('{0}；此值表示页面主线程，不是整机 CPU 占用', summary);
     callbacks.onPerformance(summary);
     hypercalls = logicFrames = presentedFrames = longTaskMs = 0;
     sampleStarted = now;

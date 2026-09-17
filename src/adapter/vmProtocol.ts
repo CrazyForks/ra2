@@ -8,10 +8,11 @@ import type { VmCallBatch, VmPhase } from '../app/session/runtimeEvents';
 import type { GameResolution } from '../games/resolution';
 import type { Ra2NetworkConfig } from '../games/ra2/networkTransport';
 
-/** 主线程 ↔ worker 的消息协议。数组字段（PCM/帧/EXE）走 transfer，靠单通道 FIFO 保序。 */
+/** Main-thread/Worker message protocol. Array fields (PCM/frames/EXE) transfer ownership; a single FIFO channel preserves order. */
 
-/** 随 init 消息传给 worker 的游戏文件（会话包/叠加层）。字节缓冲随消息 transfer，
- *  主线程在组装时已复制出独立缓冲，transfer 不影响页面持有的 provider。 */
+/**
+ * Game files sent to the Worker with init (session packages/overlays). Buffers transfer with the message; the main thread already made independent copies, so transfer cannot affect the page's provider.
+ */
 export interface GameFileEntry {
   path: string;
   bytes: Uint8Array;
@@ -19,36 +20,36 @@ export interface GameFileEntry {
 
 export interface VmInitConfig {
   startupPage?: string;
-  /** 文件层后端：目录句柄（transfer/克隆）、会话包内存文件（在线 ZIP 解压产物
-   *  随消息 transfer）或 dev 的 HTTP 提供器标记。
-   *  provider 实例不可结构化克隆，worker 内重建并重新 discover（游戏 sourceTransform 随之重建）。
-   *  directory 的 overlays 是目录之上的在线包叠加层（最内层在前，后层覆盖前层），
-   *  与页面侧的 Overlay 链读取优先级一致。 */
+  /**
+   * File backend: directory handles (transferred/cloned), session-package memory files (online ZIP extraction results transferred with the message), or a development HTTP provider marker.
+   * Provider instances cannot be structured-cloned; rebuild and rediscover in the Worker, also rebuilding the game's sourceTransform. Directory overlays contain online-package layers above the directory, innermost first with later layers overriding earlier ones, matching the page's Overlay-chain precedence.
+   */
   provider:
     | { kind: 'directory'; handle: FileSystemDirectoryHandle; overlays?: GameFileEntry[] }
     | { kind: 'memory'; files: GameFileEntry[]; label: string }
-    /** 两层加载：完整目录先传，字节按请求经端口读取，未解压文件等待生产者。 */
+    /** Two-stage loading: send the complete directory first, then read bytes through the port on demand; unextracted files wait for their producer. */
     | { kind: 'port'; port: MessagePort; names: string[]; label: string }
     | { kind: 'http' };
-  /** 多游戏目录时选中项；worker 内重新 discover 后按此选择。 */
+  /** Selected game in a multi-game directory; the Worker uses this after rediscovery. */
   preferredGameId: SupportedGameId;
-  /** 页面实际选中的 EXE；路径相对底层 provider 根。Worker 发现游戏前强制覆盖，
-   * 不能重新读取开发目录/授权目录的同名旧版。缓冲为独立 transfer 副本。 */
+  /**
+   * The EXE actually selected by the page, relative to the underlying provider root. Overlay before Worker discovery so it cannot reread an old same-named executable from the development/authorized directory. The buffer is an independent transfer copy.
+   */
   selectedExecutable?: GameFileEntry;
-  /** 自定义地图/文本包，优先于游戏本体；不依赖底层是 HTTP、目录还是内存包。 */
+  /** Custom map/text packages take precedence over the base game, regardless of HTTP, directory, or memory backends. */
   additionalFiles?: GameFileEntry[];
-  /** 读取原版 INI 后仅在内存 provider 层覆盖的启动分辨率；不写回用户目录。 */
+  /** Startup resolution applied only in the memory-provider overlay after reading the original INI; never write to the user's directory. */
   resolution?: GameResolution;
-  /** Worker 重建 provider 后覆盖 INI，HTTP 开发版也不能丢失用户名。 */
+  /** Overlay the INI after rebuilding the Worker provider; development HTTP mode must retain the player name too. */
   playerName?: string;
-  /** 显式启用 RA2 联机时使用的房间与 EXE SHA-256；缺省表示单机。 */
+  /** Room and EXE SHA-256 for explicitly enabled RA2 networking; omitted means single-player. */
   ra2Network?: Ra2NetworkConfig;
-  /** 页面持有 WS 连接，Worker 经端口收发；端口随 init transfer。 */
+  /** The page owns the WS connection; the Worker sends and receives through a port transferred with init. */
   relayPort?: MessagePort;
   fastFileRead: boolean;
   clockRate: number;
   masterVolume: number;
-  /** F2/?debug 调用热点；关闭时 worker 每次 HC 只做整数累加。 */
+  /** F2/?debug call hotspots; when disabled, the Worker only increments an integer per HC. */
   traceCalls: boolean;
 }
 
@@ -66,9 +67,9 @@ export type MainToWorkerMessage =
   | { type: 'guest-speed-flag'; value: number; requestId: number }
   | { type: 'mem-record-start'; requestId: number }
   | { type: 'mem-record-stop'; requestId: number }
-  /** 主线程已经在显示刷新边界消费该帧；worker 据此释放下一帧。 */
+  /** The main thread consumed this frame at a display-refresh boundary; the Worker may release the next frame. */
   | { type: 'frame-ack'; frameId: number }
-  /** 页面不再引用的上一帧；与 ACK 分开，当前画面还需用于鼠标重绘。 */
+  /** Previous frame no longer referenced by the page; separate from ACK because the current frame is still needed for cursor redraws. */
   | { type: 'recycle-frame'; buffer: ArrayBuffer }
   | { type: 'flush'; requestId: number }
   | { type: 'control'; action: 'start'; requestId: number }
@@ -102,8 +103,9 @@ export type WorkerToMainMessage =
   | { type: 'control-done'; action: 'start' | 'stop'; requestId: number }
   | { type: 'error'; message: string; requestId?: number };
 
-/** 音频操作镜像 Win32AudioSink（win32.ts:105-118）。getState 恒不出现：
- *  跨线程无法同步回读，ProxyAudioSink.getState 返回 null，由 shim 本地记账兜底。 */
+/**
+ * Audio operations mirror Win32AudioSink (win32.ts:105-118). getState is never sent: synchronous cross-thread reads are unavailable, so ProxyAudioSink.getState returns null and the shim falls back to local accounting.
+ */
 export type AudioOp =
   | { op: 'createBuffer'; id: number; byteLength: number; format: PcmWaveFormat }
   | { op: 'duplicateBuffer'; sourceId: number; destinationId: number }
@@ -118,7 +120,7 @@ export type AudioOp =
   | { op: 'releaseBuffer'; id: number };
 
 let nextRequestId = 1;
-/** 单调递增 requestId（会话内唯一；两线程各自维护不影响关联）。 */
+/** Monotonically increasing requestId, unique within a session; independent counters on each thread do not affect correlation. */
 export function createRequestId(): number {
   return nextRequestId++;
 }

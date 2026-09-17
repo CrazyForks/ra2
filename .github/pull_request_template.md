@@ -1,16 +1,16 @@
-## 改动与原因
+## Change and motivation
 
-<!-- 关联问题；说明影响范围。 -->
+<!-- Link the issue and describe the affected scope. -->
 
-## 验证证据
+## Verification evidence
 
-- [ ] `pnpm run check` 通过
-- [ ] bug 修复附回归测试，并说明修复前的失败方式
-- [ ] 已按 [测试准入规则](../docs/TESTING.md) 检查受影响路径
+- [ ] `pnpm run check` passes
+- [ ] Bug fixes include a regression and describe the failure before the fix
+- [ ] Affected paths were checked against [Testing requirements](../docs/TESTING.md)
 
-实际运行的命令与结果：
+Commands actually run and their results:
 
-<!-- 涉及真实游戏时注明 RA2 / YR / MOD 版本，不上传游戏资源。
-     涉及性能时附同环境前后测量，不能只写“更快”。 -->
+<!-- For real games, identify RA2 / YR / MOD versions without uploading game resources.
+     For performance, include before/after measurements in the same environment, not just "faster". -->
 
-未运行的检查、原因及风险（无则写“无”）：
+Checks not run, reasons, and risks (write "None" if applicable):

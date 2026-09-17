@@ -1,31 +1,31 @@
-; RA2 VM 迷你固件（v86 自定义 BIOS，64KB，复位向量在末尾）
-; 流程：复位(0xFFFF0) → 实模式初始化 → 保护模式(无分页, ring0) → IDT → 跳入 host 解析的 PE 入口
-; 内存布局约定（见 vm.ts）：
-;   0x00060000-0x00060FFF  = hypercall/异常共享页
-;   0x00070000-0x00070FFF  = 最小 TEB（FS 段基址）
-;   0x00080000-0x000BFFFF  = 静态 Win32 import 桩
-;   0x000C0000-0x000EFFFF  = 动态 DLL/COM/线程退出桩（第一段）
-;   0x000F0000-0x000FFFFF  = 固件、GDT、IDT，禁止动态分配
-;   0x00100000-0x001FFFFF  = 动态桩（第二段）
-;   0x00220000-0x0025FFFF  = 64 个独立回调槽，每槽 4KB
-;   0x00073C00-0x00073CFF  = 回调槽 owner 表（0=空闲，其他=线程 id+1）
-;   0x00071000-0x00072FFF  = 高速 _lread 句柄表（仅启用时使用）
-;   0x00400000+            = RA2/YR PE 映像
-;   host 通过 0x60058 指定游戏栈顶（默认 0x700000；大 PE 可后移）
-;   栈顶+                  = shim 堆（VirtualAlloc 区独立分配）
+; RA2 VM minimal firmware (custom v86 BIOS, 64 KB, reset vector at the end)
+; Flow: reset (0xFFFF0) -> real-mode initialization -> protected mode (no paging, ring 0) -> IDT -> host-parsed PE entry
+; Memory layout contract (see vm.ts):
+;   0x00060000-0x00060FFF  = hypercall/exception shared page
+;   0x00070000-0x00070FFF  = minimal TEB (FS segment base)
+;   0x00080000-0x000BFFFF  = static Win32 import stubs
+;   0x000C0000-0x000EFFFF  = dynamic DLL/COM/thread-exit stubs (first region)
+;   0x000F0000-0x000FFFFF  = firmware, GDT, IDT; no dynamic allocation
+;   0x00100000-0x001FFFFF  = dynamic stubs (second region)
+;   0x00220000-0x0025FFFF  = 64 independent callback slots, 4 KB each
+;   0x00073C00-0x00073CFF  = callback-slot owner table (0 = free, otherwise thread ID + 1)
+;   0x00071000-0x00072FFF  = fast _lread handle table (only when enabled)
+;   0x00400000+            = RA2/YR PE image
+;   The host specifies the game stack top at 0x60058 (default 0x700000; movable for large PEs).
+;   Stack top+            = shim heap (VirtualAlloc regions allocated independently)
 BITS 16
 ORG 0xF0000
 
 start16:
     cli
-    ; BIOS 位于物理地址 0xF0000。实模式用 DS=0xF000 读取固件内的 GDTR。
+    ; BIOS resides at physical address 0xF0000. Real mode reads the firmware GDTR with DS=0xF000.
     mov ax, 0xF000
     mov ds, ax
     xor ax, ax
     mov es, ax
     mov ss, ax
     mov sp, 0x7000
-    ; 把 8259 IRQ 重映射到 IDT 0x20/0x28，避免 IRQ0..7 与 CPU 异常向量重叠。
+    ; Remap 8259 IRQs to IDT 0x20/0x28 so IRQ0..7 do not overlap CPU exception vectors.
     mov al, 0x11
     out 0x20, al
     out 0xA0, al
@@ -43,12 +43,12 @@ start16:
     mov al, 0xFF
     out 0x21, al
     out 0xA1, al
-    ; 载入 GDT → 保护模式
+    ; Load GDT -> protected mode
     lgdt [gdtr - $$]
     mov eax, cr0
     or eax, 1
     mov cr0, eax
-    ; 平坦代码段基址为 0，因此 offset 必须是完整物理地址 0xFxxxx。
+    ; The flat code segment has base 0, so the offset must be the full physical address 0xFxxxx.
     jmp dword 0x08:start32
 
 BITS 32
@@ -61,8 +61,8 @@ start32:
     mov ax, 0x18
     mov fs, ax
     lidt [idtr]
-    ; hypercall 桩用 COM1 RX(IRQ4) 从 HLT 中唤醒；IRQ0 提供 100Hz Win32
-    ; 客体线程抢占节拍。其余 IRQ 保持屏蔽。
+    ; Hypercall stubs wake from HLT through COM1 RX (IRQ4); IRQ0 provides 100 Hz Win32
+    ; guest-thread preemption. All other IRQs remain masked.
     mov dx, 0x3F9
     mov al, 1
     out dx, al
@@ -74,25 +74,25 @@ start32:
     out 0x40, al
     mov al, 0xEE                  ; master PIC: unmask IRQ0 + IRQ4
     out 0x21, al
-    ; 游戏栈默认 1MB、向下增长。RA2 映像延伸到 0xB46000，host 会把栈顶
-    ; 后移到 0xD00000；普通游戏仍写入 0x700000。
+    ; The game stack defaults to 1 MB and grows downward. RA2's image reaches 0xB46000,
+    ; so the host moves the stack top to 0xD00000; ordinary games still use 0x700000.
     mov esp, [0x60058]
-    ; 最小 TEB：SEH 链尾 / 栈顶 / TEB 自指针。
+    ; Minimal TEB: SEH chain terminator / stack top / TEB self pointer.
     mov dword [fs:0], -1
     mov [fs:4], esp
     mov dword [fs:0x18], 0x70000
     cli
     cld
-    ; 跳入 host 从 PE optional header 解析的入口（WinMainCRTStartup 类）。
+    ; Jump to the entry parsed by the host from the PE optional header (such as WinMainCRTStartup).
     mov eax, [0x60044]
     call eax
 hang:
-    ; 入口返回后停机：发布标记让 host 识别为「游戏已退出」（ExitProcess 之外的路径）。
+    ; Halt after entry returns; publish a marker so the host recognizes game exit outside ExitProcess.
     mov dword [0x6004c], 1
     hlt
     jmp hang
 
-; ── GDT：0=null 1=代码(0x08) 2=数据(0x10)，均为 4GB 平坦 ring0 ──
+; -- GDT: 0 = null, 1 = code (0x08), 2 = data (0x10); both 4 GB flat ring 0 --
 align 16
 gdt:
     dq 0
@@ -103,9 +103,9 @@ gdt:
 gdtr: dw 31
       dd gdt
 
-; ── IDT：CPU 异常停机并把现场发布到共享页；IRQ 仅 EOI ──
-; 不能把异常当 IRQ 直接 iret：#GP/#PF 等会额外压入 error code，旧处理器
-; 会把它误当 EIP，继而产生“CS selector is invalid”二次故障。
+; -- IDT: CPU exceptions halt and publish context to the shared page; IRQs only EOI --
+; Do not iret from exceptions as if they were IRQs: #GP/#PF and others push an extra error code.
+; The old handler mistook it for EIP, causing a secondary "CS selector is invalid" fault.
 %macro EXCEPTION_NO_ERROR 1
 exception_%1:
     push dword 0
@@ -153,7 +153,7 @@ EXCEPTION_WITH_ERROR 30
 EXCEPTION_NO_ERROR 31
 
 exception_common:
-    ; 栈：vector, error, EIP, CS, EFLAGS。status 最后写，作为发布信号。
+    ; Stack: vector, error, EIP, CS, EFLAGS. Write status last as the publication signal.
     mov [0x60028], eax
     mov [0x6002C], ecx
     mov [0x60030], edx
@@ -182,11 +182,11 @@ exception_common:
 irq_common:
     push eax
     push dx
-    ; 读走 COM1 RX 字节。UART 的 IRQ4 是电平触发：host 的唤醒字节只要没被
-    ; 客体桩及时读走，IRQ 线就永久拉高，8259 每次 EOI 后重新触发中断，
-    ; CPU 会被钉死在本处理函数里（表现为游戏无交互地卡死）。这里无条件
-    ; 排空 RX，让任何残留字节都只产生一次无害的中断。
-    ; 0x3F8 超出 imm8 范围，必须经 DX 间接访问并保存 DX。
+    ; Drain COM1 RX bytes. UART IRQ4 is level-triggered: if the guest stub does not promptly read
+    ; the host wake byte, the IRQ line stays high and the 8259 retriggers after every EOI,
+    ; trapping the CPU in this handler and freezing game interaction. Unconditionally drain RX
+    ; so any leftover bytes cause only one harmless interrupt.
+    ; 0x3F8 exceeds imm8 range; access it indirectly through DX and preserve DX.
     mov dx, 0x3F8
     in al, dx
     pop dx
@@ -196,35 +196,35 @@ irq_common:
     pop eax
     iret
 
-; 100Hz PIT 抢占点。host 在 0x73900 写每条线程的运行状态：
-; 0=不可运行，1=可运行，>=2=(唤醒 tick + 2)。上下文帧统一为
-; pushad + EFLAGS + continuation，因而和 import stub 的协作切换可互换。
-; PIT 与主动让出共用上下文布局，软件中断不推进时钟或向 PIC 发送 EOI。
+; 100 Hz PIT preemption point. The host writes each thread's run state at 0x73900:
+; 0 = not runnable, 1 = runnable, >=2 = wake tick + 2. The common context frame is
+; pushad + EFLAGS + continuation, interchangeable with import-stub cooperative switching.
+; PIT and voluntary yielding share the context layout; software interrupts neither advance time nor send PIC EOI.
 %macro SAVE_INTERRUPT_CONTEXT 0
-    ; 把 CPU 的 EIP,CS,EFLAGS 中断帧改写成 EFLAGS,EIP 返回帧，并保持
-    ; 最终 ESP 与 iretd 完全相同（丢弃 CS 的 4 字节槽）。
+    ; Rewrite the CPU EIP,CS,EFLAGS interrupt frame into an EFLAGS,EIP return frame,
+    ; leaving final ESP identical to iretd by discarding the 4-byte CS slot.
     push eax
     push ecx
     mov eax, [esp + 8]            ; EIP
     mov ecx, [esp + 16]           ; EFLAGS
-    mov [esp + 16], eax           ; 目标 continuation（原 EFLAGS 槽）
-    mov [esp + 12], ecx           ; 目标 EFLAGS（原 CS 槽）
+    mov [esp + 16], eax           ; Target continuation (original EFLAGS slot)
+    mov [esp + 12], ecx           ; Target EFLAGS (original CS slot)
     pop ecx
     pop eax
-    add esp, 4                    ; ESP 现在指向 EFLAGS,EIP
+    add esp, 4                    ; ESP now points to EFLAGS,EIP
     pushad
 
 %endmacro
 
 irq_timer:
-    ; QPC 频率对外声明为 1000Hz。由 100Hz PIT 推进共享 64-bit 计数器，
-    ; 快速 QPC 桩只读取它，避免忙循环按查询次数伪造时间流逝。
+    ; QPC reports a 1000 Hz frequency. The 100 Hz PIT advances the shared 64-bit counter;
+    ; fast QPC stubs only read it, preventing busy-loop queries from fabricating elapsed time.
     add dword [0x6005C], 10
     adc dword [0x60060], 0
-    ; import stub 正在使用全局 request/return 共享页时只能 EOI，不能切换到
-    ; 另一线程发起第二个请求。host 会先清 request 再发 COM1 IRQ，因此不能
-    ; 用 request=0 作为释放信号：IRQ4 iret 与桩内 cli 之间仍有一个指令窗。
-    ; importActive 要等返回 EAX/EDX 进入线程上下文后才由桩清零。
+    ; While an import stub uses the global request/return shared page, only EOI is allowed;
+    ; switching threads could issue a second request. The host clears request before sending COM1 IRQ,
+    ; so request=0 cannot signal release: one instruction window remains between IRQ4 iret and the stub's cli.
+    ; The stub clears importActive only after returned EAX/EDX enter the thread context.
     cmp dword [0x6008C], 0
     jne .request_active
     SAVE_INTERRUPT_CONTEXT
@@ -240,8 +240,8 @@ irq_timer:
     pop eax
     iret
 
-; INT 0x30：Sleep(0) 主动让出；无其他就绪线程时直接恢复调用者。
-; importActive 仍拥有共享返回页，不能在此窗口切换线程。
+; INT 0x30: Sleep(0) voluntarily yields; resume the caller directly if no other thread is ready.
+; importActive still owns the shared return page; do not switch threads in this window.
 yield_thread:
     cmp dword [0x6008C], 0
     jne .return
@@ -257,7 +257,7 @@ schedule_thread:
     jbe .restore
     mov edx, ebx
     mov esi, ecx
-    dec esi                       ; 最多检查其余 count-1 条线程
+    dec esi                       ; Check at most the other count-1 threads
 .next:
     inc edx
     cmp edx, ecx
@@ -271,7 +271,7 @@ schedule_thread:
     jb .miss
     sub edi, 2                    ; absolute wake tick
     mov eax, [0x73A00]
-    sub eax, edi                  ; 有符号差支持 uint32 tick 回绕
+    sub eax, edi                  ; Signed difference handles uint32 tick wraparound
     js .miss
     mov dword [0x73900 + edx*4], 1
     jmp .switch
@@ -281,9 +281,9 @@ schedule_thread:
     jmp .restore
 
 .switch:
-    ; 保存当前线程的统一上下文、x87/MMX 状态和最小 TEB/LastError。
-    ; 老版 Bink 解码器大量使用 MMX；MMX 与 x87 共用寄存器文件，若仅保存通用
-    ; 寄存器，PIT 抢占后恢复另一线程会破坏解码器状态。
+    ; Save the current thread's common context, x87/MMX state, and minimal TEB/LastError.
+    ; Legacy Bink decoders use MMX heavily. MMX shares the x87 register file, so preserving
+    ; only general registers corrupts decoder state when PIT preemption resumes another thread.
     mov [0x73400 + ebx*4], esp
     shl ebx, 7
     fnsave [0x78000 + ebx]
@@ -335,16 +335,16 @@ idt:
 %rep 15
     IDT_GATE irq_common
 %endrep
-    IDT_GATE yield_thread         ; 0x30，非硬件 IRQ
+    IDT_GATE yield_thread         ; 0x30, not a hardware IRQ
 %rep 207
     IDT_GATE irq_common
 %endrep
 idtr: dw 256*8 - 1
       dd idt
 
-; ── 复位向量 ──
+; -- Reset vector --
 times 0xFFF0 - ($-$$) db 0
-    ; 复位时默认 16-bit；显式写 16:16 far jump，避免 NASM 因 ORG 选成 16:32。
+    ; Reset defaults to 16-bit mode; explicitly emit a 16:16 far jump so NASM does not choose 16:32 due to ORG.
     db 0xEA
     dw start16 - $$
     dw 0xF000

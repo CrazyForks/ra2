@@ -1,8 +1,7 @@
 /**
- * RA2/YR PE32 载入器。
+ * RA2/YR PE32 loader.
  *
- * 这不是 Windows 模拟器：它只做 Windows loader 的最小部分，把 PE 映像放到
- * v86 的客体内存，然后把 IAT 改写为同步 hypercall 桩。Win32 语义由 JS host 实现。
+ * Implements only the minimal Windows-loader subset: place the PE image in v86 guest memory and replace IAT entries with synchronous hypercall stubs. The JS host implements Win32 semantics; this is not a Windows emulator.
  */
 
 export const HYPERCALL_PAGE = 0x0006_0000;
@@ -10,9 +9,9 @@ export const HYPERCALL_STACK = HYPERCALL_PAGE + 0x00;
 export const HYPERCALL_EAX = HYPERCALL_PAGE + 0x04;
 export const HYPERCALL_EDX = HYPERCALL_PAGE + 0x08;
 export const HYPERCALL_REQUEST = HYPERCALL_PAGE + 0x0c;
-/** 用 COM1 输出事件立即唤醒 host，避免每次 hypercall 等待定时轮询。 */
+/** Wake the host immediately through COM1 output events instead of waiting for polling on every hypercall. */
 export const HYPERCALL_NOTIFY_PORT = 0x03f8;
-/** 0=无异常，否则为 CPU vector + 1（由 boot.asm 最后发布）。 */
+/** 0 means no exception; otherwise CPU vector + 1, published last by boot.asm. */
 export const HYPERCALL_EXCEPTION = HYPERCALL_PAGE + 0x10;
 export const HYPERCALL_EXCEPTION_ERROR = HYPERCALL_PAGE + 0x14;
 export const HYPERCALL_EXCEPTION_EIP = HYPERCALL_PAGE + 0x18;
@@ -26,40 +25,39 @@ export const HYPERCALL_EXCEPTION_EBX = HYPERCALL_PAGE + 0x34;
 export const HYPERCALL_EXCEPTION_EBP = HYPERCALL_PAGE + 0x38;
 export const HYPERCALL_EXCEPTION_ESI = HYPERCALL_PAGE + 0x3c;
 export const HYPERCALL_EXCEPTION_EDI = HYPERCALL_PAGE + 0x40;
-/** Host 解析 PE 后写入的真实 AddressOfEntryPoint，供通用启动固件跳转。 */
+/** Actual AddressOfEntryPoint written by the host after PE parsing, used by generic boot firmware. */
 export const HYPERCALL_ENTRY = HYPERCALL_PAGE + 0x44;
-/** 已预留且尚未返回的回调桥总数（包括尚未开始执行的桥）。 */
+/** Total reserved callback bridges not yet returned, including bridges not yet started. */
 export const HYPERCALL_CALLBACK_DEPTH = HYPERCALL_PAGE + 0x48;
-/** 固件停机循环标记：PE 入口返回后 hang 写 1（host 据此把静默停机当作退出）。 */
+/** Firmware halt-loop marker: hang writes 1 after PE entry returns, letting the host recognize silent halts as exit. */
 export const HYPERCALL_HALTED = HYPERCALL_PAGE + 0x4c;
-/** 跳板桥回调后把客体回调的 EAX 存这里（诊断用：枚举回调的 BOOL 返回值）。 */
+/** Store guest callback EAX after trampoline return for diagnostics, including enumeration callback BOOL results. */
 export const HYPERCALL_CALLBACK_RESULT = HYPERCALL_PAGE + 0x50;
-/** Host 为当前游戏选择的主线程栈顶；大 PE 可避开原固定栈区。 */
+/** Host-selected main-thread stack top for the current game; large PEs can avoid the old fixed stack region. */
 export const HYPERCALL_STACK_TOP = HYPERCALL_PAGE + 0x58;
-/** 客体内 QueryPerformanceCounter 的 64-bit 单调计数器（1 tick = 1ms）。 */
+/** 64-bit monotonic guest QueryPerformanceCounter, with 1 tick = 1ms. */
 export const HYPERCALL_QPC_LOW = HYPERCALL_PAGE + 0x5c;
 export const HYPERCALL_QPC_HIGH = HYPERCALL_PAGE + 0x60;
-/** 客体/host 共享的 Win32 LastError。 */
+/** Win32 LastError shared by guest and host. */
 export const HYPERCALL_LAST_ERROR = HYPERCALL_PAGE + 0x64;
-/** 协作式客体线程调度：当前/下一线程 id 与 API 返回后的继续地址。 */
+/** Cooperative guest-thread scheduling: current/next thread IDs and API-return continuation address. */
 export const HYPERCALL_THREAD_CURRENT = HYPERCALL_PAGE + 0x68;
 export const HYPERCALL_THREAD_NEXT = HYPERCALL_PAGE + 0x6c;
 export const HYPERCALL_THREAD_CONTINUATION = HYPERCALL_PAGE + 0x70;
-/** PIT 抢占调度与 host 共用的线程数。 */
+/** Thread count shared by PIT preemption and the host. */
 export const HYPERCALL_THREAD_COUNT = HYPERCALL_PAGE + 0x74;
-/** Win32 光标显示计数器（ShowCursor 的返回值；>=0 表示可见）。 */
+/** Win32 cursor display count returned by ShowCursor; >=0 means visible. */
 export const HYPERCALL_CURSOR_COUNT = HYPERCALL_PAGE + 0x78;
-/** PeekMessageA 空队列快速返回预算；0 时必须回 host 检查消息/定时器。 */
+/** PeekMessageA empty-queue fast-return budget; at 0, return to the host to check messages/timers. */
 export const HYPERCALL_PEEK_BUDGET = HYPERCALL_PAGE + 0x7c;
-/** host/客体共享的 Win32 光标坐标，供 GetCursorPos 快速桩直接读取。 */
+/** Host/guest shared Win32 cursor coordinates read directly by the GetCursorPos fast stub. */
 export const HYPERCALL_CURSOR_X = HYPERCALL_PAGE + 0x80;
 export const HYPERCALL_CURSOR_Y = HYPERCALL_PAGE + 0x84;
-/** RA2 shell 当前由 host 合成的离屏 surface，供 Unlock 快桩识别换层边界。 */
+/** Current host-composited RA2 shell offscreen surface, used by the Unlock fast stub to detect layer changes. */
 export const HYPERCALL_ACTIVE_SHELL_SURFACE = HYPERCALL_PAGE + 0x88;
 /**
- * import 桩占用全局 request/EAX/EDX 返回槽的完整生命周期。
- * host 必须先清 request 再发 IRQ4，因此 request=0 不代表当前线程已消费返回值；
- * PIT 以本标记为切换屏障，消除 IRQ4 iret 与桩内 cli 之间的抢占窗口。
+ * Full lifetime during which an import stub owns the global request/EAX/EDX return slots.
+ * The host clears request before IRQ4, so request=0 does not mean the thread consumed return values. PIT uses this marker as a switch barrier, closing the preemption window between IRQ4 iret and the stub's cli.
  */
 export const HYPERCALL_IMPORT_ACTIVE = HYPERCALL_PAGE + 0x8c;
 export const GUEST_THREAD_LIMIT = 64;
@@ -68,24 +66,24 @@ export const GUEST_THREAD_CONTEXT_SEH = 0x0007_3500;
 export const GUEST_THREAD_CONTEXT_STACK_TOP = 0x0007_3600;
 export const GUEST_THREAD_CONTEXT_STACK_BOTTOM = 0x0007_3700;
 export const GUEST_THREAD_CONTEXT_LAST_ERROR = 0x0007_3800;
-/** 0=不存在/已退出，1=可运行，>=2 表示 (100Hz tick 截止值 + 2)。 */
+/** 0=absent/exited, 1=runnable, >=2 means 100Hz tick deadline + 2. */
 export const GUEST_THREAD_RUN_STATES = 0x0007_3900;
 export const GUEST_SCHEDULER_TICKS = 0x0007_3a00;
-/** 每线程兼容性原子执行深度；非零时 import 返回保持 CLI，不代表 Win32 锁。 */
+/** Per-thread compatibility atomic-execution depth; nonzero keeps CLI after import return and does not represent a Win32 lock. */
 export const GUEST_THREAD_CRITICAL_DEPTH = 0x0007_3b00;
 export const GUEST_CALLBACK_OWNERS = 0x0007_3c00;
 export const GUEST_CALLBACK_BASE = 0x0022_0000;
 export const GUEST_CALLBACK_STRIDE = 4096;
 export const GUEST_CALLBACK_SLOTS = 64;
-/** 与 boot.asm 的 FNSAVE/FRSTOR 格式一致：108 字节状态，128 字节步长。 */
+/** Match boot.asm FNSAVE/FRSTOR layout: 108-byte state with 128-byte stride. */
 export const GUEST_THREAD_FPU_CONTEXTS = 0x0007_8000;
 export const GUEST_THREAD_FPU_CONTEXT_BYTES = 128;
 
-// 窗口几何/属性镜像表：让 GetClientRect/GetWindowRect/ClientToScreen/GetParent/
-// GetWindowLongA 等高频只读查询留在客体内执行，避免每次跨 VM↔JS。
-// 位于 0x62000（environment 字符串 0x61300 之后、TEB 0x70000 之前的空闲区）。
-// hwnd 从 0x2000 顺序分配，按 (hwnd-0x2000) 索引；越界或未同步项回退完整 hypercall。
-// X/Y 存绝对屏幕坐标（shim 同步时沿父链累加），客体桩无需遍历父链。
+// Window geometry/property mirror keeps frequent read-only GetClientRect/GetWindowRect/ClientToScreen/GetParent/
+// GetWindowLongA queries inside the guest, avoiding VM/JS crossings per call.
+// Located at 0x62000, free space after environment strings at 0x61300 and before TEB at 0x70000.
+// Allocate hwnd sequentially from 0x2000 and index by hwnd-0x2000; out-of-range/unsynchronized entries use full hypercalls.
+// X/Y hold absolute screen coordinates, accumulated through parents during shim synchronization; guest stubs need no parent traversal.
 export const GUEST_WINDOW_TABLE = 0x0006_2000;
 export const GUEST_WINDOW_TABLE_MAX = 896;
 export const GUEST_WINDOW_ENTRY_BYTES = 64;
@@ -99,14 +97,14 @@ export const GUEST_WINDOW_ID = 24; // GWL_ID (-12)
 export const GUEST_WINDOW_EXSTYLE = 28; // GWL_EXSTYLE (-20)
 export const GUEST_WINDOW_WNDPROC = 32; // GWL_WNDPROC (-4)
 export const GUEST_WINDOW_USERDATA = 36; // GWL_USERDATA (-21)
-export const GUEST_WINDOW_EXTRA0 = 40; // 窗口额外字节 0/4/8/12
+export const GUEST_WINDOW_EXTRA0 = 40; // Window extra bytes at 0/4/8/12.
 export const GUEST_WINDOW_EXTRA4 = 44;
 export const GUEST_WINDOW_EXTRA8 = 48;
 export const GUEST_WINDOW_EXTRA12 = 52;
 export const GUEST_WINDOW_VALID = 56;
 
 export interface PeImport {
-  /** hypercall request id（0 专用于“无请求”，所以 id 从 1 开始） */
+  /** Hypercall request ID; reserve 0 for no request, so IDs start at 1. */
   id: number;
   dll: string;
   name: string;
@@ -114,12 +112,13 @@ export interface PeImport {
   slot: number;
   stub: number;
   argBytes: number;
-  /** Win32 层装载后注释的 DLL 数值标签（win32ModuleOf）；非 Win32 装载器忽略。 */
+  /** Numeric DLL tag annotated by the Win32 layer after loading, using win32ModuleOf; ignored by non-Win32 loaders. */
   win32Module?: number;
-  /** 动态 COM 桩预计算路由：接口数值标签（见 shim/directx.ts COM_TAG_*）；非 COM 为 undefined。 */
+  /** Precomputed dynamic COM-stub routing: numeric interface tag from shim/directx.ts COM_TAG_*; undefined for non-COM entries. */
   comTag?: number;
-  /** 方法名（key 最后一个 '.' 之后），桩创建时算好——每次调用的 lastIndexOf+slice 是
-   *  統一天下每秒几十万次 hypercall 的路由热点。 */
+  /**
+   * Method name after the final dot in key, computed at stub creation. Per-call lastIndexOf+slice is a routing hotspot under hundreds of thousands of hypercalls per second in the Tongyi Tianxia MOD.
+   */
   method?: string;
 }
 
@@ -127,10 +126,10 @@ export interface PeImage {
   entry: number;
   imageBase: number;
   sizeOfImage: number;
-  /** 导入名（DLL!Func）→ IAT 槽位地址（已被打补丁） */
+  /** Import name DLL!Func to patched IAT-slot address. */
   imports: Map<string, number>;
   importList: PeImport[];
-  /** 每 DLL 的 IAT 起始/槽数（for debug） */
+  /** IAT start/slot count per DLL for debugging. */
   iatRanges: Array<{ dll: string; firstThunk: number; count: number }>;
 }
 
@@ -138,9 +137,7 @@ export type ImportArgBytes = (dll: string, name: string) => number;
 export type ImportStubFactory = (dll: string, name: string, id: number, argBytes: number) => Uint8Array;
 
 /**
- * 生成 x86 stdcall import 桩。客体发布 request 并通过 COM1 端口通知 host，
- * 然后原地等待 JS 写回 EAX/EDX 并清零 request。
- * 这个握手使 v86 和浏览器的异步事件循环不会破坏 Win32 同步调用语义。
+ * Generate x86 stdcall import stubs. The guest publishes request and notifies the host through COM1, then waits for JS to write EAX/EDX and clear request. This handshake preserves synchronous Win32 semantics across v86 and the asynchronous browser event loop.
  */
 export function makeImportStub(id: number, argBytes: number): Uint8Array {
   if (!Number.isInteger(id) || id <= 0) throw new Error(`import stub id 非法: ${id}`);
@@ -149,7 +146,7 @@ export function makeImportStub(id: number, argBytes: number): Uint8Array {
   }
   const b = new Uint8Array(512);
   let p = 0;
-  // API 握手使用全局共享页；禁止 PIT 在 request 发布/回收中途切换线程。
+  // The API handshake uses a global shared page; prevent PIT thread switches during request publication/reclamation.
   b[p++] = 0xfa; // cli
   // C7 05 8C000600 01000000  mov dword [importActive],1
   b[p++] = 0xc7;
@@ -172,9 +169,9 @@ export function makeImportStub(id: number, argBytes: number): Uint8Array {
   b[p++] = HYPERCALL_NOTIFY_PORT & 0xff;
   b[p++] = HYPERCALL_NOTIFY_PORT >>> 8;
   b[p++] = 0xee;
-  // wait: STI 后先查 request。host 可能抢在 HLT 前就完成了释放（fast path），
-  // 此时唤醒字节已被固件 irq_common 读走，若直接 HLT 将永远不会醒来。
-  // 未释放才 HLT，靠 COM1 RX IRQ4 唤醒；CLI 恢复游戏环境。
+  // wait: check request after STI. The host may release it before HLT on the fast path,
+  // with the wake byte already consumed by firmware irq_common; unconditional HLT would then never wake.
+  // HLT only while unreleased, waking through COM1 RX IRQ4; CLI restores the game environment.
   const wait = p;
   b[p++] = 0xfb; // sti
   b[p++] = 0x83;
@@ -185,7 +182,7 @@ export function makeImportStub(id: number, argBytes: number): Uint8Array {
   const jeOffset = p++;
   b[p++] = 0xf4; // hlt
   b[p++] = 0xfa; // cli
-  b[p++] = 0xec; // in al, dx：通常已被固件读走；读空 FIFO 无害。
+  b[p++] = 0xec; // in al, dx: firmware usually already consumed the byte; reading an empty FIFO is harmless.
   b[p++] = 0xeb; // jmp wait
   const jmpRel8 = wait - (p + 1);
   b[p++] = jmpRel8 & 0xff;
@@ -199,8 +196,8 @@ export function makeImportStub(id: number, argBytes: number): Uint8Array {
   b[p++] = 0x8b;
   b[p++] = 0x15;
   p = put32(b, p, HYPERCALL_EDX);
-  // Host 可把 NEXT 改成另一条 runnable 线程。API 返回值已经装入 EAX/EDX，
-  // 在切换前连同其余寄存器保存，因此每条线程恢复时仍得到自己的返回值。
+  // The host may select another runnable NEXT thread. EAX/EDX already contain API results;
+  // save them with all registers before switching so every thread resumes with its own result.
   b[p++] = 0x8b;
   b[p++] = 0x0d;
   p = put32(b, p, HYPERCALL_THREAD_NEXT); // mov ecx,[next]
@@ -212,7 +209,7 @@ export function makeImportStub(id: number, argBytes: number): Uint8Array {
   const noSwitchRel = p;
   p += 4;
 
-  // 把 stdcall 的 return+args 先折叠成单一继续地址，再生成统一上下文帧。
+  // Fold stdcall return+arguments into one continuation address before constructing the shared context frame.
   b[p++] = 0x8f;
   b[p++] = 0x05;
   p = put32(b, p, HYPERCALL_THREAD_CONTINUATION); // pop [cont]
@@ -223,7 +220,7 @@ export function makeImportStub(id: number, argBytes: number): Uint8Array {
   b[p++] = 0x35;
   p = put32(b, p, HYPERCALL_THREAD_CONTINUATION); // push [cont]
   b[p++] = 0x9c; // pushfd
-  // 兼容性原子执行区以外恢复 IF；普通 Win32 锁不屏蔽抢占。
+  // Restore IF outside compatibility atomic regions; ordinary Win32 locks do not disable preemption.
   b[p++] = 0xa1;
   p = put32(b, p, HYPERCALL_THREAD_CURRENT);
   b[p++] = 0x83;
@@ -238,7 +235,7 @@ export function makeImportStub(id: number, argBytes: number): Uint8Array {
   b[p++] = 0x24;
   p = put32(b, p, 0x0000_0200); // or [esp],IF
   b[p++] = 0xa1;
-  p = put32(b, p, HYPERCALL_EAX); // 恢复 API 返回值
+  p = put32(b, p, HYPERCALL_EAX); // Restore API return values.
   b[p++] = 0x60; // pushad
 
   b[p++] = 0xa1;
@@ -247,7 +244,7 @@ export function makeImportStub(id: number, argBytes: number): Uint8Array {
   b[p++] = 0x24;
   b[p++] = 0x85;
   p = put32(b, p, GUEST_THREAD_CONTEXT_ESPS);
-  // 与 PIT 切换共用 x87/MMX 保存区，不能只保存通用寄存器。
+  // Share x87/MMX save regions with PIT switching; saving only general-purpose registers is insufficient.
   b[p++] = 0x89;
   b[p++] = 0xc2; // mov edx,eax
   b[p++] = 0xc1;
@@ -329,19 +326,19 @@ export function makeImportStub(id: number, argBytes: number): Uint8Array {
   b[p++] = 0x89;
   b[p++] = 0x15;
   p = put32(b, p, HYPERCALL_LAST_ERROR);
-  // 当前 API 返回值已进入保存帧；恢复下一线程前可释放全局返回槽。
+  // The current API result is already in the saved frame; release global return slots before restoring the next thread.
   b[p++] = 0xc7;
   b[p++] = 0x05;
   p = put32(b, p, HYPERCALL_IMPORT_ACTIVE);
   p = put32(b, p, 0);
   b[p++] = 0x61; // popad
   b[p++] = 0x9d; // popfd
-  b[p++] = 0xc3; // ret 到下一线程的继续地址/入口
+  b[p++] = 0xc3; // ret to the next thread's continuation/entry point.
 
   const noSwitch = p;
   const relative = noSwitch - (noSwitchRel + 4);
   put32(b, noSwitchRel, relative);
-  // EAX/EDX 已装入寄存器且不会切换线程，返回前释放全局返回槽。
+  // EAX/EDX are loaded and no thread switch will occur; release global return slots before returning.
   b[p++] = 0xc7;
   b[p++] = 0x05;
   p = put32(b, p, HYPERCALL_IMPORT_ACTIVE);
@@ -356,7 +353,7 @@ export function makeImportStub(id: number, argBytes: number): Uint8Array {
   b[p++] = 0;
   b[p++] = 0x75;
   b[p++] = 0x01;
-  b[p++] = 0xfb; // sti：兼容性原子执行区以外允许抢占
+  b[p++] = 0xfb; // sti: allow preemption outside compatibility atomic regions.
   b[p++] = 0xc2;
   b[p++] = argBytes & 0xff;
   b[p++] = (argBytes >>> 8) & 0xff;
@@ -364,7 +361,7 @@ export function makeImportStub(id: number, argBytes: number): Uint8Array {
   return b.slice(0, p);
 }
 
-/** 不进入 host 的 stdcall 快速桩：返回固定 EAX 并弹出参数。 */
+/** Host-free stdcall fast stub: return a fixed EAX and pop arguments. */
 export function makeConstantImportStub(eax: number, argBytes: number): Uint8Array {
   validateArgBytes(argBytes);
   return new Uint8Array([
@@ -379,7 +376,7 @@ export function makeConstantImportStub(eax: number, argBytes: number): Uint8Arra
   ]);
 }
 
-/** 不进入 host 的 stdcall 快速桩：原样返回第一个参数。 */
+/** Host-free stdcall fast stub: return the first argument unchanged. */
 export function makeFirstArgImportStub(argBytes: number): Uint8Array {
   validateArgBytes(argBytes);
   return new Uint8Array([
@@ -394,9 +391,9 @@ export function makeFirstArgImportStub(argBytes: number): Uint8Array {
 }
 
 /**
- * 载入 PE 到以物理地址为下标的客体内存镜像。
+ * Load a PE into a guest-memory image indexed by physical address.
  *
- * `stubAlloc` 必须返回客体虚拟/物理地址（当前固件为无分页平坦映射）。
+ * stubAlloc must return guest virtual/physical addresses; current firmware uses a flat identity mapping without paging.
  */
 export function loadPe(
   mem8: Uint8Array,
@@ -422,7 +419,7 @@ export function loadPe(
   const sizeOfHeaders = dv.getUint32(optOff + 60, true);
   need(mem8, imageBase, sizeOfImage, 'VM 中的 PE 映像');
 
-  // Windows 会同时映射 DOS/PE 头；部分 CRT 和 GetModuleHandle 后的代码会读它。
+  // Windows maps DOS/PE headers too; some CRT code and code following GetModuleHandle read them.
   const headerBytes = Math.min(sizeOfHeaders, exe.length);
   mem8.set(exe.subarray(0, headerBytes), imageBase);
 
@@ -468,7 +465,7 @@ export function loadPe(
       const thunk = dv.getUint32(thunkOff, true);
       if (!thunk) break;
 
-      const name = (thunk & 0x8000_0000) !== 0 ? `ord${thunk & 0xffff}` : readCstr(exe, thunk + 2); // IMAGE_IMPORT_BY_NAME 前 2 字节 = hint
+      const name = (thunk & 0x8000_0000) !== 0 ? `ord${thunk & 0xffff}` : readCstr(exe, thunk + 2); // The first two IMAGE_IMPORT_BY_NAME bytes contain the hint.
       const slot = imageBase + firstThunkRva + k * 4;
       need(mem8, slot, 4, `${dll}!${name} IAT`);
       const argBytes = importArgBytes(dllUpper, name);
@@ -496,10 +493,10 @@ function validateArgBytes(argBytes: number): void {
   }
 }
 
-/** RVA → 文件偏移（header 或 section；无匹配返回 -1） */
+/** RVA to file offset in headers/sections; return -1 if unmatched. */
 /**
- * 枚举 EXE 导入表的全部 `DLL!函数名` 键（大写），不做桩生成。
- * 供文件层按导入覆盖度把自定义命名的 EXE 归类到对应兼容层；结构异常时返回空表。
+ * Enumerate all uppercase DLL!function import keys without generating stubs.
+ * The file layer uses import coverage to classify custom-named EXEs into compatibility layers; return an empty list for malformed structures.
  */
 export function peImportKeys(exe: Uint8Array): string[] {
   try {
@@ -527,7 +524,7 @@ export function peImportKeys(exe: Uint8Array): string[] {
         if (thunkOff < 0 || thunkOff + 4 > exe.length) return keys;
         const thunk = dv.getUint32(thunkOff, true);
         if (!thunk) break;
-        const name = (thunk & 0x8000_0000) !== 0 ? `ord${thunk & 0xffff}` : readCstr(exe, thunk + 2); // IMAGE_IMPORT_BY_NAME 前 2 字节 = hint
+        const name = (thunk & 0x8000_0000) !== 0 ? `ord${thunk & 0xffff}` : readCstr(exe, thunk + 2); // The first two IMAGE_IMPORT_BY_NAME bytes contain the hint.
         keys.push(`${dllUpper}!${name}`);
       }
     }

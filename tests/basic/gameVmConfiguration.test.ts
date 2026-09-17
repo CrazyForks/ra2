@@ -40,7 +40,7 @@ describe.each(['ra2', 'yr'] as const)('%s 运行时工厂', (id) => {
       received!.ra2NetworkTransportFactory!(handlers, join);
       expect(factory).toHaveBeenCalledWith(handlers, join, { url: network.relayUrl, socketFactory: undefined });
     } else expect(received!.ra2NetworkTransportFactory).toBeUndefined();
-    // 回调保持透传，不在组装层转换状态或创建额外状态源。
+    // Pass callbacks through unchanged; the assembly layer neither transforms state nor creates extra state sources.
     const status = { phase: 'connected' } as Parameters<NonNullable<Win32ShimOptions['onNetworkStatus']>>[0];
     received!.onNetworkStatus!(status);
     expect(onNetworkStatus).toHaveBeenCalledWith(status);

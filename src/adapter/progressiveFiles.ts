@@ -11,8 +11,10 @@ export interface ResourceLoadStatus {
   total: number;
 }
 
-/** 目录先公布，内容后到达；未完成文件不是 ENOENT，读取必须等解压完成。
- * 继承会话写档语义，但不能继承内存 provider 的同步前缀/分段读取。 */
+/**
+ * Publish the directory before content arrives; incomplete files are not ENOENT, and reads must wait for extraction.
+ * Inherit session save semantics, but not the memory provider's synchronous prefix/range reads.
+ */
 export class ProgressiveGameFileProvider extends SessionGameFileProvider {
   private readonly pending = new Map<
     string,
@@ -38,7 +40,7 @@ export class ProgressiveGameFileProvider extends SessionGameFileProvider {
     private readonly prioritize: (name: string) => void = () => {},
   ) {
     super(label, new Map());
-    // 出错必须通知读者/UI，但不因尚未订阅缓存保存而产生 unhandled rejection。
+    // Notify readers/UI of errors without creating unhandled rejections before cache-save subscribers attach.
     void this.completion.catch(() => {});
   }
 

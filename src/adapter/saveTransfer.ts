@@ -25,7 +25,7 @@ export interface SavePackageSummary {
   files: Array<{ path: string; bytes: Uint8Array }>;
 }
 
-/** 导出根目录 *.sav 与 Save 目录中的游戏存档。 */
+/** Export game saves from root *.sav files and the Save directory. */
 export async function createSavePackage(provider: GameFileProvider, gameId: SupportedGameId): Promise<Blob> {
   const paths = await listSavePaths(provider);
   const files: SavePackageFile[] = [];
@@ -78,8 +78,8 @@ export async function readSavePackage(file: Blob, expectedGameId: SupportedGameI
 export async function importSavePackage(provider: GameFileProvider, summary: SavePackageSummary): Promise<void> {
   for (const entry of summary.files) await provider.write(entry.path, entry.bytes);
   await provider.flush();
-  // 写回校验：逐文件读回确认字节数一致。部分写入失败若等到游戏读档时
-  // 才暴露，会以原版除零崩溃（#DE@0x43a604）的形式出现，这里提前点名。
+  // Verify writes by reading each file back and checking its byte count. If partial writes are detected only when the game loads a save,
+  // they appear as an original-game divide-by-zero crash (#DE@0x43a604); report the failing file here instead.
   const failures: string[] = [];
   for (const entry of summary.files) {
     const written = await provider.read(entry.path);
@@ -103,7 +103,7 @@ export async function listSavePaths(provider: GameFileProvider): Promise<string[
   return [...paths].sort();
 }
 
-/** 把存档路径清单整理成人类可读摘要。 */
+/** Summarize save-file paths in a human-readable form. */
 export function summarizeSavePaths(paths: string[]): string {
   const rootSav = paths.filter((path) => /^[^/]+\.sav$/i.test(path)).sort();
   const nested = paths.filter((path) => /^save\//i.test(path)).sort();
@@ -113,7 +113,7 @@ export function summarizeSavePaths(paths: string[]): string {
   return lines.join('\n');
 }
 
-/** 包内是否包含至少一个可导入存档。 */
+/** Whether the package contains at least one importable save. */
 export function hasPlayerSlotSaves(paths: string[]): boolean {
   return paths.some(isAllowedSavePath);
 }

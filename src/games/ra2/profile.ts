@@ -1,6 +1,6 @@
 import type { GameShimProfile } from '../../vm86/shim/gameProfile';
 
-/** RA2/XWIS 专属兼容能力；未列出的行为不会进入共用 shim。 */
+/** RA2/XWIS-specific compatibility capabilities; unlisted behavior never enters the shared shim. */
 export const RA2_SHIM_PROFILE: GameShimProfile = Object.freeze({
   shell: Object.freeze({
     compositeRgb565Layers: true,
@@ -11,9 +11,9 @@ export const RA2_SHIM_PROFILE: GameShimProfile = Object.freeze({
     globalModifierKeys: true,
     retargetDialogChrome: true,
     mouseViaMessageQueue: true,
-    // 标题来自 RA2 的 shell 资源脚本（GUI:CampaignMenu）；1109 是任务模板里
-    // 先带 WS_VISIBLE 创建、初始化后再隐藏的存档 ListBox，1770–1772 是三个
-    // 徽标按钮。三者都是该页模板的固定值，随资源一起登记在此。
+    // The title comes from RA2 shell resource scripts (GUI:CampaignMenu); 1109 is the mission template's save ListBox,
+    // created with WS_VISIBLE then hidden after initialization; 1770-1772 are the three
+    // logo buttons. These are fixed template values registered here alongside the resources.
     campaignMenu: Object.freeze({
       titleKeys: Object.freeze(['campaignmenu'] as const),
       hiddenListControlId: 1109,
@@ -22,26 +22,26 @@ export const RA2_SHIM_PROFILE: GameShimProfile = Object.freeze({
   }),
   directDraw: Object.freeze({ guestSurfaceFastPath: true }),
   directPlay: Object.freeze({
-    // 反汇编 0x447790：枚举回调的 flags bit0 置位时回调直接返回 FALSE。SDK 把
-    // bit0 定义为“枚举超时”，语义相反，以客体实际行为为准，因此固定传 0。
+    // Disassembly at 0x447790: the enumeration callback immediately returns FALSE when flags bit0 is set. The SDK defines
+    // bit0 as enumeration timeout with opposite semantics; follow actual guest behavior and always pass 0.
     enumSessionsCallbackFlags: 0x0000_0000,
-    // 同一处回调的三个早期拒绝检查：0x4c4358=会话列表全局（0=拒绝）、
-    // 0x4c4350=会话计数（≥0xa=拒绝）。仅供 DPLAY_VERBOSE_LOG 现场判定。
+    // Early rejection checks in that callback include 0x4c4358, the global session list (reject if 0),
+    // and 0x4c4350, the session count (reject if >=0xa). Used only for DPLAY_VERBOSE_LOG diagnostics.
     enumSessionsProbeAddresses: Object.freeze([0x004c_4358, 0x004c_4350] as const),
   }),
-  // MOVIES*.MIX 只有稀疏索引时不能交给原生解码器；LANGUAGE.MIX 等完整
-  // 文件可重复走原版 Bink。BinkClose 的延迟解锁保证前一个实例真正退出后
-  // 才允许线程切换，因此返回主菜单时重新打开也不会破坏客体上下文。
+  // Do not pass sparse MOVIES*.MIX indexes to the native decoder; complete files such as LANGUAGE.MIX
+  // may repeatedly use native Bink. Deferred unlocking in BinkClose prevents thread switches until the preceding instance has fully exited,
+  // so reopening it on return to the main menu cannot corrupt guest context.
   skipIncompleteBinkPlayback: true,
-  // RA2 1.006 在战役转场会连续序列化数百个客体 IPersistStream。跨回
-  // 客体 Save 后，v86 在待处理 PIT 进入 call_interrupt_vector 时递归 #NP，
-  // 最终 unreachable/Maximum call stack。结构化存储接口仍保留，禁用这条
-  // 不安全的客体回调链，让原版继续从内存中的对象表进入关卡。
+  // RA2 1.006 serializes hundreds of guest IPersistStream objects during campaign transitions. After returning from
+  // guest Save, v86 recursively triggers #NP in call_interrupt_vector for a pending PIT,
+  // eventually producing unreachable/Maximum call stack. Keep structured-storage interfaces but disable this
+  // unsafe guest callback chain, letting the original game enter the mission from its in-memory object table.
   skipGuestOleSaveToStream: true,
   guestDllPatches: Object.freeze({
     'binkw32.dll': Object.freeze([
-      // Bink 1.0p 首帧时基偶尔尚未初始化，原指令会在 0x10009d30
-      // 以零为除数。固定为约 15fps 的 67ms，后续帧仍由原版完整解码。
+      // Bink 1.0p sometimes has an uninitialized first-frame time base, making the instruction at 0x10009d30
+      // divide by zero. Set it to 67ms, about 15fps; subsequent frames still use full native decoding.
       Object.freeze({
         rva: 0x0000_9d2d,
         expected: Object.freeze([0x8b, 0x4d, 0x08, 0xf7, 0xf1]),
@@ -58,7 +58,7 @@ export const RA2_SHIM_PROFILE: GameShimProfile = Object.freeze({
   cdromVolumeLabel: 'RA2',
   successfulImports: Object.freeze(['XWIS.DLL!ord1']),
   registryDefaults: Object.freeze({
-    // 原版安装器写入的 1.006 标识；缺失时 game.exe 周期性触发 AutoDet。
+    // The 1.006 marker written by the original installer; without it, game.exe periodically triggers AutoDet.
     'hkcr\\wchat\\sysid\\id': Object.freeze({
       type: 4, // REG_DWORD
       bytes: Object.freeze([0x06, 0x00, 0x01, 0x00]),

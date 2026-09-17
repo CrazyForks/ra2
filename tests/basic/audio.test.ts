@@ -1,7 +1,5 @@
 /**
- * 音频 smoke 迁移：WAVEFORMATEX 解析、DirectSound 音量/声像换算，
- * 以及 DirectSound COM 桥（CreateSoundBuffer/Lock/Unlock/Play）到
- * Win32AudioSink 的事件序列。
+ * Migrated audio smoke tests: WAVEFORMATEX parsing, DirectSound volume/pan conversion, and the event sequence from the DirectSound COM bridge (CreateSoundBuffer/Lock/Unlock/Play) to Win32AudioSink.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -16,7 +14,7 @@ import { callShim, createGuestMemory, createTestShim, readU32, writeU32 } from '
 
 const waveFormat = Uint8Array.from([
   0xff,
-  0xff, // 前置填充，验证 offset
+  0xff, // Leading padding verifies the offset
   0x01,
   0x00, // WAVE_FORMAT_PCM
   0x02,
@@ -124,7 +122,7 @@ describe('DirectSound COM 桥（原 audioSmoke）', () => {
     expect(dispatchSound('DSOUND.COM!IDirectSound.CreateSoundBuffer', [0xdead, desc, objectOut, 0]).eax).toBe(0);
     const object = readU32(memory, objectOut);
     expect(object).toBeTruthy();
-    // createdFormat 在 sink 闭包内赋值，TS 控制流仍按初始 null 窄化，这里显式还原声明类型。
+    // createdFormat is assigned inside the sink closure, but TS control flow still narrows it to its initial null; explicitly restore its declared type.
     expect((createdFormat as PcmWaveFormat | null)?.nSamplesPerSec).toBe(22_050);
 
     const pointerOut = 0x1210;
@@ -145,7 +143,7 @@ describe('DirectSound COM 桥（原 audioSmoke）', () => {
     ).toBe(0);
     expect(writtenPcm).toEqual(pcm);
     expect(dispatchSound('DSOUND.COM!IDirectSoundBuffer.Play', [object, 0, 0, 1]).eax).toBe(0);
-    expect(readU32(memory, object + 12)).toBe(0); // 状态变化后强制首轮游标查询回 host
+    expect(readU32(memory, object + 12)).toBe(0); // Force the first cursor query back to the host after the state change
     const cursorOut = 0x1220;
     expect(dispatchSound('DSOUND.COM!IDirectSoundBuffer.GetCurrentPosition', [object, cursorOut, 0]).eax).toBe(0);
     expect(readU32(memory, object + 8)).toBe(readU32(memory, cursorOut));
@@ -157,7 +155,7 @@ describe('DirectSound COM 桥（原 audioSmoke）', () => {
   });
 });
 
-/** getState 恒返回 null 的 sink：模拟 Worker 音频代理无法同步回读 WebAudio 的场景。 */
+/** A sink whose getState always returns null, simulating the Worker audio proxy's inability to read WebAudio state synchronously. */
 const createWorkerLikeAudio = (): Win32AudioSink => ({
   createBuffer() {},
   duplicateBuffer() {
@@ -196,8 +194,8 @@ const createWorkerLikeAudio = (): Win32AudioSink => ({
 });
 
 describe('DirectSound 流式音乐（RA2 增补，原 audioSmoke）', () => {
-  // 流式音乐回归：播放中的 DirectSound 环形 buffer 被 Unlock 覆写后，必须
-  // 切到单一实时读取器，不能继续循环首次快照或为每次写入重建 source。
+  // Streaming music regression: after Unlock overwrites a playing DirectSound ring buffer,
+  // switch to a single live reader; do not keep looping the first snapshot or recreate the source for every write.
   it('环形 buffer 首次动态覆写后切到实时 PCM 流且保持连续游标', () => {
     class FakeAudioBuffer {
       readonly duration: number;
@@ -310,7 +308,7 @@ describe('DirectSound 流式音乐（RA2 增补，原 audioSmoke）', () => {
     expect(fakeContext.sources.length).toBe(1);
     fakeContext.currentTime = 0.25;
     const firstSource = fakeContext.sources[0]!;
-    // 0.25 秒处是第 5512 帧附近；写入满幅左声道，实时回调第一帧应立即读到。
+    // 0.25 seconds is near frame 5512; write full-scale left-channel samples, which the live callback must read from its first frame.
     streamingSink.writeBuffer('music', 5_512 * 4, Uint8Array.from([0xff, 0x7f, 0, 0]));
     expect(firstSource.stopped).toBe(true);
     expect(fakeContext.sources.length).toBe(1);
@@ -318,7 +316,7 @@ describe('DirectSound 流式音乐（RA2 增补，原 audioSmoke）', () => {
     const output = fakeContext.processors[0]!.process();
     expect(output.getChannelData(0)[0]).toBeGreaterThan(0.99);
     expect(output.getChannelData(1)[0]).toBe(0);
-    // 后续 Unlock 只更新 PCM，不创建新的 source/processor。
+    // Subsequent Unlock calls only update PCM; they do not create a new source/processor.
     streamingSink.writeBuffer('music', 30_000, Uint8Array.from([1, 2, 3, 4]));
     expect(fakeContext.sources.length).toBe(1);
     expect(fakeContext.processors.length).toBe(1);
@@ -326,7 +324,7 @@ describe('DirectSound 流式音乐（RA2 增补，原 audioSmoke）', () => {
     expect(streamingSink.getState('music')?.playing).toBe(true);
   });
 
-  // DSBLOCK_ENTIREBUFFER 的 dwBytes=0 仍必须返回完整缓冲区。
+  // DSBLOCK_ENTIREBUFFER with dwBytes=0 must still return the entire buffer.
   it('Lock 带 DSBLOCK_ENTIREBUFFER 且 dwBytes=0 时返回完整缓冲区', () => {
     const memory = createGuestMemory(12 * 1024 * 1024);
     const shim = createTestShim(memory, { firstDynamicId: 1, audio: createWorkerLikeAudio() });
@@ -353,8 +351,8 @@ describe('DirectSound 流式音乐（RA2 增补，原 audioSmoke）', () => {
     expect(readU32(memory, entireBytesOut)).toBe(6);
   });
 
-  // Worker 音频代理不能同步回读 WebAudio；shim 的本地播放游标必须仍会前进，
-  // 否则游戏永远不会为环形音乐缓冲解码下一段。
+  // The Worker audio proxy cannot read WebAudio state synchronously; the shim's local playback cursor must still advance,
+  // or the game will never decode the next section of its music ring buffer.
   it('getState 不可用（Worker 代理）时 shim 本地播放游标仍会前进', async () => {
     const memory = createGuestMemory(12 * 1024 * 1024);
     const shim = createTestShim(memory, { firstDynamicId: 1, audio: createWorkerLikeAudio() });
@@ -376,7 +374,7 @@ describe('DirectSound 流式音乐（RA2 增补，原 audioSmoke）', () => {
     expect(readU32(memory, cursorOut), 'Worker 侧估算的 DirectSound 播放游标没有前进').toBeGreaterThan(0);
   });
 
-  // AudioWorklet 首选路径：实时流渲染移出主线程，写入区间经 port 同步。
+  // Preferred AudioWorklet path: render live streams off the main thread and synchronize written ranges through the port.
   it('支持 AudioWorklet 时实时流走 worklet 节点并同步写入区间', async () => {
     class FakeAudioParam {
       value = 0;
@@ -457,7 +455,7 @@ describe('DirectSound 流式音乐（RA2 增补，原 audioSmoke）', () => {
       });
       sink.writeBuffer('music', 0, new Uint8Array(88_200));
       expect(sink.play('music', { loop: true })).toBe(true);
-      // 播放中的第二次写入触发实时流切换（旧 source 停掉，worklet 接管）。
+      // The second write during playback triggers the live-stream switch (stop the old source; let the worklet take over).
       sink.writeBuffer('music', 5_512 * 4, Uint8Array.from([0xff, 0x7f, 0, 0]));
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(workletNodes.length).toBe(1);
@@ -466,25 +464,25 @@ describe('DirectSound 流式音乐（RA2 增补，原 audioSmoke）', () => {
       expect(create.frames).toBe(88_200 / 4);
       expect(create.frequency).toBe(22_050);
       expect(create.loop).toBe(true);
-      // 初始全量镜像同步：88_200 字节 = 22_050 帧 × 2 声道。
+      // Initial full mirror synchronization: 88,200 bytes = 22,050 frames x 2 channels.
       const initialUpdate = posted.find((message) => message.kind === 'update')!;
       expect((initialUpdate.data as Float32Array).length).toBe(44_100);
       expect(initialUpdate.offsetFrames).toBe(0);
-      // 后续写入走增量 update。
+      // Subsequent writes use incremental updates.
       posted.length = 0;
       sink.writeBuffer('music', 30_000, Uint8Array.from([1, 2, 3, 4]));
       const update = posted.find((message) => message.kind === 'update')!;
       expect(update.offsetFrames).toBe(7_500);
       expect((update.data as Float32Array).length).toBe(2);
-      // 游标回发：worklet 报 frame 后主线程按 currentTime 外推。
+      // Cursor reports: after the worklet reports a frame, the main thread extrapolates using currentTime.
       const worklet = workletNodes[0]!;
       const frameMessage = { kind: 'position', frame: 10_000 };
       fakeContext.currentTime = 1;
       worklet.port.onmessage?.({ data: frameMessage } as unknown as MessageEvent);
       fakeContext.currentTime = 1.5;
-      // 10_000 + 0.5s × 22050 = 21_025 帧 → × 4 字节。
+      // 10,000 + 0.5 s x 22050 = 21,025 frames -> x 4 bytes.
       expect(sink.getState('music')!.positionBytes).toBe(21_025 * 4);
-      // stop 拆掉 worklet 并回发 destroy。
+      // stop tears down the worklet and sends destroy.
       sink.stop('music');
       expect(posted.some((message) => message.kind === 'destroy')).toBe(true);
       expect(workletNodes[0]!.port.onmessage).toBeNull();

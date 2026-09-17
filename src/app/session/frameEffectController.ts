@@ -16,8 +16,9 @@ interface EffectOptions<Selection> {
   now?(): number;
 }
 
-/** 会话级异步画面效果；具体模型和浏览器 Worker 由组装入口注入。
- * token 同时保护动态 import 和 load，停止之后晚到的实例必须释放。
+/**
+ * Session-owned asynchronous frame effects; the composition entry point injects models and browser Workers.
+ * The token guards both dynamic import and load; release instances arriving after stop.
  */
 export class FrameEffectController<Selection> {
   private effect: FrameEffect<Selection> | null = null;
@@ -62,7 +63,7 @@ export class FrameEffectController<Selection> {
         this.effect = null;
       }
     } catch (error) {
-      // 已被 stop 接管的实例不重复销毁，也不覆盖新模型的状态。
+      // Do not destroy instances already claimed by stop again or overwrite the new model's state.
       if (this.effect === instance) {
         instance?.destroy();
         this.effect = null;

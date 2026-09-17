@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-/** 仅供 Vite dev 注册：固定白名单，不暴露缓存目录枚举或任意文件读取。 */
+/** Register only in Vite development: a fixed allowlist without cache-directory enumeration or arbitrary file access. */
 export function createThirdPartyCacheHandler(directory: string) {
   return async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     const path = request.url?.split('?')[0];

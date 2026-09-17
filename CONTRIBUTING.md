@@ -1,26 +1,22 @@
-# 贡献指南
+# Contributing
 
-内部开发与贡献以 `dev` 为目标，`dev` 不推送 GitHub；外部贡献请基于 `main` 开发并向 `main` 提交 PR。先阅读 [架构设计](docs/ARCHITECTURE.md) 和 [仓库规范](AGENTS.md)。
+Internal development and contributions target `dev`, which is not pushed to GitHub. External contributors should branch from `main` and open PRs against `main`. Read [Architecture](docs/ARCHITECTURE.md) and [Repository rules](AGENTS.md) first.
 
-## 本地验证
+## Local verification
 
 ```bash
 pnpm install --frozen-lockfile
 pnpm run check
 ```
 
-普通代码贡献无需游戏文件。改 UI 时另运行浏览器 UI 回归，改 ABI、补丁或联机时需追加
-对应真实游戏测试；缺少素材时明确标注未验证范围。完整入口见 [测试指南](docs/TESTING.md)。
-不上传游戏、截图、私有资源地址、模型权重或本机缓存。
+Ordinary code contributions require no game files. UI changes additionally need browser UI regressions; ABI, patch, and multiplayer changes require relevant real-game tests. Identify unverified scope when assets are unavailable. See [Testing](docs/TESTING.md) for complete entry points. Do not upload games, screenshots, private resource addresses, model weights, or local caches.
 
-## 提交与评审
+## Commits and review
 
-一次变更围绕一个可评审的问题，说明触发条件、改动后的行为及实际测试结果。
-bug 修复提供回归，性能改动提供同场景对照；不把跳过、重试或历史通过当作当前通过。
-修改接口和命令时同步更新相应维护文档。注释和提交说明优先中文，标识符沿用模块约定。
+Keep each change focused on a reviewable problem, describing its trigger, resulting behavior, and actual test results. Bug fixes need regressions; performance changes need same-scene comparisons. Skips, retries, and historical passes do not count as current passes.
 
-公共 PR 的无素材 CI 使用一次性隔离 runner；私有游戏资源仅供维护者审查并合入 dev/main 后的回归。
-工作流文件的存在不代表远端 runner 已配置，查看实际任务结果。
+Update maintained documentation with interface/command changes. Write comments and maintained documentation in English; Chinese commit descriptions are preferred. Identifiers follow existing module conventions. The default README is English with a linked Chinese version; keep their player instructions consistent.
 
-提交原创改动时，请确认可以按项目 GPL-3.0-or-later 条款贡献；第三方改动保留原始版权
-和许可证，并在 [第三方说明](docs/THIRD_PARTY.md) 补充来源。不要为他人的代码补造授权。
+Public PR asset-free CI uses ephemeral isolated runners. Private game resources are used only for regression after maintainer review and merge into dev/main. Workflow-file existence does not establish remote runner configuration; inspect actual job results.
+
+Confirm that original contributions can be provided under GPL-3.0-or-later. Preserve original copyrights/licenses for third-party changes and add attribution to [Third-party content](docs/THIRD_PARTY.md). Do not invent authorization for others' code.

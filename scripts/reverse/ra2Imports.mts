@@ -1,5 +1,5 @@
-// 解析 PE32 导入表，把 IAT VA 映射为 DLL!函数名。
-// 用法：tsx ra2Imports.mts <exe> [vaHex1 vaHex2 ...]  — 不带地址则全量列出
+// Parse the PE32 import table and map IAT VAs to DLL!function names.
+// Usage: tsx ra2Imports.mts <exe> [vaHex1 vaHex2 ...] -- omit addresses to list all entries.
 import { readFileSync } from 'node:fs';
 
 const [, , exePath, ...queryHex] = process.argv;

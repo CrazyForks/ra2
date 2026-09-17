@@ -16,7 +16,7 @@ describeVmSmoke(
   'RA2 地图列表绘制回归',
   {
     ...options,
-    // 选择第二张地图并使用，再次打开地图列表，等待旧绘制消息有机会被处理。
+    // Select and apply the second map, reopen the map list, and allow old paint messages time to run.
     clicks: [
       [1034, 370],
       [1034, 454],
@@ -37,7 +37,7 @@ describeVmSmoke(
   {
     ...options,
     timeoutMs: 90_000,
-    // 先选择另一张地图，再反复切换类型，触发右侧列表清空和重新填充。
+    // Select a different map first, then repeatedly switch types to clear and repopulate the right-hand list.
     clicks: [
       [1034, 370],
       [1034, 454],
@@ -77,7 +77,7 @@ function assertMapLists(frame: VmFrame): void {
     ['模式', 433, 620, 2],
     ['地图', 655, 823, 13],
   ] as const) {
-    // 每行分别检查黄色字形，避免只剩少量文字时整表计数仍然通过。
+    // Check yellow glyphs in each row separately so a nearly empty list cannot pass on its total count alone.
     for (let row = 0; row < rows; row++) {
       let glyphPixels = 0;
       for (let y = 339 + row * 19; y < 353 + row * 19; y++) {
@@ -88,7 +88,7 @@ function assertMapLists(frame: VmFrame): void {
       }
       expect(glyphPixels, `${name}第 ${row + 1} 行文字应完整`).toBeGreaterThan(30);
     }
-    // 从行尾无文字处纵向取样；一条高亮约 19 像素，多余红条或残影不能通过。
+    // Sample vertically in the text-free row ends; one highlight is about 19 pixels, and extra red bars or ghosts must fail.
     let highlightedHeight = 0;
     for (let y = 338; y < 598; y++) {
       const offset = (y * frame.width + right) * 4;

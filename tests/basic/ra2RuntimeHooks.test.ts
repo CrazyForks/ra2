@@ -99,7 +99,7 @@ describe('RA2 运行态护栏', () => {
     const yrSettings = 0x0014_0000;
     writeU32(memory, 0x0083_9848, ra2Settings);
     writeU32(memory, ra2Settings + 0x1108, 3);
-    // 同时摆好 YR 的单例：RA2 的写入不能顺着版本无关的偏移落到 YR 上。
+    // Also prepare the YR singleton: RA2 writes must not reach YR through version-independent offsets.
     writeU32(memory, 0x0088_71e0, yrSettings);
     writeU32(memory, yrSettings + 0x14a0, 3);
 

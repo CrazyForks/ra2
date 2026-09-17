@@ -7,7 +7,7 @@ import type { Constructor } from './state';
 
 type User32Chain = InstanceType<ReturnType<typeof withUser32>>;
 
-/** Winmm 的 Win32 API case（原 Win32Shim.dispatch 主 switch 拆分）。 */
+/** Winmm Win32 API cases extracted from Win32Shim.dispatch's main switch. */
 export function withWinmm<TBase extends Constructor<User32Chain>>(Base: TBase) {
   return class extends Base {
     constructor(...args: any[]) {
@@ -87,7 +87,7 @@ export function withWinmm<TBase extends Constructor<User32Chain>>(Base: TBase) {
           } else if (command === 0x0814 && params) {
             // MCI_STATUS
             const item = this.readU32(params + 8);
-            // MCI_STATUS_MODE: 片头已停止；位置/长度则返回 0。
+            // MCI_STATUS_MODE reports the intro stopped; position/length return 0.
             this.writeU32(params + 4, item === 4 ? 525 : 0); // MCI_MODE_STOP
           }
           return { eax: 0 };
@@ -127,7 +127,7 @@ export function withWinmm<TBase extends Constructor<User32Chain>>(Base: TBase) {
           const id = `${path}\\${valueName}`;
           let data = this.registryValues.get(id);
           let type = 1; // REG_SZ
-          // XWIS 轻量包没有安装器写入的注册表；单机所需的安装目录映射到虚拟 C:\\GAME。
+          // Lightweight XWIS packages lack installer registry entries; map the single-player installation directory to virtual C:\\GAME.
           if (!data && (valueName === 'installpath' || valueName === 'path')) {
             data = Uint8Array.from([...new TextEncoder().encode('C:\\GAME'), 0]);
           }
@@ -146,7 +146,7 @@ export function withWinmm<TBase extends Constructor<User32Chain>>(Base: TBase) {
           if (shimTraceEnabled('VM_TRACE_REGISTRY')) {
             console.log(`🗂️ RegQuery ${id} -> ${data ? new TextDecoder().decode(data) : 'NOT_FOUND'}`);
           }
-          if (!data) return { eax: 2 }; // ERROR_FILE_NOT_FOUND，让游戏采用默认值
+          if (!data) return { eax: 2 }; // ERROR_FILE_NOT_FOUND lets the game use defaults.
           if (a[3]) this.writeU32(a[3], type);
           const capacity = a[5] ? this.readU32(a[5]) : 0;
           if (a[5]) this.writeU32(a[5], data.length);

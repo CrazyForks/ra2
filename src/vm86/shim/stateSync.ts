@@ -1,7 +1,5 @@
 /**
- * 客体同步对象与协作式调度（mixin 拆分自 state.ts）：
- * Event/Mutex/临界区、WaitFor* 语义与线程选择。
- * 挂在文件与 DLL 层之后、kernel32 分派之前。
+ * Guest synchronization/cooperative scheduling extracted from state.ts: Event/Mutex/critical sections, WaitFor* semantics, and thread selection. Apply after file/DLL layers and before kernel32 dispatch.
  */
 import type { PeImport } from '../win32';
 import {
@@ -19,7 +17,7 @@ export type ShimSyncChain = InstanceType<ReturnType<typeof withShimSync>>;
 
 export function withShimSync<TBase extends Constructor<ShimGuestDllChain>>(Base: TBase) {
   return class extends Base {
-    /** 同步对象句柄；若 profile 保留 launcher 哨兵，则从其后开始。 */
+    /** Synchronization handles start after any launcher sentinel reserved by the profile. */
     protected nextSyncHandle: number;
     protected readonly guestEvents = new Map<number, GuestEventObject>();
     protected readonly namedGuestEvents = new Map<string, GuestEventObject>();
@@ -172,9 +170,7 @@ export function withShimSync<TBase extends Constructor<ShimGuestDllChain>>(Base:
     }
 
     /**
-     * 返回 WAIT_OBJECT_0+n / WAIT_ABANDONED_0+n / WAIT_TIMEOUT / WAIT_FAILED。
-     * 非零超时且条件未满足时先返回 WAIT_OBJECT_0 占位；import stub 会保存该线程
-     * 的返回上下文，真正唤醒时再覆写保存的 EAX。
+     * Return WAIT_OBJECT_0+n / WAIT_ABANDONED_0+n / WAIT_TIMEOUT / WAIT_FAILED. With nonzero timeout and unmet conditions, initially return placeholder WAIT_OBJECT_0; the import stub saves the thread's return context, and actual wakeup overwrites saved EAX.
      */
     protected waitForGuestObjects(handles: number[], waitAll: boolean, timeout: number): number {
       const currentId = this.readU32(HYPERCALL_THREAD_CURRENT);
@@ -202,7 +198,7 @@ export function withShimSync<TBase extends Constructor<ShimGuestDllChain>>(Base:
       current.wait = wait;
       current.waitResult = undefined;
       this.lastError = 0;
-      return 0; // 返回值在唤醒/超时时修正
+      return 0; // Correct the return value on wakeup/timeout.
     }
 
     private isGuestWaitHandle(handle: number): boolean {
@@ -248,7 +244,7 @@ export function withShimSync<TBase extends Constructor<ShimGuestDllChain>>(Base:
       return wait.waitAll ? 0 : selected;
     }
 
-    /** 客体结构是快、慢路径的共同真值。+16 保存内部等待者数（不暴露可用句柄）。 */
+    /** The guest structure is authoritative for both fast and slow paths; +16 stores an internal waiter count, not a usable exposed handle. */
     protected initializeCriticalSection(pointer: number): void {
       this.zero(pointer, 24);
       this.writeU32(pointer + 4, 0xffff_ffff);
@@ -309,9 +305,9 @@ export function withShimSync<TBase extends Constructor<ShimGuestDllChain>>(Base:
       thread.wait = undefined;
       thread.runnable = true;
       this.writeU32(GUEST_THREAD_RUN_STATES + thread.id * 4, 1);
-      // 当前线程仍停在本次 Wait import 桩中，contextEsps 即使非零也只是上一次
-      // 切换留下的旧帧地址；写 context+28 会破坏已经复用的活动栈。由 vmCore
-      // 把结果写入本次共享 EAX。只有非当前等待线程才拥有可覆写的保存帧。
+      // The current thread is still in this Wait import stub; nonzero contextEsps refers only to a previous
+      // switch's stale frame, so writing context+28 corrupts a reused live stack. vmCore writes
+      // the result into this call's shared EAX. Only other waiting threads own saved frames safe to overwrite.
       if (thread.id === this.readU32(HYPERCALL_THREAD_CURRENT)) {
         thread.waitResult = result;
         return;
@@ -341,7 +337,7 @@ export function withShimSync<TBase extends Constructor<ShimGuestDllChain>>(Base:
       this.wakeGuestWaiters();
     }
 
-    /** 在当前 hypercall 返回前更新线程状态，并选择下一条客体执行线。 */
+    /** Update thread state before this hypercall returns and select the next guest execution thread. */
     prepareGuestThreadReturn(
       call: { imported: PeImport; args: number[] },
       result: { delayMs?: number; threadExit?: boolean },
@@ -349,8 +345,8 @@ export function withShimSync<TBase extends Constructor<ShimGuestDllChain>>(Base:
       const currentId = this.readU32(HYPERCALL_THREAD_CURRENT);
       const current = this.guestThreads.get(currentId);
       const now = this.clock.now();
-      // PIT 可以在两个 hypercall 之间把到期线程改回 runnable；在处理本次 API
-      // 前先把固件侧状态合并回来，避免 host 仍把已运行的线程视作睡眠。
+      // PIT may make expired threads runnable between hypercalls; merge firmware state before
+      // handling this API so the host does not still classify an already running thread as asleep.
       const schedulerTicks = this.readU32(GUEST_SCHEDULER_TICKS);
       for (const thread of this.guestThreads.values()) {
         const runState = this.readU32(GUEST_THREAD_RUN_STATES + thread.id * 4);
@@ -418,14 +414,14 @@ export function withShimSync<TBase extends Constructor<ShimGuestDllChain>>(Base:
         }
       }
       const currentId = this.readU32(HYPERCALL_THREAD_CURRENT);
-      // 兼容性原子执行区必须同时约束 host 和 PIT；普通 Win32 临界区允许调度。
+      // Compatibility atomic regions constrain both host and PIT scheduling; ordinary Win32 critical sections permit scheduling.
       const current = this.guestThreads.get(currentId);
       if (current?.runnable && !current.terminated && this.readU32(GUEST_THREAD_CRITICAL_DEPTH + currentId * 4) > 0) {
         this.writeU32(HYPERCALL_THREAD_NEXT, currentId);
         return 0;
       }
-      // 每次 hypercall 都会经过这里：单次扫描替代临时数组、排序及 flatMap。
-      // 显式比较 id，不能依赖 Map 插入顺序；轮转次序和最近唤醒时间保持不变。
+      // Every hypercall passes here; use one scan instead of temporary arrays, sorting, and flatMap.
+      // Compare IDs explicitly rather than relying on Map insertion order; preserve round-robin order and nearest wake times.
       let first: GuestThreadState | undefined;
       let next: GuestThreadState | undefined;
       let runnableCount = 0;
@@ -442,10 +438,10 @@ export function withShimSync<TBase extends Constructor<ShimGuestDllChain>>(Base:
         if (waitDeadline > now && waitDeadline < earliestDeadline) earliestDeadline = waitDeadline;
       }
       next ??= first;
-      // RA2 的主线程用 while (!workerDone) Sleep(0) 等后台工作线程。Windows
-      // 会立刻返回，但浏览器若照搬会产生每秒数千次 VM↔JS 往返；当唯一的
-      // runnable 就是调用者时，直接合并到最近线程截止点，客体可观察的调度结果
-      // 不变，却能消除整段空转。
+      // RA2's main thread waits for background work with while (!workerDone) Sleep(0). Windows
+      // returns immediately, but copying that into the browser causes thousands of VM/JS crossings per second. When the
+      // caller is the only runnable thread, coalesce directly to the nearest thread deadline, preserving observable scheduling
+      // while eliminating the entire spin interval.
       if (yielded && next?.id === currentId && runnableCount === 1 && earliestDeadline < Infinity) {
         this.writeU32(HYPERCALL_THREAD_NEXT, currentId);
         return Math.max(1, this.clock.toHostDelay(earliestDeadline - now));

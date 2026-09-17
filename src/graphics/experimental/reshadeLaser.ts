@@ -1,14 +1,16 @@
 import { ColorPostProcess, type FramePostProcess } from '../framePostProcess';
 
 export interface LaserInputs {
-  /** 必须由调用方明确提供；没有游戏数据时仅做颜色直通。 */
+  /** The caller must supply this explicitly; without game data, only pass colors through. */
   inGame: boolean;
   topMask: { width: number; height: number; rgba: Float32Array };
   distortion: { width: number; height: number; rgba: Float32Array };
 }
 
-/** 接受外部独立 FX 编译器输出，不内置或分发第三方效果源码。
- * 仅支持研究基线 LaserBlit 的入口/布局，不是通用 ReShade 编译器。 */
+/**
+ * Accept output from an independent external FX compiler; do not bundle/distribute third-party effect sources.
+ * Support only the research baseline LaserBlit entry/layout, not a general ReShade compiler.
+ */
 export function createReshadeLaser(
   gl: WebGL2RenderingContext,
   source: string,
@@ -29,7 +31,7 @@ export function createReshadeLaser(
     .replace(/layout\(location = 0\) (out vec2|in vec2)/g, '$1')
     .replace(/_out_param2|_in_param0/g, 'v_texcoord')
     .replace('uint _param0 = gl_VertexID;', 'uint _param0 = uint(gl_VertexID);');
-  // FX 的颜色坐标从顶部起算，复制自默认 framebuffer 的纹理从底部起算。
+  // FX color coordinates start at the top; textures copied from the default framebuffer start at the bottom.
   adapted = adapted
     .replace(/texture\(V_ReShade_BackBuffer, /g, 'readFrameColor(')
     .replace(

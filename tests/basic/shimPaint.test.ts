@@ -49,7 +49,7 @@ describe('绘制更新区与消息队列', () => {
     ]).eax;
     expect(callShim(shim, 'USER32.DLL!IsWindowVisible', [child]).eax).toBe(0);
 
-    // 初始化时临时隐藏控件，调用方依据旧状态恢复；祖先隐藏不能改变返回值。
+    // Temporarily hide the control during initialization; callers restore it based on prior state. Hidden ancestors must not change the return value.
     expect(callShim(shim, 'USER32.DLL!ShowWindow', [child, 0]).eax).toBe(1);
     expect(callShim(shim, 'USER32.DLL!ShowWindow', [child, 0]).eax).toBe(0);
     expect(callShim(shim, 'USER32.DLL!ShowWindow', [child, 5]).eax).toBe(0);
@@ -124,7 +124,7 @@ describe('绘制更新区与消息队列', () => {
     callShim(shim, 'USER32.DLL!SetWindowLongA', [hwnd, -4, 0x401000]);
     callShim(shim, 'USER32.DLL!InvalidateRect', [hwnd, 0, 0]);
     callShim(shim, 'USER32.DLL!UpdateWindow', [hwnd], 0x6fff00);
-    // 假内存不执行跳板，显式模拟回调进入及退出。
+    // Fake memory does not execute trampolines; explicitly simulate callback entry and exit.
     writeU32(memory, HYPERCALL_CALLBACK_DEPTH, 1);
     expect(callShim(shim, 'USER32.DLL!GetUpdateRect', [hwnd, 0, 0]).eax).toBe(1);
     callShim(shim, 'USER32.DLL!ValidateRect', [hwnd, 0]);
@@ -142,7 +142,7 @@ describe('绘制更新区与消息队列', () => {
     expect(peekPaint()).toBe(1);
     callShim(shim, 'USER32.DLL!DispatchMessageA', [MSG]);
 
-    // 假内存不执行客体跳板；显式表示当前仍在刚才的 WM_PAINT 回调内。
+    // Fake memory does not execute guest trampolines; explicitly represent continued execution inside the preceding WM_PAINT callback.
     writeU32(memory, HYPERCALL_CALLBACK_DEPTH, 1);
     callShim(shim, 'USER32.DLL!InvalidateRect', [hwnd, 0, 0]);
     writeU32(memory, HYPERCALL_CALLBACK_DEPTH, 0);

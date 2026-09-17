@@ -1,10 +1,6 @@
 /**
- * RA2 Winsock 1.1 shim 语义冒烟：不启动 VM，直接驱动 Win32Shim.dispatch。
- * 两个 shim 实例经 BroadcastChannel 传输组成虚拟 LAN，覆盖：
- * 字节序、WSAStartup 引用计数与 WSADATA、socket/bind 校验、gethostname/
- * gethostbyname/inet_ntoa、环回与跨实例数据报、广播许可、截断、MSG_PEEK、
- * WSAAsyncSelect 的 FD_WRITE/FD_READ 边沿通知、closesocket/WSACleanup，
- * 以及 ord1111 的「接口待实现」边界。
+ * RA2 Winsock 1.1 shim semantics smoke test: drive Win32Shim.dispatch directly without starting a VM.
+ * Two shim instances form a virtual LAN through BroadcastChannel. Covers byte order, WSAStartup reference counts and WSADATA, socket/bind validation, gethostname/gethostbyname/inet_ntoa, loopback and cross-instance datagrams, broadcast permission, truncation, MSG_PEEK, WSAAsyncSelect FD_WRITE/FD_READ edge notifications, closesocket/WSACleanup, and ord1111's unimplemented-interface boundary.
  */
 import { strict as assert } from 'node:assert';
 import type { GuestMemory, Win32Result } from '../../../src/vm86/win32';
@@ -68,7 +64,7 @@ function dispatch(shim: Win32Shim, key: string, args: number[]): Win32Result | n
   });
 }
 
-/** 约定数值：地址=网络序 u32，端口=主机序。写入客体 sockaddr_in（16B）。 */
+/** Numeric convention: address = network-order u32, port = host order. Write a guest sockaddr_in (16 bytes). */
 function writeSockaddr(guest: ReturnType<typeof makeGuest>, ptr: number, addr: number, port: number): void {
   guest.view.setUint16(ptr, 2, true);
   guest.view.setUint16(ptr + 2, port, false);
@@ -86,7 +82,7 @@ function lastError(shim: Win32Shim): number {
   return dispatch(shim, 'WSOCK32.DLL!ord111', [])!.eax >>> 0;
 }
 
-/** PeekMessageA(PM_REMOVE) 按消息号过滤拉一条消息；无匹配返回 null。 */
+/** PeekMessageA(PM_REMOVE) retrieves one message filtered by message ID; return null if none matches. */
 function peekMessage(
   shim: Win32Shim,
   guest: ReturnType<typeof makeGuest>,
@@ -116,13 +112,13 @@ function peekMessage(
 }
 
 async function main(): Promise<void> {
-  // ---- 字节序（无需 WSAStartup） ---------------------------------------------
+  // ---- Byte order (no WSAStartup required) ----
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord8', [0x0102_0304])!.eax, 0x0403_0201, 'htonl');
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord14', [0x0403_0201])!.eax, 0x0102_0304, 'ntohl');
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord9', [0x0102])!.eax, 0x0201, 'htons');
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord15', [0x0201])!.eax, 0x0102, 'ntohs');
 
-  // ---- WSAStartup 纪律 --------------------------------------------------------
+  // ---- WSAStartup discipline ----
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord23', [2, 2, 0])!.eax, SOCKET_ERROR, 'startup 前 socket 必须失败');
   assert.equal(lastError(shimA), 10093, 'WSANOTINITIALISED');
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord115', [0, 0x4000])!.eax, SOCKET_ERROR, '主版本 0 不支持');
@@ -133,7 +129,7 @@ async function main(): Promise<void> {
   assert.ok(readCString(guestA, 0x4004).length > 0, 'WSADATA 描述串');
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord115', [0x0101, 0])!.eax, 0, 'WSAStartup 引用计数 2');
 
-  // ---- socket 校验 -------------------------------------------------------------
+  // ---- Socket validation ----
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord23', [99, 2, 0])!.eax, SOCKET_ERROR);
   assert.equal(lastError(shimA), 10047, 'WSAEAFNOSUPPORT');
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord23', [2, 99, 0])!.eax, SOCKET_ERROR);
@@ -145,7 +141,7 @@ async function main(): Promise<void> {
   const sockA = dispatch(shimA, 'WSOCK32.DLL!ord23', [2, 2, 0])!.eax >>> 0;
   assert.ok(sockA >= 0xa000 && sockA !== tcpSock, 'UDP socket 句柄');
 
-  // ---- 主机名与名字解析 ---------------------------------------------------------
+  // ---- Hostname and name resolution ----
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord57', [0x5000, 256])!.eax, 0, 'gethostname');
   const hostname = readCString(guestA, 0x5000);
   assert.ok(hostname.startsWith('RA2VM-'), `虚拟主机名 ${hostname}`);
@@ -163,14 +159,14 @@ async function main(): Promise<void> {
     assert.equal(guestA.view.getUint16(localhostEnt + 8, true), 2, 'h_addrtype = AF_INET');
     assert.equal(guestA.view.getUint16(localhostEnt + 10, true), 4, 'h_length = 4');
   }
-  // 等 BroadcastChannel 完成 onReady/peer-join 收敛后再查本机名。
+  // Wait for BroadcastChannel onReady/peer-join convergence before querying the local hostname.
   await sleep(30);
   guestA.bytes.set(Buffer.from(`${hostname}\0`, 'ascii'), 0x5100);
   const selfEnt = dispatch(shimA, 'WSOCK32.DLL!ord52', [0x5100])!.eax >>> 0;
   assert.ok(selfEnt !== 0, 'gethostbyname(本机名)');
   {
     const addrPtr = guestA.view.getUint32(guestA.view.getUint32(selfEnt + 12, true), true);
-    const addr = guestA.view.getUint32(addrPtr, false); // 网络序数值
+    const addr = guestA.view.getUint32(addrPtr, false); // Network-order value
     assert.equal(addr >>> 16, 0x0af7, '本机名解析到虚拟 LAN 网段');
   }
   guestA.bytes.set(Buffer.from('no.such.host\0', 'ascii'), 0x5100);
@@ -189,7 +185,7 @@ async function main(): Promise<void> {
   const sockA2 = dispatch(shimA, 'WSOCK32.DLL!ord23', [2, 2, 0])!.eax >>> 0;
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord2', [sockA2, 0x5200, 16])!.eax, SOCKET_ERROR, '端口冲突');
   assert.equal(lastError(shimA), 10048, 'WSAEADDRINUSE');
-  // 双方都 SO_REUSEADDR 时允许同端口共存（RA2 发现套接字常见模式）。
+  // Allow the same port when both sockets use SO_REUSEADDR (common for RA2 discovery sockets).
   guestA.view.setUint32(0x5300, 1, true);
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord21', [sockA, 0xffff, 0x0004, 0x5300, 4])!.eax, 0, 'SO_REUSEADDR sockA');
   assert.equal(
@@ -202,14 +198,14 @@ async function main(): Promise<void> {
   const sockA3 = dispatch(shimA, 'WSOCK32.DLL!ord23', [2, 2, 0])!.eax >>> 0;
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord2', [sockA3, 0x5200, 16])!.eax, SOCKET_ERROR, '绑定外网地址');
   assert.equal(lastError(shimA), 10049, 'WSAEADDRNOTAVAIL');
-  // getsockopt 回读
+  // Read back with getsockopt
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord7', [sockA, 0xffff, 0x0004, 0x5400, 0x5404])!.eax, 0, 'getsockopt');
   assert.equal(guestA.view.getUint32(0x5400, true), 1, 'SO_REUSEADDR 回读');
   assert.equal(guestA.view.getUint32(0x5404, true), 4, 'getsockopt optlen');
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord7', [sockA, 0xffff, 0x1008, 0x5400, 0x5404])!.eax, 0);
   assert.equal(guestA.view.getUint32(0x5400, true), 2, 'SO_TYPE = SOCK_DGRAM');
 
-  // ---- 环回收发 -----------------------------------------------------------------
+  // ---- Loopback send/receive ----
   const rxSock = dispatch(shimA, 'WSOCK32.DLL!ord23', [2, 2, 0])!.eax >>> 0;
   writeSockaddr(guestA, 0x5200, 0, 6000);
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord2', [rxSock, 0x5200, 16])!.eax, 0, 'bind ANY:6000');
@@ -228,7 +224,7 @@ async function main(): Promise<void> {
     shimA.inspectRa2Network().sockets.some((s) => s.handle === txSock && s.port >= 49152),
     'sendto 隐式临时端口',
   );
-  // MSG_PEEK 不消费
+  // MSG_PEEK does not consume
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord17', [rxSock, 0x6200, 512, MSG_PEEK, 0, 0])!.eax, 8, 'MSG_PEEK');
   assert.equal(
     dispatch(shimA, 'WSOCK32.DLL!ord17', [rxSock, 0x6200, 4, 0, 0x6300, 0x6310])!.eax,
@@ -246,7 +242,7 @@ async function main(): Promise<void> {
     '截断的包已被消费',
   );
 
-  // ---- 广播许可 ------------------------------------------------------------------
+  // ---- Broadcast permission ----
   writeSockaddr(guestA, 0x5200, 0xffff_ffff, 6000);
   assert.equal(
     dispatch(shimA, 'WSOCK32.DLL!ord20', [txSock, 0x6100, 8, 0, 0x5200, 16])!.eax,
@@ -259,17 +255,17 @@ async function main(): Promise<void> {
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord20', [txSock, 0x6100, 8, 0, 0x5200, 16])!.eax, 8, '授权广播');
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord17', [rxSock, 0x6200, 512, 0, 0, 0])!.eax, 8, '广播回本机');
 
-  // ---- TCP socket 的 sendto 拒绝 --------------------------------------------------
+  // ---- Reject sendto on TCP sockets ----
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord20', [tcpSock, 0x6100, 8, 0, 0x5200, 16])!.eax, SOCKET_ERROR);
   assert.equal(lastError(shimA), 10057, 'WSAENOTCONN');
 
-  // ---- 跨实例数据报（A → B，BroadcastChannel 虚拟 LAN） ------------------------------
+  // ---- Cross-instance datagrams (A -> B, BroadcastChannel virtual LAN) ----
   assert.equal(dispatch(shimB, 'WSOCK32.DLL!ord115', [0x0101, 0])!.eax, 0, 'shimB WSAStartup');
   const sockB = dispatch(shimB, 'WSOCK32.DLL!ord23', [2, 2, 0])!.eax >>> 0;
   assert.ok(sockB >= 0xa000, 'B UDP socket 句柄');
   writeSockaddr(guestB, 0x5200, 0, 7000);
   assert.equal(dispatch(shimB, 'WSOCK32.DLL!ord2', [sockB, 0x5200, 16])!.eax, 0, 'B bind ANY:7000');
-  await sleep(30); // 等双方传输 ready 并交换 peer-join
+  await sleep(30); // Wait for both transports to become ready and exchange peer-join
   const addrB = shimB.inspectRa2Network().selfAddr;
   const addrA = shimA.inspectRa2Network().selfAddr;
   assert.ok(addrB.startsWith('10.247.'), `B 虚拟地址 ${addrB}`);
@@ -289,7 +285,7 @@ async function main(): Promise<void> {
     'from = A 地址',
   );
 
-  // ---- WSAAsyncSelect：FD_WRITE 立即投递 + FD_READ 边沿触发 ---------------------------
+  // ---- WSAAsyncSelect: immediate FD_WRITE and edge-triggered FD_READ ----
   const MSG_SOCK = 0x500;
   const HWND_B = 0x1234;
   assert.equal(
@@ -313,13 +309,13 @@ async function main(): Promise<void> {
   assert.ok(readable && readable.message === MSG_SOCK && readable.lParam === FD_READ, 'FD_READ 消息');
   assert.equal(readable!.wParam, sockB);
   assert.equal(peekMessage(shimB, guestB, 0x7000, MSG_SOCK), null, 'FD_READ 边沿触发不重复投递');
-  // 排空前读一包：队列未空 → 按 Winsock 语义再投一次 FD_READ。
+  // Read one packet before draining: the queue remains nonempty, so post another FD_READ per Winsock semantics.
   assert.equal(dispatch(shimB, 'WSOCK32.DLL!ord17', [sockB, 0x6000, 512, 0, 0, 0])!.eax, 1, '读第 1 包');
   const rearm = peekMessage(shimB, guestB, 0x7000, MSG_SOCK);
   assert.ok(rearm && rearm.lParam === FD_READ, '未排空重投 FD_READ');
   assert.equal(dispatch(shimB, 'WSOCK32.DLL!ord17', [sockB, 0x6000, 512, 0, 0, 0])!.eax, 1, '读第 2 包');
   assert.equal(peekMessage(shimB, guestB, 0x7000, MSG_SOCK), null, '排空后不再投递');
-  // 取消登记后到达的包不再产生消息。
+  // Packets arriving after deregistration no longer generate messages.
   assert.equal(dispatch(shimB, 'WSOCK32.DLL!ord101', [sockB, 0, 0, 0])!.eax, 0, '取消 WSAAsyncSelect');
   guestA.bytes.set([0x33], 0x6100);
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord20', [txSock, 0x6100, 1, 0, 0x5200, 16])!.eax, 1);
@@ -341,8 +337,8 @@ async function main(): Promise<void> {
     'cleanup 后句柄失效',
   );
 
-  // ---- ord1111 = EnumProtocolsA（RA2 启动诊断调用，已轨迹确认） ------------------------------
-  // RA2 的真实调用形态：lpiProtocols=[IPPROTO_UDP,1000,0]，4KB 缓冲。
+  // ---- ord1111 = EnumProtocolsA (RA2 startup diagnostic call, confirmed by traces) ----
+  // RA2's actual call shape: lpiProtocols=[IPPROTO_UDP,1000,0], with a 4 KB buffer.
   guestA.view.setUint32(0x5500, 17, true);
   guestA.view.setUint32(0x5504, 1000, true);
   guestA.view.setUint32(0x5508, 0, true);
@@ -356,12 +352,12 @@ async function main(): Promise<void> {
   const protoName = guestA.view.getUint32(0x561c, true);
   assert.equal(readCString(guestA, protoName), 'UDP', 'lpProtocolName 指向缓冲内名字串');
   assert.equal(guestA.view.getUint32(0x5510, true), 32 + 4, '实际用量 = 结构 32B + 名字 4B');
-  // 缓冲不足 → WSAENOBUFS 并回报所需大小。
+  // Insufficient buffer -> WSAENOBUFS with the required size.
   guestA.view.setUint32(0x5510, 8, true);
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord1111', [0x5500, 0x5600, 0x5510])!.eax, SOCKET_ERROR);
   assert.equal(lastError(shimA), 10055, 'WSAENOBUFS');
   assert.equal(guestA.view.getUint32(0x5510, true), 36, '回报所需字节数');
-  // lpiProtocols = NULL → 枚举全部（UDP + TCP）。
+  // lpiProtocols = NULL -> enumerate all (UDP + TCP).
   guestA.view.setUint32(0x5510, 4096, true);
   assert.equal(dispatch(shimA, 'WSOCK32.DLL!ord1111', [0, 0x5600, 0x5510])!.eax, 2, 'NULL 枚举 UDP+TCP');
 

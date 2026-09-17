@@ -1,4 +1,4 @@
-/** 附加包按扩展名探索任意子目录，但只把安全的 basename 挂到客体根目录。 */
+/** Explore add-on subdirectories by extension, but mount only safe basenames at the guest root. */
 export function archiveExtensionKey(path: string, extensions: readonly string[]): string | null {
   const normalized = path.replace(/\\/g, '/').toLowerCase();
   const parts = normalized.split('/');

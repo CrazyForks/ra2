@@ -1,16 +1,16 @@
 import { preventThirdPartyDownloads } from '../../helpers/offlineBrowser';
-/** 真实 WebGL2 像素校验：先 pnpm run dev，再运行本脚本。无需游戏资源。 */
+/** Real WebGL2 pixel checks: start pnpm run dev before running this script. No game assets required. */
 import assert from 'node:assert/strict';
 import { chromium } from '@playwright/test';
 
 const browser = await chromium.launch({ args: ['--no-sandbox', '--enable-unsafe-swiftshader'] });
 try {
-  const page = await browser.newPage({ ignoreHTTPSErrors: true });
+  const page = await browser.newPage({ locale: 'zh-CN', ignoreHTTPSErrors: true });
   await preventThirdPartyDownloads(page);
   await page.goto(process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15174/');
-  // 字符串在浏览器内编译，避免 tsx 的 keepNames 辅助函数泄漏进 evaluate。
+  // Compile the string in the browser to prevent tsx keepNames helpers from leaking into evaluate.
   const result = await page.evaluate<{ backend: string; differences: number; colors: number }>(`(async () => {
-    // 动态 URL 由 Vite 编译，避免 Node 尝试导入浏览器模块。
+    // Let Vite compile the dynamic URL so Node does not attempt to import browser modules.
     const moduleUrl = '/src/ui/pages/game/vmFrameRenderer.ts';
     const { createVmFrameRenderer } = await import(moduleUrl);
     const canvas = document.createElement('canvas');
@@ -40,7 +40,7 @@ try {
       renderer.draw({ ...base, rgb565 }, 256, 256);
       const actual = read();
       for (let i = 0; i < actual.length; i++) if (actual[i] !== reference[i]) differences++;
-      // 强制走相同尺寸的 texSubImage2D，再切回 RGBA 检查格式重分配。
+      // Force same-size texSubImage2D, then switch back to RGBA to check format reallocation.
       renderer.draw({ ...base, rgb565: rgb565.slice() }, 256, 256);
       const updated = read();
       for (let i = 0; i < updated.length; i++) if (updated[i] !== reference[i]) differences++;

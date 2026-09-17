@@ -24,7 +24,7 @@ function validateUrl(value: string): URL {
 async function download(url: string, signal: AbortSignal): Promise<Response> {
   for (let redirects = 0; redirects <= 10; redirects++) {
     validateUrl(url);
-    // CI 实测：默认 Python UA 被下载端以 403/1010 拒绝，同地址浏览器 UA 返回 200。
+    // Observed in CI: the download server rejects the default Python UA with 403/1010, while a browser UA receives 200 at the same URL.
     const response = await fetch(url, { headers: { 'User-Agent': USER_AGENT }, redirect: 'manual', signal });
     if ([301, 302, 303, 307, 308].includes(response.status)) {
       await response.body?.cancel();
@@ -32,7 +32,7 @@ async function download(url: string, signal: AbortSignal): Promise<Response> {
       continue;
     }
     if (!response.ok) {
-      // 只输出有限分类，绝不回显 URL、原始 header、响应正文或网络异常。
+      // Output only bounded error categories; never echo URLs, raw headers, response bodies, or network exceptions.
       const server = response.headers.get('server')?.toLowerCase() ?? '';
       const category = ['cloudflare', 'nginx', 'apache', 'amazons3'].find((name) => server.includes(name)) ?? 'other';
       await response.body?.cancel();
@@ -43,7 +43,7 @@ async function download(url: string, signal: AbortSignal): Promise<Response> {
   throw new ResourceError('资源下载重定向过多');
 }
 
-/** 只下载用户原始游戏包并校验固定哈希；提取使用前端共享模块。 */
+/** Download only original user game packages and verify fixed hashes; extraction uses the shared frontend module. */
 export async function downloadResources(url: string, expected: string, destination: string): Promise<void> {
   let stage: string | undefined;
   let phase = '配置';
@@ -89,7 +89,7 @@ export async function downloadResources(url: string, expected: string, destinati
     const kind =
       magic[0] === 0x1f && magic[1] === 0x8b ? 'tar.gz' : magic.subarray(0, 2).toString() === 'PK' ? 'zip' : 'unknown';
     if (!expected) {
-      // 缺少可信哈希时只报告摘要，不自动接受下载结果作为基线。
+      // Without a trusted hash, report only the digest; never automatically accept the download as a baseline.
       console.log(`资源格式=${kind}; bytes=${size}; SHA-256=${digest}`);
       throw new ResourceError('请审核资源包并配置固定 SHA-256');
     }

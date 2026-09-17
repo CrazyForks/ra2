@@ -1,25 +1,20 @@
 /**
- * DirectSound 环形 PCM 流的 AudioWorklet 渲染器。
+ * AudioWorklet renderer for DirectSound ring PCM streams.
  *
- * 主线程只负责把 guest 写入的 PCM 区间转成 Float32 同步进来（update），
- * 逐量子的采样渲染在音频线程完成——主线程被画面渲染/GC 打满时不会再掏空
- * 缓冲（旧 ScriptProcessor 方案 onaudioprocess 跑在主线程，卡顿根因）。
- * 每个 DirectSound buffer 一个 Processor 实例，消息经各自 port 直连。
+ * The main thread only converts guest-written PCM ranges to Float32 and synchronizes them via update. Per-quantum sampling runs on the audio thread, preventing buffer starvation when rendering or GC saturates the main thread, which caused stutter with main-thread ScriptProcessor onaudioprocess. Each DirectSound buffer has one Processor instance and its own direct message port.
  *
- * 消息协议（port，主线程 → worklet）：
- *  - create {channels, frames, frequency, loop, frame}：建流（PCM 全量随后 update 同步）
- *  - update {offsetFrames, data: Float32Array}：按帧偏移覆写交织数据
- *  - play / stop / set-loop {loop} / set-position {frame} / set-frequency {frequency}
- *  - destroy
- * 回发（worklet → 主线程）：position {frame}——约每 100ms 汇报播放游标，
- * 主线程按 currentTime 外推。
+ * Message protocol (port, main thread -> worklet):
+ * - create {channels, frames, frequency, loop, frame}: create the stream; update follows with all PCM data.
+ * - update {offsetFrames, data: Float32Array}: overwrite interleaved data at a frame offset.
+ * - play / stop / set-loop {loop} / set-position {frame} / set-frequency {frequency}
+ * - destroy
+ * Replies (worklet -> main thread): position {frame} reports the playback cursor about every 100ms; the main thread extrapolates using currentTime.
  *
- * 注意：本文件经 `new URL(..., import.meta.url)` 原样发射为构建资源，
- * Vite 不做 TS 转译，因此必须保持纯 JS 语法（无类型注解/declare/泛型）。
+ * Note: new URL(..., import.meta.url) emits this file unchanged as a build asset. Vite does not transpile TS here, so keep plain JS syntax without type annotations, declare, or generics.
  */
 
-// AudioWorklet 全局（sampleRate/currentTime/registerProcessor）不在 lib.dom 里，
-// 此处用 JSDoc 提供类型，文件本体保持纯 JS。
+// AudioWorklet globals (sampleRate/currentTime/registerProcessor) are absent from lib.dom;
+// use JSDoc for types here while keeping the file itself plain JS.
 /* global AudioWorkletProcessor, registerProcessor, sampleRate, currentTime */
 
 class Ra2PcmStreamProcessor extends AudioWorkletProcessor {
@@ -113,7 +108,7 @@ class Ra2PcmStreamProcessor extends AudioWorkletProcessor {
     }
     state.frame = frame;
 
-    // 约每 100ms 回发一次游标；主线程拿它当外推基准。
+    // Report the cursor about every 100ms as the main thread's extrapolation baseline.
     if (currentTime - state.lastPositionAt >= 0.1) {
       state.lastPositionAt = currentTime;
       this.port.postMessage({ kind: 'position', frame: state.frame });

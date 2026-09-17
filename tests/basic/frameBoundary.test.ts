@@ -1,11 +1,8 @@
 /**
- * DirectDraw 帧边界 smoke 迁移：Unlock/VBlank 的帧提交全部经 scheduleFrame
- * 延迟，在途帧期间的 dirty 更新只合并出一张后续快照；VBlank 是完整帧边界，
- * 每次等待不超过一个 60Hz 刷新周期且一对调用只等一次；deferFrameSnapshot
- * 模式下 mailbox 满时延迟取快照、只保留最新画面。
+ * Migrated DirectDraw frame-boundary smoke tests: Unlock/VBlank submissions are all deferred through scheduleFrame. Dirty updates during an in-flight frame coalesce into one subsequent snapshot.
+ * VBlank is a full-frame boundary: each wait is at most one 60 Hz refresh interval, and a pair of calls waits only once. In deferFrameSnapshot mode, a full mailbox delays snapshots and retains only the latest frame.
  *
- * 第一个 it 刻意保持原脚本的顺序累积状态（frames/scheduled/logicFrames
- * 贯穿 Unlock 合并、VBlank、VBlank 对与等待期重调度四个检查点）。
+ * The first test deliberately preserves the original script's sequential cumulative state (frames/scheduled/logicFrames across Unlock coalescing, VBlank, paired VBlank calls, and rescheduling while waiting).
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -33,7 +30,7 @@ const surfaceDesc = (memory: FakeGuestMemory, address: number) => {
   writeU32(memory, address + 104, 0x200); // DDSCAPS_PRIMARYSURFACE
 };
 
-/** 原脚本的 dispatch：断言导入已实现、返回 DD_OK，并回传 Win32Result（取 delayMs）。 */
+/** Original script's dispatch: assert that the import is implemented and returns DD_OK; return Win32Result to inspect delayMs. */
 const dispatchOk = (shim: Win32Shim, key: string, args: number[]): Win32Result => {
   const result = callShim(shim, key, args);
   expect(result.eax, `${key} should return DD_OK`).toBe(0);
@@ -84,8 +81,8 @@ describe('DirectDraw 帧边界（原 frameBoundarySmoke）', () => {
     expect(readU32(memory, HYPERCALL_CURSOR_X)).toBe(1439);
     expect(readU32(memory, HYPERCALL_CURSOR_Y)).toBe(899);
 
-    // RA2 可在旧战场帧仍显示时提前登记下一张 800×600 primary；此时不能把
-    // 已锁定的鼠标突然钳回 799×599，直到新 surface 确实产生呈现帧。
+    // RA2 may register the next 800x600 primary while the old battle frame is still displayed. Do not suddenly
+    // clamp the locked mouse to 799x599 until the new surface actually produces a presented frame.
     writeU32(memory, desc + 8, 600);
     writeU32(memory, desc + 12, 800);
     dispatchOk(shim, 'DDRAW.COM!IDirectDraw.CreateSurface', [0, desc, out, 0]);
@@ -182,16 +179,16 @@ describe('DirectDraw 帧边界（原 frameBoundarySmoke）', () => {
     const lockStub = readU32(memory, vtable + 25 * 4);
     const unlockStub = readU32(memory, vtable + 32 * 4);
 
-    expect(readU32(memory, primary + 8)).toBe(108); // 对象尾部的 DDSURFACEDESC
+    expect(readU32(memory, primary + 8)).toBe(108); // DDSURFACEDESC at the end of the object
     expect(memory.read_memory(lockStub, 2)).toEqual(new Uint8Array([0x56, 0x57]));
     expect(memory.read_memory(unlockStub, 4)).toEqual(new Uint8Array([0x8b, 0x4c, 0x24, 0x04]));
-    expect(readU32(memory, primary + 116)).toBe(2); // primary 模式
+    expect(readU32(memory, primary + 116)).toBe(2); // Primary mode
     expect(readU32(memory, primary + 120)).toBe(0);
 
-    // 不经 host Lock 也必须由每次 Unlock 置脏并提交，保证输入/光标呈现边界。
+    // Every Unlock must mark dirty and submit even without a host Lock, preserving input/cursor presentation boundaries.
     dispatch('DDRAW.COM!IDirectDrawSurface.Unlock', [primary, readU32(memory, primary + 8 + 36)]);
     expect(frames).toHaveLength(1);
-    expect(readU32(memory, primary + 120)).toBe(0); // primary 不开放快速预算
+    expect(readU32(memory, primary + 120)).toBe(0); // No fast-path budget for the primary
 
     const offscreenDesc = 0x10_200;
     const offscreenOut = 0x10_300;
@@ -200,9 +197,9 @@ describe('DirectDraw 帧边界（原 frameBoundarySmoke）', () => {
     dispatch('DDRAW.COM!IDirectDraw.CreateSurface', [0, offscreenDesc, offscreenOut, 0]);
     const offscreen = readU32(memory, offscreenOut);
     expect(readU32(memory, offscreen + 116)).toBe(0); // generic offscreen
-    expect(readU32(memory, offscreen + 120)).toBe(0); // 首次仍回 host
+    expect(readU32(memory, offscreen + 120)).toBe(0); // The first call still returns to the host
     dispatch('DDRAW.COM!IDirectDrawSurface.Unlock', [offscreen, readU32(memory, offscreen + 8 + 36)]);
-    expect(readU32(memory, offscreen + 120)).toBe(7); // 之后最多快速 7 次
+    expect(readU32(memory, offscreen + 120)).toBe(7); // Then at most seven fast calls
   });
 
   it('RA2 shell surface Unlock 同步活跃层，换层时客体桩可强制回 host', () => {
@@ -251,8 +248,8 @@ describe('DirectDraw 帧边界（原 frameBoundarySmoke）', () => {
     const background = create(0x10_200, 0x10_300, 0);
     const primaryPixels = readU32(memory, primary + 44);
     const backgroundPixels = readU32(memory, background + 44);
-    memory.write_memory([0x00, 0xf8, 0x00, 0xf8], primaryPixels); // RGB565 红
-    memory.write_memory([0xe0, 0x07, 0xe0, 0x07], backgroundPixels); // RGB565 绿
+    memory.write_memory([0x00, 0xf8, 0x00, 0xf8], primaryPixels); // RGB565 red
+    memory.write_memory([0xe0, 0x07, 0xe0, 0x07], backgroundPixels); // RGB565 green
     memory.write_memory([0x00, 0xf8, 0x00, 0xf8, 0x00, 0xf8, 0x00, 0xf8], primaryPixels + 8);
     memory.write_memory([0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x07, 0xe0, 0x07], backgroundPixels + 8);
     memory.write_memory(
@@ -276,16 +273,16 @@ describe('DirectDraw 帧边界（原 frameBoundarySmoke）', () => {
     dispatch('DDRAW.COM!IDirectDrawSurface.Unlock', [primary, readU32(memory, primary + 44)]);
     frames.length = 0;
     memory.write_memory([0x00, 0xf8, 0x00, 0xf8], readU32(memory, background + 44));
-    shellState.shellPageTitle = ''; // 模拟换页时标题控件短暂销毁
+    shellState.shellPageTitle = ''; // Simulate temporary title-control destruction during a page switch
     shellState.windowClassNames.set(0x1234, 'ListBox');
     shellState.windowLongs.set('4660:-16', 0x1000_0000); // WS_VISIBLE
     shellState.windowParents.set(0x1234, 0x1200);
     shellState.windowClassNames.set(0x1250, 'ComboBox');
-    shellState.windowLongs.set('4688:-16', 0); // 已由 ShowWindow(SW_HIDE) 隐藏
+    shellState.windowLongs.set('4688:-16', 0); // Already hidden by ShowWindow(SW_HIDE)
     shellState.windowParents.set(0x1250, 0x1200);
     shellState.windowRects.set(0x1250, { x: 4, y: 0, width: 4, height: 4 });
     shellState.windowClassNames.set(0x1260, 'Static');
-    shellState.windowLongs.set('4704:-16', 0); // 创建起就隐藏的模板占位
+    shellState.windowLongs.set('4704:-16', 0); // Template placeholder hidden from creation
     shellState.windowParents.set(0x1260, 0x1200);
     shellState.windowRects.set(0x1260, { x: 0, y: 0, width: 1, height: 1 });
     dispatch('DDRAW.COM!IDirectDrawSurface.Unlock', [background, readU32(memory, background + 44)]);
@@ -355,9 +352,9 @@ describe('DirectDraw 帧边界（原 frameBoundarySmoke）', () => {
     const primary = create(0x10_000, 0x10_100, 0x200);
     const background = create(0x10_200, 0x10_300, 0);
     const overlay = create(0x10_400, 0x10_500, 0x800);
-    memory.write_memory([0xe0, 0x07], readU32(memory, primary + 44)); // RGB565 绿
-    memory.write_memory([0x1f, 0x00], readU32(memory, background + 44)); // RGB565 蓝
-    memory.write_memory([0x00, 0xf8], readU32(memory, overlay + 44)); // RGB565 红
+    memory.write_memory([0xe0, 0x07], readU32(memory, primary + 44)); // RGB565 green
+    memory.write_memory([0x1f, 0x00], readU32(memory, background + 44)); // RGB565 blue
+    memory.write_memory([0x00, 0xf8], readU32(memory, overlay + 44)); // RGB565 red
     dispatch('DDRAW.COM!IDirectDrawSurface.Unlock', [overlay, readU32(memory, overlay + 44)]);
     dispatch('DDRAW.COM!IDirectDrawSurface.Unlock', [background, readU32(memory, background + 44)]);
     dispatch('DDRAW.COM!IDirectDrawSurface.Unlock', [primary, readU32(memory, primary + 44)]);
@@ -388,8 +385,8 @@ describe('DirectDraw 帧边界（原 frameBoundarySmoke）', () => {
     const overlay = create(0x10_400, 0x10_500, 0x800);
     const backgroundPixels = readU32(memory, background + 44);
     const overlayPixels = readU32(memory, overlay + 44);
-    memory.write_memory([0xe0, 0x07, 0x00, 0xf8], readU32(memory, primary + 44)); // 绿、红
-    memory.write_memory([0x1f, 0x00, 0x1f, 0x00], backgroundPixels); // 蓝
+    memory.write_memory([0xe0, 0x07, 0x00, 0xf8], readU32(memory, primary + 44)); // Green, red
+    memory.write_memory([0x1f, 0x00, 0x1f, 0x00], backgroundPixels); // Blue
     memory.write_memory([0x34, 0x12, 0x00, 0x00], overlayPixels);
     writeU32(memory, 0x10_600, 0x1234);
     writeU32(memory, 0x10_604, 0x1234);
@@ -432,12 +429,12 @@ describe('DirectDraw 帧边界（原 frameBoundarySmoke）', () => {
     dispatch('DDRAW.COM!IDirectDrawSurface.Unlock', [primary, primaryPixels]);
     expect(frames.length, 'Unlock delivery should remain deferred').toBe(0);
     expect(scheduled, 'Unlock should schedule delivery when a scheduler is provided').toBeTruthy();
-    // 第一张尚未呈现时继续改表面：不得再生成/登记第二个 scheduler 回调，但 dirty
-    // 必须保留；第一张发出后应自动安排一张包含最新像素的后续快照。
+    // Keep modifying the surface before the first frame is presented: do not create/register a second scheduler callback,
+    // but retain dirty state. After sending the first frame, automatically schedule a snapshot containing the latest pixels.
     dispatch('DDRAW.COM!IDirectDrawSurface.Lock', [primary, 0, primarySurfaceDesc, 0, 0]);
     memory.write_memory(new Uint8Array(16).fill(8), primaryPixels);
     dispatch('DDRAW.COM!IDirectDrawSurface.Unlock', [primary, primaryPixels]);
-    // scheduled 在 scheduleFrame 闭包内赋值，TS 控制流按初始 null 窄化，显式还原声明类型。
+    // scheduled is assigned inside the scheduleFrame closure, but TS narrows it to its initial null; explicitly restore its declared type.
     const deliverUnlock: (() => void) | null = scheduled;
     scheduled = null;
     deliverUnlock!();
@@ -480,7 +477,7 @@ describe('DirectDraw 帧边界（原 frameBoundarySmoke）', () => {
     expect((firstNextPairCall.delayMs ?? 0) >= 0 && (firstNextPairCall.delayMs ?? 0) <= 17).toBeTruthy();
     expect((secondNextPairCall.delayMs ?? 0) <= 1, 'each VBlank pair should wait at most once').toBeTruthy();
 
-    // 调度等待期间的第二次 surface 更新不能被 frameScheduled 永久吞掉。
+    // A second surface update while waiting for scheduling must not be permanently swallowed by frameScheduled.
     dispatch('DDRAW.COM!IDirectDrawSurface.Lock', [primary, 0, primarySurfaceDesc, 0, 0]);
     const firstPendingPixels = readU32(memory, primarySurfaceDesc + 36);
     memory.write_memory(new Uint8Array(16).fill(11), firstPendingPixels);
@@ -502,7 +499,7 @@ describe('DirectDraw 帧边界（原 frameBoundarySmoke）', () => {
   });
 
   it('deferFrameSnapshot：mailbox 满时延迟取快照，只保留最新画面', () => {
-    // Worker mailbox 满时应延迟取快照，只保留最新画面，避免 4× 下不断复制旧帧。
+    // When the Worker mailbox is full, defer the snapshot and retain only the latest frame to avoid repeatedly copying stale frames at 4x.
     const memory = createGuestMemory();
     const frames: VmFrame[] = [];
     let scheduled: (() => void) | null = null;

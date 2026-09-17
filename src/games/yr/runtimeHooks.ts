@@ -12,15 +12,13 @@ const YR_STARTUP_MOVIE_SIGNATURE = [0x8b, 0xd5, 0xb9, 0x20, 0x5f] as const;
 const YR_SETTINGS_POINTER = 0x0088_71e0;
 const YR_GAME_SPEED_OFFSET = 0x14a0;
 
-/** 只接受原版七档 0..6；Settings 单例指针与字段偏移见 YR_SETTINGS_POINTER。 */
+/** Accept only the original seven settings 0..6; see YR_SETTINGS_POINTER for the Settings singleton pointer and field offset. */
 export function writeYrGameSpeed(memory: GuestMemory, value: number): number | null {
   return writeGameSpeedFlag(memory, YR_SETTINGS_POINTER, YR_GAME_SPEED_OFFSET, value);
 }
 
 /**
- * YR 1.001 在 0x52c5e0 无条件构造并播放 EA_WWLOGO；与 RA2 的 WESTLOGO
- * 分支不同，它没有可用的 INI 开关。跳到 0x52c5f3 保留影片子系统的原生共同
- * 收尾，但不创建启动影片窗口。战役简报和局内 EVA 小窗走其他调用点，不受影响。
+ * YR 1.001 unconditionally creates and plays EA_WWLOGO at 0x52c5e0; unlike RA2's WESTLOGO branch, it has no usable INI switch. Jump to 0x52c5f3 to retain native shared movie cleanup without creating the startup-movie window. Campaign briefings and in-game EVA windows use other call sites and remain unaffected.
  */
 export function skipYrStartupMovies(memory: GuestMemory): boolean {
   return skipStartupMovieBlock(

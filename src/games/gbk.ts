@@ -1,17 +1,15 @@
 /**
- * GBK（cp936）编码：Win9x 中文环境窄字符串的代码页。
- * 浏览器没有 GBK 的 TextEncoder，这里用自带的 TextDecoder('gbk') 反查构建
- * 「字符 → 双字节」映射（约 2.4 万项，一次性约 1ms），零外部依赖。
- * ASCII 可打印字符映射为单字节自身；不可编码字符（emoji 等）返回 null。
+ * GBK (cp936) encoding: the narrow-string code page in Chinese Win9x environments.
+ * Browsers have no GBK TextEncoder, so reverse-map the built-in TextDecoder('gbk') into a character-to-byte-pair table, about 24,000 entries in a one-time ~1ms initialization, without external dependencies. Printable ASCII maps to its single byte; unencodable characters such as emoji return null.
  */
 let reverseMap: Map<string, number[]> | null = null;
 let reverseMapUnsupported = false;
 
 function buildGbkReverseMap(): Map<string, number[]> {
   const bytes: number[] = [];
-  // GBK 双字节区：lead 0x81–0xFE，trail 0x40–0x7E / 0x80–0xFE。
-  // 每对之间插入 0x00（ASCII）重置解码状态机，整块解码一次再按分隔符回切，
-  // 避免两万多次单独 decode 调用。区段内每个双字节序列恰好对应一个字符。
+  // GBK double-byte ranges: lead 0x81-0xFE, trail 0x40-0x7E / 0x80-0xFE.
+  // Insert ASCII 0x00 between pairs to reset the decoder state; decode once and split at separators,
+  // avoiding over 20,000 separate decode calls. Each double-byte sequence in these ranges corresponds to exactly one character.
   for (let lead = 0x81; lead <= 0xfe; lead++) {
     for (let trail = 0x40; trail <= 0xfe; trail++) {
       if (trail === 0x7f) continue;
@@ -26,16 +24,16 @@ function buildGbkReverseMap(): Map<string, number[]> {
       pair++;
       continue;
     }
-    if (ch === '�') continue; // 浏览器不识别该字节对的替换符，不建立映射
+    if (ch === '�') continue; // Do not map replacement characters for byte pairs the browser cannot decode.
     const lead = 0x81 + Math.floor(pair / 190);
     const offset = pair % 190;
-    const trail = offset + 0x40 + (offset >= 63 ? 1 : 0); // trail 跳过 0x7F
+    const trail = offset + 0x40 + (offset >= 63 ? 1 : 0); // Skip trail byte 0x7F.
     if (!map.has(ch)) map.set(ch, [lead, trail]);
   }
   return map;
 }
 
-/** 返回字符的 GBK 字节序列；字符不可编码返回 null。 */
+/** Return a character's GBK bytes, or null if unencodable. */
 export function gbkBytesOf(char: string): number[] | null {
   const code = char.charCodeAt(0);
   if (code >= 0x20 && code <= 0x7e) return [code];
@@ -44,7 +42,7 @@ export function gbkBytesOf(char: string): number[] | null {
     try {
       reverseMap = buildGbkReverseMap();
     } catch {
-      // 环境缺少 gbk 解码器（极老浏览器）：中文名不可用，英文名不受影响。
+      // If the environment lacks a GBK decoder, as in very old browsers, Chinese names are unavailable but English names still work.
       reverseMapUnsupported = true;
       return null;
     }

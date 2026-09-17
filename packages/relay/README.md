@@ -1,12 +1,10 @@
 # relay-package
 
-独立的通用 WebSocket relay，包含 server、client、Worker 桥接和
-[简短协议](RELAY_PROTOCOL.md)。一条 TCP 连接传控制和游戏数据，全部使用二进制帧；数据报头固定 13 字节。
+An independent generic WebSocket relay with server, client, Worker bridge, and a [compact protocol specification](RELAY_PROTOCOL.md). One TCP connection carries control and game data in binary frames; datagram headers are fixed at 13 bytes.
 
-## 启动与分发
+## Startup and distribution
 
-relay 包不声明 Node 版本范围；源码开发使用 package.json 中的 pnpm 版本。
-不保证所有 Node.js 版本兼容。在仓库根执行：
+The package declares no Node version range; source development uses the pnpm version in package.json. Compatibility with every Node.js version is not guaranteed. From the repository root:
 
 ```bash
 pnpm install --frozen-lockfile
@@ -15,89 +13,74 @@ pnpm run build:relay
 pnpm run server:relay
 ```
 
-开发时使用 watch，服务端入口及其导入的源码改变后自动重启：
+During development, watch mode restarts after changes to the server entry or its imported source:
 
 ```bash
 pnpm run server:relay:dev --host 127.0.0.1 --port 15176
-# 在 relay 包目录内也可直接运行：
+# From the relay package directory:
 pnpm run dev --host 127.0.0.1 --port 15176
 ```
 
-CLI 选项照常传递，例如 `--delay-ms 50`。重启会断开现有游戏连接，需要重新进入联机；
-`server:relay` 和分发包启动命令仍为单次运行。
+CLI options such as `--delay-ms 50` pass through normally. Restarts disconnect existing game sessions, requiring players to reenter multiplayer. `server:relay` and distribution startup commands remain single-run commands.
 
-根 `build:relay` 或包内 `build` 生成 `packages/relay/dist/` 中的服务端、协议、许可和客户端库。
-复制服务端 `gameRelay.cjs`、`RELAY_PROTOCOL.md`、`licenses/` 即可分发；
-接收方只需 Node，无需安装依赖：
+Root `build:relay` or package-local `build` generates the server, protocol, licenses, and client library in `packages/relay/dist/`. Distribute `gameRelay.cjs`, `RELAY_PROTOCOL.md`, `LICENSE`, and `licenses/`. Recipients need only Node, with no dependency installation:
 
 ```bash
 node gameRelay.cjs --host 0.0.0.0 --port 15176
 ```
 
-红警页面的 `relay` 只需填写 `host:port`，默认路径 `/ra2`。按地址确定唯一协议：
-RFC1918 私网、127/8 回环、169.254/16 链路本地、100.64/10 共享 VPN 地址，
-以及 IPv6 ULA、链路本地、回环、内嵌私网 IPv4 使用 WS；localhost 也按回环处理。
-其他 IP 和域名使用 WSS，不做 DNS 探测或失败回退。已有完整 URL 也按主机重新选择协议，
-保留显式端口与房间路径。通用 RelayClient 对裸地址先尝试 WSS，失败后再尝试 WS。
-所有玩家填写相同的地址与房间路径。只需放行 TCP 15176。
+The Red Alert page's `relay` field accepts `host:port` and defaults to `/ra2`. It selects a single protocol from the host: RFC1918 private, 127/8 loopback, 169.254/16 link-local, 100.64/10 shared VPN addresses, IPv6 ULA/link-local/loopback, and embedded private IPv4 use WS. localhost is also loopback. Other IPs/domains use WSS, without DNS probing or failure fallback. Even complete URLs have their protocol reselected by host, preserving explicit ports and room paths. Generic RelayClient separately tries WSS then WS for bare addresses. All players must use the same address/path. Direct relay access needs TCP 15176 opened.
 
-独立服务接受 `/房间名`，房间由服务端按路径确定；客户端不必再传 room。
-房间名区分大小写，URL 解码后为 1–64 字符的单段，禁止空白、控制字符及 ? & # /。
-路径直接作为房间名。
-直接升级根路径被拒绝。公共客户端无路径时按 room 选项补路径，未指定则为 /default；
-游戏前端的无路径地址补 /ra2。同名房间仍要求兼容性哈希一致。
-内嵌网页服务保留自己的升级路由，不将任意网页或 HMR 路径改成 relay。
+The standalone server accepts `/room-name` and determines the room from the path, without requiring a separate client room option. Names are case-sensitive, URL-decoded single segments of 1–64 characters, excluding whitespace, control characters, and ? & # /. The path is the room name. Direct root-path upgrades are rejected. Generic clients add a path from the room option when absent, defaulting to /default; the game frontend defaults to /ra2. Same-room members still need matching compatibility hashes. Embedded web services retain their own upgrade routing instead of turning arbitrary web/HMR paths into relay endpoints.
 
-## 模拟游戏数据延迟
+## Simulated game-data delay
 
 ```bash
 node gameRelay.cjs --port 15176 --delay-ms 50
-# 仓库内：
+# In the repository:
 pnpm run server:relay --port 15176 --delay-ms 50
 ```
 
-`--delay-ms` 为 0–60000 整数，默认关闭。每次转发游戏数据报增加指定毫秒数，
-玩家 A→B 增加 50ms，B→A 再增加 50ms，双向共增加约 100ms；不是单玩家到 relay RTT。
-握手、成员通知与心跳不延迟，因此页面 RTT 不体现该注入。真实延迟还含调度和网络时间。
-队列保序且有上限，连接退出会清理；极端积压可能丢弃数据，可通过 healthz faults 观察。
-需要抖动或限定玩家时仍可使用 `--faults`；不能同时指定 `--delay-ms` 和 faults.delayMs。
-这不模拟 TCP 丢包、重传、拥塞，也不证明低 RTT 无性能回退。
-服务端不要求 HTTPS 证书；网页的安全上下文、混合内容与 LNA 权限仍受浏览器策略约束。
-VPN 可保持开启，只需确保该 WS 地址可达，不集成特定 VPN。
+`--delay-ms` accepts integers 0–60000 and defaults to disabled. It adds the specified delay per game-datagram forwarding operation: A→B adds 50 ms and B→A another 50 ms, about 100 ms combined, not a single player's relay RTT. Handshakes, membership notifications, and heartbeats are unaffected, so page RTT excludes this injection. Actual delay also includes scheduling/network time.
 
-## Docker
+Queues preserve order and are bounded; departure cleans pending work. Extreme backlog may drop data, observable in healthz faults. Use `--faults` for jitter or selected-player rules; `--delay-ms` and faults.delayMs cannot both be specified. This does not simulate TCP loss, retransmission, or congestion, or establish absence of low-RTT regressions.
 
-在仓库根运行：
+The server needs no HTTPS certificate for WS; page security contexts, mixed content, and LNA permissions remain subject to browser policy. VPNs may remain enabled if the WS address is reachable; no specific VPN is integrated.
+
+## Docker deployment
+
+From the repository root:
 
 ```bash
 docker compose -f packages/relay/compose.yaml up -d --build
 docker compose -f packages/relay/compose.yaml logs -f relay
 ```
 
-在本包目录运行：
+From this package directory:
 
 ```bash
 docker build -t relay-package:local .
 docker compose up -d --build
 ```
 
-[Dockerfile](Dockerfile) 根据包内独立锁文件构建 `relay-package:local`，只安装 relay 依赖。
-[compose.yaml](compose.yaml) 仅映射一个 TCP 端口；可编辑 `ports` 左侧修改宿主机端口。
-运行镜像使用非 root 用户，包含服务、协议和依赖许可，不包含游戏、前端或构建工具。
-基础镜像使用不固定 Node 版本的 `node:alpine`。镜像未发布到远端仓库。
-构建上下文只使用 relay 目录，不需预先生成 dist 或安装仓库根依赖。
+[Dockerfile](Dockerfile) builds `relay-package:local` from the package's independent lockfile, installing only relay dependencies. [compose.yaml](compose.yaml) maps one TCP port; change the left side of `ports` to select a host port. It restarts the service unless stopped and checks `/healthz`. The runtime image uses a non-root user and includes the server, protocol, and dependency licenses, without games, frontend files, or build tools. Its base is `node:alpine` without a pinned Node version. The image has not been published to a remote registry. Build context is only the relay directory; no prebuilt dist or root dependencies are required.
 
 ```bash
 docker save -o relay-image.tar relay-package:local
-# 接收方加载镜像，使用复制来的 compose.yaml，无需源码构建。
+# Recipients load the image and use the copied compose.yaml without building source.
 docker load -i relay-image.tar
 docker compose -f compose.yaml up -d --no-build --pull never
 ```
 
-## 引用
+### Public WSS access
 
-应用声明 `"relay-package": "workspace:*"`。公共入口以源码提供类型，以 `dist/lib` 提供 ESM；
-应用 dev/build/test 自动构建包。浏览器入口不加载 Node 的 ws 依赖。
+For public IPs and domains, the Red Alert frontend selects WSS. Place a TLS reverse proxy with a valid certificate in front of the relay. Forward WebSocket upgrades and retain the full room path, such as `/ra2`. Expose the proxy's TLS TCP port to players; the relay may stay on a private upstream address. A local upstream is `http://127.0.0.1:15176`. Configure the public hostname/certificate in the deployment environment.
+
+The reverse proxy must support long-lived WebSocket connections. Check `/healthz` locally and verify a WebSocket connection through the public proxy before sharing its address. The static frontend does not start a relay. Leaving the page's relay field empty works only when the site already has a same-origin relay configured.
+
+## Application usage
+
+Applications declare `"relay-package": "workspace:*"`. Public entries provide source types and ESM from `dist/lib`; application dev/build/test commands build the package automatically. Browser entries do not load Node's ws dependency.
 
 ```ts
 import { RelayClient } from 'relay-package/client';
@@ -109,75 +92,55 @@ const client = new RelayClient(
   },
   {
     onReady(self) {
-      console.log('已连接', self.addr);
+      console.log('Connected', self.addr);
     },
     onPeerJoin(peer) {
-      console.log('成员加入', peer);
+      console.log('Peer joined', peer);
     },
     onDatagram(src, srcPort, destPort, bytes) {
       console.log(src, bytes);
     },
     onClose(reason) {
-      console.log('连接关闭', reason);
+      console.log('Connection closed', reason);
     },
   },
 );
-// onReady 后发送：client.sendDatagram(destAddr, destPort, srcPort, bytes)。
-// 会话结束：client.close()。
+// After onReady: client.sendDatagram(destAddr, destPort, srcPort, bytes).
+// At session end: client.close().
 ```
 
-示例哈希仅演示用，实际由应用提供兼容性 SHA-256。RelayClient 自动处理握手、成员通知、心跳、RTT 和关闭清理；
-ready 前发送返回 false，不缓存或重放，不自动重连。游戏转换由应用维护。
-需要底层访问时仍可使用 WsRelaySocket 和编解码函数。`relay-package/server` 导出 createGameRelay，
-`relay-package/wire` 提供编解码；默认入口等同 client。
+The example hash is illustrative; applications supply the actual compatibility SHA-256. RelayClient handles handshakes, membership, heartbeats, RTT, and close cleanup. Sending before ready returns false, with no buffering, replay, or automatic reconnect. Applications own game conversion. WsRelaySocket/codecs remain available for lower-level access. `relay-package/server` exports createGameRelay, `relay-package/wire` provides codecs, and the default entry equals client.
 
-Worker 可直接使用 WsRelaySocket，也可使用 PortRelaySocket；页面通过 serveRelayPort
-持有连接，返回的清理函数必须随 VM 退出或 Worker 异常终止调用。普通发送立即复制逻辑字节，
-不 transfer 客体内存。独占帧通过 sendOwned 接管后，调用方不得再访问，缓冲在派发时分离。
-当前执行片段的帧在微任务交接，每批最多 64 条或达到 256 KiB 即派发；不等待计时器或下一游戏帧。
-每批只回一个按字节计数的 ACK，每条仍独立 ws.send，并检查真实 WS 积压。
-批处理不会合并不同 WS 事件任务，不能保证每条入站消息都能合批，也不减少编码次数。
+Workers may use WsRelaySocket directly or PortRelaySocket. The page owns connections through serveRelayPort and must call its returned cleanup function on VM exit or abnormal Worker termination. Ordinary sends immediately copy logical bytes without transferring guest memory. After handing an exclusive frame to sendOwned, the caller must stop accessing it; dispatch detaches the buffer.
 
-源码与测试在 `src/` 和 `tests/`，构建在 `scripts/`。运行依赖只有 ws。
-本包自带独立 pnpm-lock.yaml，可把整个目录复制到任意位置构建，不需要游戏仓库文件。
-包内锁文件用于独立构建；在红警工作区更新依赖时，还需同步更新根锁文件。
+Frames from the current execution segment hand off in a microtask, dispatching at most 64 messages per batch or upon reaching 256 KiB, without waiting for timers or the next game frame. Each batch gets one byte-count ACK, while each message retains an independent ws.send with actual WS-backlog checks. Batching does not combine separate WS event tasks, guarantee batching of every inbound message, or reduce encoding operations.
 
-## 如何取得地址
+Source/tests live in `src/` and `tests/`; builds live in `scripts/`. ws is the only runtime dependency. The independent pnpm-lock.yaml allows copying the whole package elsewhere and building without game-repository files. In the Red Alert workspace, shared dependency changes also require updating the root lockfile.
 
-服务器实际 IP 与房间虚拟地址是两回事：
+## Finding the address
 
-- 同机测试使用 `ws://127.0.0.1:15176/ra2`。
-- LAN 玩家需要服务器所在电脑的局域网 IPv4。macOS 在系统设置的网络连接详情中查看
-  TCP/IP 地址；Windows 用 `ipconfig` 查看当前网卡 IPv4；Linux 用 `ip -4 addr`。
-  多网卡时选择玩家能到达的网卡地址；VPN 可用其可达地址，不必关闭 VPN。
-- 服务默认使用 `--host 0.0.0.0` 接收远端连接；`0.0.0.0` 是监听地址，不能填写为连接目的地。
-  容器部署填写宿主机可达 IP 和映射的 TCP 端口，通常不填容器内部 IP。
-- 客户端连接后，`onReady(self)` 的 `self.addr` 或 `client.selfAddr` 是服务分配的虚拟地址。
-  对方地址从 `onPeerJoin(peer)` 的 `peer.addr` 获取，离开时由 `onPeerLeave(id, addr)` 通知。
-  不需要发现对方的实际 IP，发送时直接把 `peer.addr` 传给 `sendDatagram`。
+The server's actual IP and room virtual addresses are different:
 
-虚拟地址为大端 IPv4 的无符号整数，显示格式可以这样转换：
+- Same-host testing uses `ws://127.0.0.1:15176/ra2`.
+- LAN players need the server computer's LAN IPv4. On macOS, inspect TCP/IP in System Settings network details; on Windows use `ipconfig`; on Linux use `ip -4 addr`. With multiple interfaces, choose one reachable by players. A reachable VPN address works without disabling the VPN.
+- The default `--host 0.0.0.0` accepts remote connections. `0.0.0.0` is a listen address, not a destination. For containers, use the reachable host IP and mapped TCP port, usually not the container's internal IP.
+- After connection, `self.addr` in `onReady(self)` or `client.selfAddr` is the server-assigned virtual address. Obtain peers from `onPeerJoin(peer)`'s `peer.addr`; `onPeerLeave(id, addr)` reports departure. No discovery of peers' actual IPs is needed: pass `peer.addr` to `sendDatagram`.
+
+Virtual addresses are unsigned big-endian IPv4 integers. Format them as:
 
 ```ts
 const formatAddress = (addr: number) => [24, 16, 8, 0].map((shift) => (addr >>> shift) & 255).join('.');
 ```
 
-## 独立测试
+## Standalone testing
 
-`pnpm --filter relay-package run check` 检查类型、协议、服务、客户端和独立服务端分发。
-测试不依赖 RA2、游戏素材、外部 relay 或公网；真实 WS 测试监听本机随机端口。
-覆盖二进制固定向量、非法帧、字段边界、握手与兼容性隔离、源地址覆写、广播、限流、
-慢连接、维护排空、退出取消延迟消息，以及客户端双向通信和生命周期。
-这些是协议与服务可靠性检查，不代表真实游戏长局或断线恢复已验收。
+`pnpm --filter relay-package run check` checks types, protocol, server, client, and standalone server distribution. Tests require no RA2, assets, external relay, or public network; real WS tests listen on random local ports. Coverage includes fixed binary vectors, invalid frames, field boundaries, handshake/compatibility isolation, source-address rewriting, broadcasts, rate limiting, slow connections, maintenance draining, departure cancellation of delayed messages, bidirectional client traffic, and lifecycle.
 
-Worker 桥接、独占帧移交、端口 ACK、普通发送复制和真实 WS 积压由
-`packages/relay/tests/relayPort.test.ts` 等测试覆盖。
+These protocol/service checks do not establish real-game long-match or reconnect acceptance. `packages/relay/tests/relayPort.test.ts` and related tests cover Worker bridges, exclusive frame handoff, port ACKs, ordinary-send copying, and real WS backlog.
 
-启动日志显示「请在游戏中输入 relay：IP:端口」，可复制到游戏资源选择页的「联机 relay 地址」输入框，
-或放入页面 `relay` 查询参数。服务不会自动修改游戏或浏览器配置；输入留空使用默认服务。
-界面填写会更新当前页面 URL，刷新仍保留；启动后需结束当前 VM 再修改连接配置。
+Startup logs provide an `IP:port` relay address. Copy it into the resource picker's multiplayer relay field or the page's `relay` query parameter. The service never changes game/browser configuration automatically. An empty field uses the default service. Editing the field updates the URL so refresh preserves it; changing connection settings after startup requires ending the current VM first.
 
-独立服务仅使用 CLI 配置，不读取环境变量：
+Standalone configuration uses CLI options only, without environment variables:
 
 ```bash
 node gameRelay.cjs --help
@@ -185,13 +148,10 @@ node gameRelay.cjs --host 127.0.0.1 --port 15178 --max-connections 128
 node gameRelay.cjs --faults '{"delayMs":100}'
 ```
 
-Docker 的 `command` 可传同样参数；更改容器内端口时同步修改端口映射及 healthcheck。
-通常只改宿主机映射端口即可，容器内保持 15176。
+Docker `command` accepts the same options. Changing the container's internal port also requires updating port mapping and healthcheck. Usually change only the host mapping while retaining internal 15176.
 
-主页默认单机。勾选「联机」后显示 relay 地址设置；留空连接同源默认服务。
-带 `relay` 的链接自动勾选联机，显式 `network=0` 关闭联机。
+The homepage defaults to single-player. Enabling multiplayer reveals relay settings; leaving them empty selects the same-origin default service. Links containing `relay` enable multiplayer automatically; explicit `network=0` disables it.
 
-## 许可证
+## License
 
-本包采用 GPL-3.0-or-later，见 [LICENSE](LICENSE)。ws 等第三方组件保留自己的许可证。
-分发服务端时同时保留 LICENSE、协议和 licenses/ 目录；对应源码为本包源码与构建脚本。
+This package is GPL-3.0-or-later; see [LICENSE](LICENSE). Third-party components such as ws retain their own licenses. Distribute the server with LICENSE, the protocol, and licenses/. Corresponding source consists of this package's source and build scripts.

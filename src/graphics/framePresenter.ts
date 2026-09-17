@@ -21,8 +21,9 @@ export interface FrameScheduler {
   cancel(id: number): void;
 }
 
-/** 拥有最新帧引用和一次 rAF；不负责 VM 启停、React 状态或具体超分模型。
- * submit 必须在 VM 回收上一帧前替换引用，不复制整帧，也不形成历史帧队列。
+/**
+ * Own the latest frame reference and one rAF, not VM lifecycle, React state, or specific upscaling models.
+ * submit must replace the reference before the VM reclaims the previous frame, without whole-frame copies or historical frame queues.
  */
 export class FramePresenter {
   private latest: VmFrame | null = null;
@@ -89,8 +90,8 @@ export class FramePresenter {
     this.cursor = { x, y, visible };
     if (!redraw) return;
     this.cursorVersion++;
-    // 首次移动立即反馈；同一刷新周期内后续事件只更新位置，帧尾呈现最新坐标。
-    // 高轮询率鼠标不能为每个事件重跑整帧 WebGL/增强管线，也不应积压历史坐标。
+    // Respond immediately to the first movement; subsequent events within the refresh cycle update position only, presenting the latest coordinates at frame end.
+    // High-polling-rate mice must not rerun the whole WebGL/enhancement pipeline per event or accumulate historical coordinates.
     if (!this.cursorDrawnBeforeFrame) {
       this.cursorDrawnBeforeFrame = true;
       this.draw();
@@ -102,7 +103,7 @@ export class FramePresenter {
     if (!frame || (this.drawnVersion === this.version && this.drawnCursorVersion === this.cursorVersion)) return;
     const enhanced = this.hooks.transform?.(frame);
     const target = this.hooks.targetSize();
-    // 即使增强结果滞后，光标仍从最新原帧取样和定位。
+    // Even when enhancement lags, sample and position the cursor from the latest original frame.
     this.output.draw(enhanced ?? frame, target.width, target.height, this.cursor, frame);
     this.drawnVersion = this.version;
     this.drawnCursorVersion = this.cursorVersion;

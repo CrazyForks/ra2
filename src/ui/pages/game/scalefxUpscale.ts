@@ -1,8 +1,8 @@
+import { t } from '../../shared/i18n/translate';
 /**
- * ScaleFX — 像素画边缘插值放大（3×）。
+ * ScaleFX -- pixel-art edge-interpolation upscaling (3x).
  *
- * 移植自 libretro/glsl-shaders 的 scalefx/shaders/scalefx-pass0..4.glsl
- * （Sp00kyFox），MIT 许可：
+ * Ported from libretro/glsl-shaders scalefx/shaders/scalefx-pass0..4.glsl by Sp00kyFox, under the MIT license:
  *
  *   ScaleFX - Pass 0..4, by Sp00kyFox, 2017-03-01
  *   Copyright (c) 2016 Sp00kyFox - ScaleFX@web.de
@@ -22,20 +22,14 @@
  *   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  *   THE SOFTWARE.
  *
- * 官方链：pass0 色距度量 → pass1 角强度 → pass2 交叉口标签 → pass3 子像素映射
- * （全部源分辨率）→ pass4 按子像素映射从原图取色输出 3×。
- * 算法性质：输出只包含原图已有的颜色（pass4 仅做邻域取色），不产生新颜色。
+ * Official pipeline: pass0 color distance -> pass1 corner strength -> pass2 junction tags -> pass3 subpixel mapping, all at source resolution, then pass4 samples original colors for 3x output. Output contains only colors already in the source because pass4 only selects neighborhood colors.
  *
- * 适配（与官方实现的关系，滤波逻辑逐行保留）：
- * - retroarch 用顶点预偏移（t1..t4）供 GL_ES 分支采样；本移植一律 texelFetch
- *   整数取点，偏移与官方逐 texel 一致。
- * - FBO 写入端按 gl_FragCoord（自下而上）存储，所有读 FBO 的 pass 翻转 Y
- *   （与 FSR RCAS 同约定）；pass0/pass4 读原版纹理不翻转。
- * - pass4 的子像素网格先按图像方向翻转 gl_FragCoord，再算 fp = 3*fract(src)，
- *   否则每个 3×3 块自身上下镜像。
- * - pass4 输出到 3× 中间纹理后，额外一次线性 pass 贴合画布目标尺寸
- *   （官方预设直接输出整数倍；这里目标尺寸通常不是 3×）。
- * - SFX_SAA/SFX_CLR/SFX_SCN 采用官方默认（1.0/0.5/1.0），已内联进数学。
+ * Adaptations, retaining filtering logic line by line:
+ * - RetroArch uses vertex-preoffset t1..t4 coordinates for GL_ES sampling; this port uses integer texelFetch with identical per-texel offsets.
+ * - FBO writes follow bottom-up gl_FragCoord, so every FBO-reading pass flips Y, matching FSR RCAS. pass0/pass4 do not flip original-texture reads.
+ * - pass4 flips gl_FragCoord to image orientation before fp = 3*fract(src); otherwise each 3x3 block is vertically mirrored.
+ * - After pass4 writes a 3x intermediate texture, one extra linear pass fits the canvas, whose target size is usually not 3x; official presets output integer scales directly.
+ * - Inline official SFX_SAA/SFX_CLR/SFX_SCN defaults of 1.0/0.5/1.0 into the math.
  */
 
 type FrameFormat = 'indexed' | 'rgba' | 'rgb565';
@@ -50,7 +44,7 @@ void main() {
 }
 `;
 
-/** 原版纹理的按点解码（与 fsrUpscaleShader 的 readPixel 同一约定）。 */
+/** Point decoding of original textures, matching readPixel in fsrUpscaleShader. */
 function sourceRead(format: FrameFormat): { uniforms: string; body: string; sampler: string; texture: string } {
   const texture =
     format === 'indexed' ? 'scalefxSource' : format === 'rgba' ? 'scalefxSourceRgba' : 'scalefxSourceRgb565';
@@ -72,13 +66,13 @@ function sourceRead(format: FrameFormat): { uniforms: string; body: string; samp
   return { uniforms, body, sampler, texture };
 }
 
-/** 读 FBO 中间纹理的整数坐标（含 Y 翻转；FBO 行序自下而上）。 */
+/** Integer coordinates for intermediate FBO textures, including Y reversal for bottom-up FBO rows. */
 function fboRead(textureName: string, offset = 'p'): string {
   return `ivec2 ${offset} = ivec2(floor(uv * vec2(textureSize(${textureName}, 0)))); ${offset}.y = textureSize(${textureName}, 0).y - 1 - ${offset}.y;`;
 }
 
 // ---------------------------------------------------------------------------
-// pass0：色距度量（读原版纹理）。
+// pass0: color-distance metric from the original texture.
 // ---------------------------------------------------------------------------
 function scalefxPass0(format: FrameFormat): string {
   const read = sourceRead(format);
@@ -108,7 +102,7 @@ void main() {
 }
 
 // ---------------------------------------------------------------------------
-// pass1：角强度（读 pass0 度量）。
+// pass1: corner strength from pass0 metrics.
 // ---------------------------------------------------------------------------
 const scalefxPass1 = `#version 300 es
 precision highp float;
@@ -142,7 +136,7 @@ void main() {
 `;
 
 // ---------------------------------------------------------------------------
-// pass2：交叉口标签（读 pass0 度量 + pass1 强度）。
+// pass2: junction tags from pass0 metrics and pass1 strength.
 // ---------------------------------------------------------------------------
 const scalefxPass2 = `#version 300 es
 precision highp float;
@@ -212,7 +206,7 @@ void main() {
 `;
 
 // ---------------------------------------------------------------------------
-// pass3：子像素映射（读 pass2 标签）。
+// pass3: subpixel mapping from pass2 tags.
 // ---------------------------------------------------------------------------
 const scalefxPass3 = `#version 300 es
 precision highp float;
@@ -283,7 +277,7 @@ void main() {
 `;
 
 // ---------------------------------------------------------------------------
-// pass4：按子像素映射从原图取色，输出 3×。
+// pass4: sample original colors through subpixel mapping for 3x output.
 // ---------------------------------------------------------------------------
 function scalefxPass4(format: FrameFormat): string {
   const read = sourceRead(format);
@@ -299,8 +293,8 @@ ${read.body}
 vec4 loadCrn(vec4 x) { return floor(mod(x * 80. + 0.5, 9.)); }
 vec4 loadMid(vec4 x) { return floor(mod(x * 8.888888 + 0.055555, 9.)); }
 void main() {
-  // 输出像素（3× 视口）→ 源像素位置；Y 按图像方向翻转，保证 3×3 子像素
-  // 网格保持官方 x y / w z 布局而不是上下镜像。
+  // Output pixels in the 3x viewport -> source positions; flip Y to image orientation so the 3x3 subpixel
+  // grid retains upstream's x y / w z layout instead of being vertically mirrored.
   vec2 src = floor(gl_FragCoord.xy);
   src.y = outputSize.y - 1.0 - src.y;
   src = src / 3.0;
@@ -323,7 +317,7 @@ void main() {
 }
 
 // ---------------------------------------------------------------------------
-// 最终贴合：3× 中间纹理 → 画布目标尺寸（线性采样，FBO 翻转）。
+// Final fit: 3x intermediate texture to target canvas size with linear sampling and FBO Y reversal.
 // ---------------------------------------------------------------------------
 const scalefxDownscale = `#version 300 es
 precision highp float;
@@ -341,7 +335,7 @@ interface ScalefxTarget {
   framebuffer: WebGLFramebuffer;
 }
 
-/** ScaleFX 3× 放大链；格式无关的 pass 与三种原版帧格式的 pass0/pass4 组合。 */
+/** ScaleFX 3x pipeline: combine format-independent passes with pass0/pass4 variants for three original-frame formats. */
 export class ScalefxUpscale {
   private readonly pass0 = new Map<FrameFormat, WebGLProgram>();
   private readonly pass4 = new Map<FrameFormat, WebGLProgram>();
@@ -403,7 +397,7 @@ export class ScalefxUpscale {
     this.out3x = createScalefxTarget(gl, 1, 1, true);
   }
 
-  /** 帧尺寸变化时重分配中间纹理（源分辨率 ×4 + 3× 输出）。 */
+  /** Reallocate intermediate textures on frame-size changes: four source-resolution textures plus 3x output. */
   resize(frameWidth: number, frameHeight: number): void {
     if (this.frameWidth === frameWidth && this.frameHeight === frameHeight) return;
     this.frameWidth = frameWidth;
@@ -421,8 +415,8 @@ export class ScalefxUpscale {
   }
 
   /**
-   * 执行完整 5 pass 链；原版纹理与调色板由调用方已上传（索引格式还需调色板）。
-   * 之后画布为最终目标，光标 pass 由调用方在返回后绘制。
+   * Run the full five-pass chain; the caller already uploaded original textures and the palette for indexed frames.
+   * The canvas is the final target; the caller draws the cursor pass after return.
    */
   draw(
     source: WebGLTexture,
@@ -437,7 +431,7 @@ export class ScalefxUpscale {
     const h = this.frameHeight;
     const pass0 = this.pass0.get(format)!;
     const pass4 = this.pass4.get(format)!;
-    // 0：度量（原版 → metric）。
+    // 0: metric, original texture -> metric.
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.metric.framebuffer);
     gl.viewport(0, 0, w, h);
     gl.useProgram(pass0);
@@ -448,13 +442,13 @@ export class ScalefxUpscale {
       gl.bindTexture(gl.TEXTURE_2D, palette);
     }
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    // 1：角强度。
+    // 1: corner strength.
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.strength.framebuffer);
     gl.useProgram(this.pass1);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.metric.texture);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    // 2：交叉口标签。
+    // 2: junction tags.
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.tags.framebuffer);
     gl.useProgram(this.pass2);
     gl.activeTexture(gl.TEXTURE0);
@@ -462,13 +456,13 @@ export class ScalefxUpscale {
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.strength.texture);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    // 3：子像素映射。
+    // 3: subpixel mapping.
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.subpix.framebuffer);
     gl.useProgram(this.pass3);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.tags.texture);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    // 4：3× 输出。
+    // 4: 3x output.
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.out3x.framebuffer);
     gl.viewport(0, 0, w * 3, h * 3);
     gl.useProgram(pass4);
@@ -482,7 +476,7 @@ export class ScalefxUpscale {
       gl.bindTexture(gl.TEXTURE_2D, palette);
     }
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    // 最终贴合：3× → 画布目标（线性）。
+    // Final fit: 3x to canvas target with linear sampling.
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, targetWidth, targetHeight);
     gl.useProgram(this.downscale);
@@ -491,7 +485,7 @@ export class ScalefxUpscale {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
-  /** 回收全部 GPU 对象；上下文归调用方（createVmFrameRenderer）统一释放。 */
+  /** Reclaim all GPU objects; the caller, createVmFrameRenderer, owns and releases the context. */
   destroy(): void {
     if (this.destroyed) return;
     this.destroyed = true;
@@ -516,15 +510,15 @@ export class ScalefxUpscale {
 function linkScalefxProgram(gl: WebGL2RenderingContext, fragmentSource: string): WebGLProgram {
   const shaders: WebGLShader[] = [];
   const program = gl.createProgram();
-  if (!program) throw new Error('WebGL program 创建失败');
+  if (!program) throw new Error(t('WebGL program 创建失败'));
   try {
     const compile = (type: number, source: string): WebGLShader => {
       const shader = gl.createShader(type);
-      if (!shader) throw new Error('WebGL shader 创建失败');
+      if (!shader) throw new Error(t('WebGL shader 创建失败'));
       gl.shaderSource(shader, source);
       gl.compileShader(shader);
       if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-        throw new Error(`ScaleFX shader 编译失败：${gl.getShaderInfoLog(shader) ?? '未知错误'}`);
+        throw new Error(t('ScaleFX shader 编译失败：{0}', gl.getShaderInfoLog(shader) ?? t('未知错误')));
       }
       shaders.push(shader);
       return shader;
@@ -533,7 +527,7 @@ function linkScalefxProgram(gl: WebGL2RenderingContext, fragmentSource: string):
     gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
     gl.linkProgram(program);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      throw new Error(`ScaleFX program 链接失败：${gl.getProgramInfoLog(program) ?? '未知错误'}`);
+      throw new Error(t('ScaleFX program 链接失败：{0}', gl.getProgramInfoLog(program) ?? t('未知错误')));
     }
   } catch (error) {
     gl.deleteProgram(program);
@@ -552,7 +546,7 @@ function createScalefxTarget(
 ): ScalefxTarget {
   const texture = gl.createTexture();
   const framebuffer = gl.createFramebuffer();
-  if (!texture || !framebuffer) throw new Error('ScaleFX 纹理/帧缓冲分配失败');
+  if (!texture || !framebuffer) throw new Error(t('ScaleFX 纹理/帧缓冲分配失败'));
   gl.bindTexture(gl.TEXTURE_2D, texture);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, linear ? gl.LINEAR : gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, linear ? gl.LINEAR : gl.NEAREST);
@@ -564,7 +558,7 @@ function createScalefxTarget(
   if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
     gl.deleteTexture(texture);
     gl.deleteFramebuffer(framebuffer);
-    throw new Error('ScaleFX 帧缓冲不可用');
+    throw new Error(t('ScaleFX 帧缓冲不可用'));
   }
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   return { texture, framebuffer };

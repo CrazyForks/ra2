@@ -5,7 +5,7 @@ import { gameResourcesAvailable } from '../real-game/helpers/gameDir';
 afterEach(() => vi.unstubAllEnvs());
 
 describe('真实游戏资源准入', () => {
-  // 用文件路径作为目录，确保不会意外匹配开发机已安装的游戏。
+  // Use a file path as the directory to avoid accidentally matching a game installed on the development machine.
   const missingDirectory = fileURLToPath(new URL('./gameResourceGate.test.ts', import.meta.url));
 
   it('普通开发允许缺少游戏资源', () => {

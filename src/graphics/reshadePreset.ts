@@ -26,10 +26,12 @@ import { ColorPostProcess } from './framePostProcess';
 
 export type ReShadeMode = 'off' | 'enhance' | 'compare';
 
-/** SweetFX 16d1a422：Shaders/SweetFX/Vibrance.fx 与 LumaSharpen.fx 的 GLSL ES 移植。
- * 作者 Christian Cann Schuldt Jensen (CeeJayDK)，MIT 许可见 vendor/sweetfx/LICENSE。
- * 保留 Vibrance 公式及 LumaSharpen pattern 1；固定 RGB balance=1、offset_bias=1。
- * 仅处理最终颜色，不表示兼容 ReShade DLL、任意 FX 或游戏专用辅助纹理。 */
+/**
+ * GLSL ES port of SweetFX 16d1a422 Shaders/SweetFX/Vibrance.fx and LumaSharpen.fx.
+ * Author: Christian Cann Schuldt Jensen (CeeJayDK); MIT license in vendor/sweetfx/LICENSE.
+ * Preserve Vibrance formulas and LumaSharpen pattern 1; fix RGB balance=1 and offset_bias=1.
+ * Process only final color; this does not imply compatibility with ReShade DLLs, arbitrary FX, or game-specific auxiliary textures.
+ */
 export function createReShadePreset(gl: WebGL2RenderingContext, compare = false): ColorPostProcess {
   return new ColorPostProcess(gl, {
     linear: true,

@@ -1,5 +1,5 @@
-// 在 PE32 原始字节中查找指定小端 32 位常量，输出所在 VA 和上下文。
-// 用法：pnpm exec tsx scripts/reverse/ra2FindDisp.mts <exe> <displacementHex>
+// Find a specified little-endian 32-bit constant in raw PE32 bytes and print its VA and context.
+// Usage: pnpm exec tsx scripts/reverse/ra2FindDisp.mts <exe> <displacementHex>
 
 import { readFileSync } from 'node:fs';
 

@@ -193,7 +193,7 @@ describe('VmCore lifecycle orchestration', () => {
     const setResults = vi.fn();
     const dispatch = vi.fn(() => {
       expect(setResults).toHaveBeenCalledWith('ECACHE*.MIX', [{ path: 'ecache01.mix', size: 7 }]);
-      return null; // 本测试只验证异步桥接先于同步派发，不继续执行客体。
+      return null; // This test only verifies that asynchronous bridging precedes synchronous dispatch; it does not resume guest execution.
     });
     const shim = Object.assign(fakeShim(dispatch), {
       setFileSearchResults: setResults,

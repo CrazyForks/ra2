@@ -1,13 +1,15 @@
 import type { GameFileProvider } from '../contracts';
 import { normalizeGuestPath } from '../../vm86/paths';
 
-/** Node/浏览器单元测试均可使用的可写内存文件后端。 */
+/** Writable memory-file backend usable by both Node and browser unit tests. */
 export class MemoryGameFileProvider implements GameFileProvider {
   readonly label: string;
   readonly files = new Map<string, Uint8Array>();
 
-  /** copy=false 时直接持有传入字节（调用方保证之后不再改动），
-   *  ZIP/安装包解压结果用它避免整包在 JS 堆里多复制一份。 */
+  /**
+   * With copy=false, retain input bytes directly; the caller guarantees no later modification.
+   * ZIP/installer extraction uses this to avoid another full-package copy in the JS heap.
+   */
   constructor(files: ReadonlyMap<string, Uint8Array> = new Map(), copy = true, label = '内存测试目录') {
     this.label = label;
     for (const [path, bytes] of files) this.files.set(normalizeGuestPath(path), copy ? bytes.slice() : bytes);

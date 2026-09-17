@@ -1,9 +1,7 @@
 import { normalizeGuestPath } from '../../../vm86/paths';
 
 /**
- * IndexedDB 写入缓存：只读来源（开发服务器、内存 ZIP/安装包）上的存档/写回持久化层。
- * IndexedDB 中通常只有少量存档，而 RA2 载入关卡时会探测数千个 MIX 内素材名：
- * 先缓存一次 key 集合，缺失素材就不再各自创建一次异步 IDB transaction。
+ * IndexedDB write cache: persistence for saves/writeback over read-only sources such as development servers and in-memory ZIP/installers. IndexedDB usually holds few saves, while RA2 probes thousands of MIX resource names during level loading. Cache the key set once to avoid an asynchronous IDB transaction for every missing resource.
  */
 export class IndexedDbWriteCache {
   private databasePromise: Promise<IDBDatabase | null> | null = null;
@@ -17,7 +15,7 @@ export class IndexedDbWriteCache {
     this.persistedKeysSnapshot = null;
   }
 
-  /** 同步判定（key 尚未枚举完成时返回 null），供 hasKnownFile 免 await 拒绝缺失文件。 */
+  /** Synchronous existence check; null until key enumeration finishes. Lets hasKnownFile reject missing files without awaiting. */
   hasKnownKey(path: string): boolean | null {
     if (!this.persistedKeysSnapshot) return null;
     return this.persistedKeysSnapshot.has(path);
@@ -31,8 +29,8 @@ export class IndexedDbWriteCache {
       const request = database.transaction(DEVELOPMENT_FILE_STORE).objectStore(DEVELOPMENT_FILE_STORE).get(path);
       request.onsuccess = () => {
         const value = request.result as ArrayBuffer | Uint8Array | undefined;
-        // get 已通过 IndexedDB 的结构化克隆取得独占副本；再次复制会让大存档
-        // 在交给文件端口前多占一份内存。保留旧 Uint8Array 记录的视图边界。
+        // get already obtains an exclusive copy through IndexedDB structured cloning; copying again doubles large-save memory
+        // before handing it to the file port. Preserve view boundaries for legacy Uint8Array records.
         resolve(value === undefined ? null : value instanceof Uint8Array ? value : new Uint8Array(value));
       };
       request.onerror = () => reject(request.error);
@@ -45,7 +43,7 @@ export class IndexedDbWriteCache {
     const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
     await new Promise<void>((resolve, reject) => {
       const transaction = database.transaction(DEVELOPMENT_FILE_STORE, 'readwrite');
-      // 请求成功不代表事务已提交；配额不足或随后中止都必须让保存失败。
+      // Request success does not mean transaction commit; quota exhaustion or later abort must fail the save.
       transaction.oncomplete = () => resolve();
       transaction.onabort = () => reject(transaction.error ?? new DOMException('保存事务已中止', 'AbortError'));
       transaction.onerror = () => reject(transaction.error ?? new Error('保存事务失败'));

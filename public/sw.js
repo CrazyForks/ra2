@@ -1,10 +1,12 @@
-/* RA2/YR PWA 服务线程：满足浏览器「安装」条件的最小实现。
- * 策略刻意保守：
- *  - 导航请求 network-first，失败回退缓存的 index.html（离线兜底）；
- *  - dist/assets 带内容哈希的静态资源 cache-first + 后台更新；
- *  - 其余同源 GET（皮肤/图标等）network-first，成功才写缓存（不缓存 404）；
- *  - 游戏文件本体由玩家本地导入并保存在浏览器 IndexedDB，不经 SW；
- *  - 开发服务器（localhost:15174）不注册本线程，避免与禁缓存策略打架。 */
+/*
+ * RA2/YR PWA service worker: a minimal implementation meeting browser installation requirements.
+ * Deliberately conservative policy:
+ * - Navigation uses network-first, falling back to cached index.html when offline.
+ * - Content-hashed dist/assets use cache-first with background updates.
+ * - Other same-origin GETs (skins/icons, etc.) use network-first and cache only successful responses, never 404s.
+ * - Players import game files locally and store them in browser IndexedDB; these bypass the SW.
+ * - The development server (localhost:15174) does not register this worker, avoiding conflicts with its no-cache policy.
+ */
 const APP_SHELL = 'ra2vm-app-v1';
 
 self.addEventListener('install', () => {
@@ -28,7 +30,7 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
 
   if (request.mode === 'navigate') {
-    // 离线兜底：网络优先，失败回退已缓存的 index.html。
+    // Offline fallback: prefer the network, then fall back to cached index.html on failure.
     event.respondWith(
       (async () => {
         try {
@@ -46,7 +48,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (url.pathname.startsWith('/assets/')) {
-    // 带内容哈希的构建产物：不可变，缓存优先 + 后台更新。
+    // Content-hashed build artifacts are immutable: cache-first with background updates.
     event.respondWith(
       (async () => {
         const cached = await caches.match(request);
@@ -63,7 +65,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 其余同源资源（皮肤、图标等）：网络优先，成功才缓存。
+  // Other same-origin resources (skins, icons, etc.): network-first, caching only successful responses.
   event.respondWith(
     (async () => {
       try {

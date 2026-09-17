@@ -1,4 +1,4 @@
-/** 仅作用于中继出站游戏数据报；不模拟 TCP 重传，也不干扰握手与心跳。 */
+/** Affects only outbound game datagrams from the relay; does not simulate TCP retransmission or disturb handshakes and heartbeats. */
 export interface RelayFaultConfig {
   seed?: number;
   room?: string;
@@ -56,7 +56,7 @@ interface Pending {
   finish: (deliver: boolean) => void;
 }
 
-/** 有界、保序的故障队列；连接 ID 而非可复用的虚拟地址决定队列生命周期。 */
+/** Bounded, ordered fault queue; connection IDs, not reusable virtual addresses, determine queue lifetime. */
 export class RelayFaults {
   private readonly config: RelayFaultConfig;
   private randomState: number;
@@ -113,7 +113,7 @@ export class RelayFaults {
       finish(false);
       return;
     }
-    // 同一接收连接保持顺序；带宽是选中流量的每接收端上限，不是整个服务器上限。
+    // Preserve order per receiving connection; bandwidth caps apply to selected traffic per receiver, not the entire server.
     const delay = Math.max(0, (c.delayMs ?? 0) + (this.random() * 2 - 1) * (c.jitterMs ?? 0));
     const due =
       Math.max(now + delay, this.dueByTarget.get(to.id) ?? now) +

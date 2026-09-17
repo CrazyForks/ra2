@@ -1,5 +1,5 @@
 import { preventThirdPartyDownloads } from '../../helpers/offlineBrowser';
-/** 无游戏资源：真实触摸/鼠标事件切换 UI，不把触控能力误判为移动设备。 */
+/** No game assets: switch UI through real touch/mouse events without mistaking touch capability for a mobile device. */
 import { chromium, expect } from '@playwright/test';
 
 const origin = process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15174';
@@ -10,8 +10,14 @@ try {
     { width: 844, height: 390 },
     { width: 390, height: 844 },
   ]) {
-    // 保持桌面 UA，但开启触摸能力：复现 coarse=true 的台式机/模拟器环境。
-    const context = await browser.newContext({ ignoreHTTPSErrors: true, hasTouch: true, isMobile: false, viewport });
+    // Keep the desktop UA while enabling touch to reproduce a coarse=true desktop/emulator environment.
+    const context = await browser.newContext({
+      locale: 'zh-CN',
+      ignoreHTTPSErrors: true,
+      hasTouch: true,
+      isMobile: false,
+      viewport,
+    });
     try {
       const page = await context.newPage();
       await preventThirdPartyDownloads(page);

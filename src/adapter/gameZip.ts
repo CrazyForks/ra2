@@ -1,8 +1,5 @@
 /**
- * 游戏包解析：ZIP 与 NSIS 安装包统一入口（本地压缩包导入）。浏览器内解包为
- * 会话级 provider，进入与文件夹选择相同的发现流程（discoverGameSources →
- * validateGameDirectory）。解压产物由 provider 直接持有（免复制），存档写回
- * 浏览器 IndexedDB。
+ * Game-package parsing: a shared entry point for local ZIP and NSIS imports. Extract in the browser into a session provider, then use the same discovery flow as folder selection (discoverGameSources -> validateGameDirectory). The provider owns extracted data directly without copying; saves write to browser IndexedDB.
  */
 import { readZipArchive, formatZipBytes } from '../utils/archive/zip';
 import { SessionGameFileProvider } from '../platform/browser/files/sessionFiles';
@@ -10,20 +7,20 @@ import { decodeLzmaStream } from '../utils/archive/lzmaDecode';
 import { findNsisArchive, parseNsisFiles } from '../utils/archive/nsis';
 
 export interface RemotePackageOptions {
-  /** 阶段状态文案（解压进度），供页面进度显示。 */
+  /** Phase status text for page extraction-progress display. */
   onStatus?: (message: string) => void;
 }
 
 /**
- * 解析内存中的游戏包字节：ZIP 或 NSIS 安装包（solid LZMA）。
- * 本地压缩包导入（file input）专用；NSIS 解码在 Worker 中进行，不阻塞主线程。
+ * Parse in-memory game-package bytes: ZIP or NSIS with solid LZMA.
+ * For local file-input archive imports only; NSIS decoding runs in a Worker to avoid blocking the main thread.
  */
 export async function loadRemoteGamePackageBytes(
   bytes: Uint8Array,
   options: RemotePackageOptions = {},
 ): Promise<SessionGameFileProvider> {
   const { onStatus } = options;
-  // ZIP 与 NSIS 都从魔数识别；NSIS 是 MZ 壳 + 签名，ZIP 是 PK 头。
+  // Identify ZIP and NSIS by magic bytes: NSIS has an MZ wrapper plus signature; ZIP has a PK header.
   if (bytes.length >= 4 && bytes[0] === 0x50 && bytes[1] === 0x4b) {
     const entries = await readZipArchive(bytes, (files, extractedBytes) => {
       onStatus?.(`正在解压游戏包：已 ${files} 个文件 / ${formatZipBytes(extractedBytes)}`);
@@ -34,7 +31,7 @@ export async function loadRemoteGamePackageBytes(
   if (nsis) {
     onStatus?.('正在解压安装包（LZMA 解码，约需一分钟）…');
     const stream = bytes.subarray(nsis.streamStart);
-    // 整流解码时总长未知，SDK 只有 0/100 两端进度；心跳（-1）期间显示已用时长。
+    // Total length is unknown during whole-stream decoding; the SDK reports only 0/100 endpoints, so show elapsed time during heartbeat (-1) progress.
     let decodeStartedAt: number | null = null;
     const decoded = await decodeLzmaStream({
       stream,

@@ -2,11 +2,12 @@ import { withGameSpeedDefault } from '../gameSpeed';
 import type { ResourcePolicy } from '../../resources/contracts';
 import type { GameSource } from '../source';
 
-/** 安装介质资源可复用会话快照；INI/SAV 等可变文件必须在打开时重读。
- * YR 的 .yro 同样是静态地图，不能遗漏而导致每次扫描都跨线程读取。
+/**
+ * Installation-media resources may reuse session snapshots; mutable INI/SAV files must be reread on open.
+ * YR .yro files are static maps too; omitting them would cause cross-thread reads on every scan.
  */
 const STATIC_RESOURCE = /\.(?:mix|bag|idx|shp|pcx|pal|fnt|csf|aud|vqa|bik|wav|hva|vxl|map|mpr|yrm|yro)$/i;
-/** 保留现有目录句柄缺 DLL 时的本地路由回退；不是 CDN 或新下载来源。 */
+/** Preserve the existing local-route fallback for missing DLLs in directory handles; this is neither a CDN nor a new download source. */
 const PRELOAD_FALLBACK: Readonly<Record<string, string>> = {
   'blowfish.dll': '/game/ra2/Blowfish.dll',
   'binkw32.dll': '/game/ra2/BINKW32.DLL',

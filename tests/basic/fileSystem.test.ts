@@ -1,13 +1,13 @@
 /**
- * 文件层独立回环测试（原 fileSystemSmoke 迁移）。
+ * Independent file-layer loopback tests (migrated from fileSystemSmoke).
  *
- * 不启动 v86，也不点击任何关卡：只验证
- *   1. Win32Shim 的句柄、偏移和小块读写；
- *   2. File System Access 后端的串行写入与“写后立即读”；
- *   3. /game 开发后端的 IndexedDB 跨实例持久化；
- *   4. VirtualAlloc 保留区与堆 arena 互斥。
+ * Without starting v86 or clicking any level, verify only:
+ * 1. Win32Shim handles, offsets, and small reads/writes;
+ * 2. File System Access backend serialized writes and immediate read-after-write;
+ * 3. /game development backend IndexedDB persistence across instances;
+ * 4. Mutual exclusion between VirtualAlloc reservations and the heap arena.
  *
- * 这样地图加载失败时，可以先确认文件字节没有在浏览器/Win32 边界被改坏。
+ * This helps establish that file bytes survive the browser/Win32 boundary when map loading fails.
  */
 import { describe, expect, it } from 'vitest';
 import { DirectoryGameFileProvider } from '../../src/platform/browser/files/directory';
@@ -22,10 +22,10 @@ function expectBytes(actual: Uint8Array | null, expected: Uint8Array, label: str
   expect(actual ? [...actual] : null, `${label}: 文件字节不一致`).toEqual([...expected]);
 }
 
-/* ------------------------------------------------------------------------- *
- * IndexedDB fake: 只实现 HttpGameFileProvider 用到的 open/create/get/put/getAllKeys。
- * 每次脚本运行都是新的数据库；同一数据库名的不同 provider 共享 store。
- * ------------------------------------------------------------------------- */
+/*
+ * IndexedDB fake: implements only the open/create/get/put/getAllKeys operations used by HttpGameFileProvider.
+ * Each script run gets a fresh database; providers using the same database name share a store.
+ */
 
 type FakeRequest<T = unknown> = {
   result: T;
@@ -71,7 +71,7 @@ function installFakeIndexedDb(): { getCalls: number; getAllKeysCalls: number } {
       return request;
     },
   };
-  // DOM lib 下 globalThis.indexedDB 已是 IDBFactory，假实现只覆盖 open，交叉类型需经 unknown 过渡。
+  // The DOM lib types globalThis.indexedDB as IDBFactory; this fake only implements open, so cast through unknown for the intersection type.
   (globalThis as unknown as { indexedDB: typeof fakeIndexedDb }).indexedDB = fakeIndexedDb;
   return metrics;
 }
@@ -91,8 +91,8 @@ function createFakeDatabase(metrics: { getCalls: number; getAllKeysCalls: number
           return {
             get(key: string) {
               metrics.getCalls++;
-              // IndexedDB 的 get 也会结构化克隆；不能直接暴露 store 的缓冲，
-              // 否则测试会把独占读结果的修改/transfer 错当成数据库损坏。
+              // IndexedDB get also performs structured cloning; do not expose the store's buffer directly,
+              // or tests would mistake mutations/transfers of exclusively owned read results for database corruption.
               const request = asyncRequest(structuredClone(store.get(key)));
               queueMicrotask(() => request.onsuccess?.());
               return request;
@@ -173,8 +173,8 @@ describe('HttpGameFileProvider（IndexedDB 持久化）', () => {
     };
     try {
       expect(await second.read(`missing/fs-smoke-${process.pid}.dat`)).toBe(null);
-      // 存档写入只落 IndexedDB 不落盘：list 必须合并 IndexedDB 键，否则开发版
-      // 导出存档（listSavePaths 枚举）会漏掉玩家真正的局内存档。
+      // Saves go only to IndexedDB, not disk. list must merge IndexedDB keys, or the development build's
+      // save export (listSavePaths enumeration) will omit the player's actual in-game saves.
       expect(await second.list('save')).toEqual([`fs-smoke-${process.pid}.sav`]);
       expect(await second.list('other')).toEqual([]);
       expect(await second.list('')).toEqual([]);
@@ -182,11 +182,11 @@ describe('HttpGameFileProvider（IndexedDB 持久化）', () => {
       expect(second.hasKnownFile(`missing/material-indexed.shp`)).toBe(false);
       expect(await second.read('gone/material.shp')).toBe(null);
       expect(second.hasKnownFile('gone/another.shp')).toBe(false);
-      // 一个 provider 只枚举一次持久化 key；不存在的 MIX 内素材不应各自触发 get。
+      // Each provider enumerates persistent keys only once; missing assets inside MIX files should not each trigger a get.
       const getsBeforeMisses = idb.getCalls;
       await Promise.all(Array.from({ length: 100 }, (_, index) => second.read(`missing/material-${index}.shp`)));
       expect(idb.getCalls).toBe(getsBeforeMisses);
-      // first/second 各自建立一次索引，重复 read/list 均复用。
+      // first and second each build one index, reused by repeated read/list calls.
       expect(idb.getAllKeysCalls).toBe(2);
     } finally {
       globalThis.fetch = previousFetch;
@@ -368,8 +368,8 @@ describe('DirectoryGameFileProvider（File System Access）', () => {
     const freshProvider = new DirectoryGameFileProvider(root as unknown as FileSystemDirectoryHandle);
     expectBytes(await freshProvider.read('SAVE/DELAYED.SAV'), bytes, 'Directory 跨实例');
     expect(root.entriesCalls, '新 provider 应重新建立自己的目录索引').toBe(2);
-    // 落盘完成后快照即撤：Windows 端在同一页面会话中覆盖存档后，下一次读取必须
-    // 看到新内容（旧行为永远返回 VM 自己的快照——「读档后游戏状态错误」的根源）。
+    // Discard the snapshot once persistence finishes: if Windows overwrites a save in the same page session, the next read
+    // must see the new content. The old behavior always returned the VM's own snapshot, causing incorrect game state after loading.
     fakeFile.bytes = Uint8Array.from([0xaa, 0xbb]);
     expectBytes(await provider.read('SAVE/DELAYED.SAV'), fakeFile.bytes, 'Directory 外部覆盖后读');
   });
@@ -512,8 +512,8 @@ describe('Win32 文件句柄（_lopen/_lread/_llseek/_lwrite）', () => {
     expect([...loaded.read_memory(bufferPtr, 4096)]).toEqual([...writes[0]!.bytes]);
     expect(callShim(loadedShim, 'KERNEL32.DLL!_lclose', [loadedHandle]).eax).toBe(0);
 
-    // 原版存档流程用 _lopen(path, OF_WRITE) 原地重写 label.sav/record.sav。
-    // 可写标志被忽略时 _lwrite 静默失败，新存档在读档界面就看不到/对不上。
+    // The original save flow uses _lopen(path, OF_WRITE) to rewrite label.sav/record.sav in place.
+    // Ignoring the writable flag makes _lwrite fail silently, leaving new saves missing or mismatched in the load screen.
     writeAsciiZ(memory, createPathPtr, 'Label.sav');
     writer.mountFile('label.sav', new Uint8Array(324));
     const labelHandle = create('KERNEL32.DLL!_lopen', [createPathPtr, 1]);
@@ -531,7 +531,7 @@ describe('Win32 文件句柄（_lopen/_lread/_llseek/_lwrite）', () => {
     expect(writes[1]!.bytes.length).toBe(324);
     expect([...writes[1]!.bytes.subarray(0, 4)]).toEqual([3, 10, 17, 24]);
 
-    // 读档路径：只读 _lopen 应读到刚才写入的内容。
+    // Load path: read-only _lopen must see the content just written.
     const labelReadHandle = create('KERNEL32.DLL!_lopen', [createPathPtr, 0]);
     expect(create('KERNEL32.DLL!_lread', [labelReadHandle, bufferPtr, 324])).toBe(324);
     expect(memory.bytes[bufferPtr]).toBe(3);
@@ -541,14 +541,11 @@ describe('Win32 文件句柄（_lopen/_lread/_llseek/_lwrite）', () => {
 });
 
 /**
- * VirtualAlloc 保留区与堆互斥回环：原版 VC6 CRT 启动时 VirtualAlloc(NULL, 1MB,
- * MEM_RESERVE)，再在保留区内逐 32KB 块 COMMIT/DECOMMIT。保留区绝不能进入堆
- * 空闲链表（否则文件镜像/HeapAlloc 会复用游戏正在使用的块，历史上触发过
- * CPU #6 @EIP=0x8f）。virtualTop 压到 8MB 让堆必然穿过保留区，验证跳越屏障。
+ * VirtualAlloc reservation/heap exclusion loopback: the original VC6 CRT starts with VirtualAlloc(NULL, 1MB, MEM_RESERVE), then COMMITs/DECOMMITs successive 32 KB blocks.
+ * Reserved regions must never enter the heap free list, or file mirrors/HeapAlloc will reuse blocks still used by the game (historically causing CPU #6 at EIP=0x8f).
+ * Set virtualTop to 8 MB so the heap must cross the reservation, verifying the skip barrier.
  *
- * 原脚本用 Win32Shim 默认 arena 顶 0x7e00000；createTestShim 默认把 heapTop
- * 收窄到 0xc00000，会让「界内固定地址 0xc00000」与 5MB bump 断言越界，
- * 这里显式钉回原始默认值。
+ * The original script used Win32Shim's default arena top, 0x7e00000. createTestShim narrows heapTop to 0xc00000 by default, putting the fixed-address 0xc00000 and 5 MB bump assertions out of range. Explicitly restore the original default here.
  */
 describe('VirtualAlloc 保留区与堆互斥', () => {
   const ARENA_TOP = 0x07e0_0000;
@@ -559,24 +556,24 @@ describe('VirtualAlloc 保留区与堆互斥', () => {
     const shim = createTestShim(memory, { heapTop: ARENA_TOP, virtualTop: VIRTUAL_TOP });
     const dispatch = (key: string, args: number[]): number => callShim(shim, key, args).eax >>> 0;
 
-    // 1. NULL 保留 1MB。
+    // 1. Reserve 1 MB with NULL.
     const region = dispatch('KERNEL32.DLL!VirtualAlloc', [0, 0x100000]);
     expect(
       region >= 0x0050_0000 && region < 0x0080_0000,
       `NULL 保留应落在堆上方: 0x${region.toString(16)}`,
     ).toBeTruthy();
 
-    // 2. 保留区内逐块提交（游戏从返回值派生提交地址）。
+    // 2. Commit blocks within the reservation (the game derives commit addresses from the returned base).
     const commitA = dispatch('KERNEL32.DLL!VirtualAlloc', [region + 0x130, 0x8000]);
     expect(commitA, '保留区内提交应返回请求地址').toBe(region + 0x130);
     const commitB = dispatch('KERNEL32.DLL!VirtualAlloc', [region + 0x8130, 0x8000]);
     expect(commitB, '第二个提交块应在同一保留区').toBe(region + 0x8130);
 
-    // 3. DECOMMIT 保持保留：区域仍在，且同一地址可重新提交。
+    // 3. DECOMMIT preserves the reservation: the region remains, and the same address can be committed again.
     expect(dispatch('KERNEL32.DLL!VirtualFree', [commitA, 0x8000, 0x4000]), 'DECOMMIT 应成功').toBe(1);
     expect(dispatch('KERNEL32.DLL!VirtualAlloc', [commitA, 0x8000]), 'DECOMMIT 后应能重新提交同一地址').toBe(commitA);
 
-    // 4. 堆增长到穿过保留区的高度，仍不得侵入保留区（跳越屏障）。
+    // 4. Grow the heap beyond the reservation's address; it must still skip the reserved region.
     const live: number[] = [];
     for (let round = 0; round < 200; round++) {
       const ptr = dispatch('KERNEL32.DLL!HeapAlloc', [0x10001, 0, 0x4000 + (round % 8) * 16]);
@@ -587,16 +584,16 @@ describe('VirtualAlloc 保留区与堆互斥', () => {
     }
     for (const ptr of live) expect(dispatch('KERNEL32.DLL!HeapFree', [0x10001, 0, ptr])).toBe(1);
 
-    // 5. 与活动堆分配重叠的 VirtualAlloc 必须拒绝而不是静默别名。
+    // 5. Reject VirtualAlloc overlapping active heap allocations instead of silently aliasing them.
     const heapPtr = dispatch('KERNEL32.DLL!HeapAlloc', [0x10001, 0, 0x1000]);
     expect(dispatch('KERNEL32.DLL!VirtualAlloc', [heapPtr, 0x1000]), '重叠的 VirtualAlloc 应拒绝').toBe(0);
 
-    // 6. MEM_RELEASE 释放整个保留区。
+    // 6. MEM_RELEASE frees the entire reservation.
     expect(dispatch('KERNEL32.DLL!VirtualFree', [region, 0, 0x8000]), 'MEM_RELEASE 应成功').toBe(1);
     expect(dispatch('KERNEL32.DLL!VirtualFree', [commitB, 0x8000, 0x4000]), '释放后区内 DECOMMIT 应失败').toBe(0);
     expect(shim.inspectHeapState().virtualRegions, '释放后不应有残留保留区').toBe(0);
 
-    // 7. 覆盖空闲堆块的保留必须把空闲块剔除，堆不能复用该范围。
+    // 7. A reservation overlapping free heap blocks must remove those blocks so the heap cannot reuse that range.
     const freed: number[] = [];
     for (let i = 0; i < 8; i++) freed.push(dispatch('KERNEL32.DLL!HeapAlloc', [0x10001, 0, 0x1000]));
     for (const ptr of freed) expect(dispatch('KERNEL32.DLL!HeapFree', [0x10001, 0, ptr])).toBe(1);
@@ -609,27 +606,27 @@ describe('VirtualAlloc 保留区与堆互斥', () => {
       ).toBeTruthy();
     }
 
-    // 8. MEM_RELEASE 把区域还给 VirtualAlloc 专用释放链表（wemu try_free 模型），
-    //    绝不进入堆空闲链表：HeapAlloc 拿不到，随后的 NULL 保留自高向低复用。
+    // 8. MEM_RELEASE returns the region to VirtualAlloc's dedicated release list (wemu try_free model),
+    // never the heap free list: HeapAlloc cannot obtain it, and later NULL reservations reuse it from high to low.
     const virtualFreeBefore = shim.inspectHeapState().virtualFreeBytes;
     expect(dispatch('KERNEL32.DLL!VirtualFree', [freed[0]!, 0, 0x8000]), 'MEM_RELEASE 应成功').toBe(1);
     expect(shim.inspectHeapState().virtualFreeBytes, '释放后应计入虚拟释放字节').toBe(virtualFreeBefore + 0x2000);
     const heapAfterRelease = dispatch('KERNEL32.DLL!HeapAlloc', [0x10001, 0, 0x2000]);
     expect(heapAfterRelease, 'HeapAlloc 不得复用已释放的保留区').not.toBe(freed[0]);
     expect(dispatch('KERNEL32.DLL!HeapFree', [0x10001, 0, heapAfterRelease])).toBe(1);
-    // 释放链表里有步骤 6 的 1MB 与刚释放的 8KB。堆基址 0x500000→0x700000
-    // 抬升后（避开低区游戏栈），8KB 块落在 1MB 块上方：NULL 保留应自高向低
-    // 复用最高的已释放块（8KB），把 1MB 块留给大保留。
+    // The release list contains the 1 MB block from step 6 and the just-released 8 KB block. After raising the heap base
+    // from 0x500000 to 0x700000 to avoid the game's low-address stack, the 8 KB block sits above the 1 MB block.
+    // A NULL reservation should reuse the highest released block (8 KB), preserving the 1 MB block for larger reservations.
     const reuseHigh = dispatch('KERNEL32.DLL!VirtualAlloc', [0, 0x2000]);
     expect(reuseHigh, 'NULL 保留应复用最高的已释放块顶端').toBe(freed[0]);
     expect(dispatch('KERNEL32.DLL!VirtualFree', [reuseHigh, 0, 0x8000]), '复用区再次释放应成功').toBe(1);
-    // 0x2000 用完整块后链表只剩 1MB 块：同尺寸的 NULL 保留应整块复用。
+    // After 0x2000 consumes the entire block, only the 1 MB block remains; a same-sized NULL reservation should reuse it whole.
     const reuseBig = dispatch('KERNEL32.DLL!VirtualAlloc', [0, 0x100000]);
     expect(reuseBig, '1MB 块应留给大保留复用').toBe(region);
     expect(dispatch('KERNEL32.DLL!VirtualFree', [reuseBig, 0, 0x8000]), '1MB 复用区再次释放应成功').toBe(1);
 
-    // 9. 保留区外的固定地址在 arena 界内按请求基址新建区域（wemu alloc_at），
-    //    界外拒绝；DECOMMIT 保持保留、零填充，RELEASE 后整体可复用。
+    // 9. Fixed addresses outside reservations create regions at the requested base within arena bounds (wemu alloc_at);
+    // reject addresses outside the arena. DECOMMIT preserves the reservation and zero-fills; RELEASE allows whole-region reuse.
     const fixed = 0x00c0_0000;
     expect(dispatch('KERNEL32.DLL!VirtualAlloc', [fixed, 0x2000]), '界内固定地址应新建保留区').toBe(fixed);
     memory.write_memory(new Uint8Array([0xab, 0xcd]), fixed);
@@ -641,8 +638,8 @@ describe('VirtualAlloc 保留区与堆互斥', () => {
     expect(dispatch('KERNEL32.DLL!VirtualFree', [fixed, 0x2000, 0]), '既非 RELEASE 也非 DECOMMIT 的类型应拒绝').toBe(0);
     expect(dispatch('KERNEL32.DLL!VirtualFree', [fixed, 0, 0x8000]), '固定区 MEM_RELEASE 应成功').toBe(1);
 
-    // 10. 释放区可复用时 NULL 保留应优先整块复用（步骤 6/8 的 1MB 已重新
-    //     合并，virtualTop=8MB 时 1MB 保留应恰为 0x700000）。
+    // 10. When a released region is available, NULL reservations should prefer reusing it whole (the 1 MB blocks from steps 6/8
+    // have coalesced again; with virtualTop=8 MB, a 1 MB reservation should be exactly 0x700000).
     const fill: number[] = [];
     for (let i = 0; i < 12; i++) {
       const ptr = dispatch('KERNEL32.DLL!HeapAlloc', [0x10001, 0, 0x40000]);
@@ -662,7 +659,7 @@ describe('VirtualAlloc 保留区与堆互斥', () => {
   });
 
   it('堆 bump 驶入 nextHeap 之上的已释放区域时必须同步剔除', () => {
-    // wemu 靠独立 arena 规避；共用一个地址空间时 bump 自取即从释放链表移除。
+    // wemu avoids this through separate arenas; in a shared address space, bump allocation immediately removes its range from the release list.
     const shim2 = createTestShim(createGuestMemory(), { heapTop: ARENA_TOP, virtualTop: VIRTUAL_TOP });
     const dispatch2 = (key: string, args: number[]): number => callShim(shim2, key, args).eax >>> 0;
     const top = dispatch2('KERNEL32.DLL!VirtualAlloc', [0, 0x100000]);
@@ -670,15 +667,15 @@ describe('VirtualAlloc 保留区与堆互斥', () => {
     const big = dispatch2('KERNEL32.DLL!HeapAlloc', [0x10001, 0, 0x500000]);
     expect(big, `大块应自 0x700000 前进分配，实得 0x${big.toString(16)}`).toBe(0x0070_0000);
     expect(shim2.inspectHeapState().virtualFreeBytes, 'bump 驶入的释放区必须从链表剔除').toBe(0);
-    // 0x700000 被 5MB bump 吃掉后，1MB 保留自顶向下落到 0x600000 空闲带。
+    // After the 5 MB bump consumes 0x700000, a top-down 1 MB reservation lands in the free band at 0x600000.
     const again = dispatch2('KERNEL32.DLL!VirtualAlloc', [0, 0x100000]);
     expect(again, '被 bump 吃掉的释放区不得再发给 VirtualAlloc').toBe(0x0060_0000);
     expect(dispatch2('KERNEL32.DLL!VirtualFree', [again, 0, 0x8000]), '0x600000 复用区释放应成功').toBe(1);
   });
 
   it('无释放区可复用时 NULL 保留必须剔除堆空闲链表重叠（trimFreeBlocks 回归）', () => {
-    // 回归历史上漏掉的 trimFreeBlocks 调用：堆填满 3MB 再全释放，1MB 保留骑在
-    // 空闲块上，此后 HeapAlloc 不得复用保留范围。
+    // Regression for a historically missing trimFreeBlocks call: fill and free 3 MB of heap, then reserve 1 MB over
+    // a free block. Later HeapAlloc calls must not reuse the reserved range.
     const shim3 = createTestShim(createGuestMemory(), { heapTop: ARENA_TOP, virtualTop: VIRTUAL_TOP });
     const dispatch3 = (key: string, args: number[]): number => callShim(shim3, key, args).eax >>> 0;
     const fill3: number[] = [];
@@ -696,8 +693,8 @@ describe('VirtualAlloc 保留区与堆互斥', () => {
   });
 
   it('ExitProcess 落在 KERNEL32 路由并携带退出码', () => {
-    // 退出家族必须落在 KERNEL32 路由上（曾在 DLL 拆分时误入 directx 分派成死代码）。
-    // 原脚本复用上面的 shim；路由断言与堆状态无关，这里用独立 shim。
+    // Exit-family APIs must route through KERNEL32 (a DLL split once misrouted them to DirectX dispatch, making them unreachable).
+    // The original script reused the shim above; routing assertions are independent of heap state, so use a separate shim here.
     const shim = createTestShim(createGuestMemory());
     const exitResult = callShim(shim, 'KERNEL32.DLL!ExitProcess', [7]);
     expect(exitResult.exit, 'ExitProcess 应走 KERNEL32 路由并携带退出码').toBeTruthy();

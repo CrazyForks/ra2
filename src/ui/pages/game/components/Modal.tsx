@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
 
-/** 原生模态负责焦点约束与恢复；Esc 只关闭网页弹窗，不向 VM 合成按键。 */
+/** Native modal behavior traps and restores focus; Esc closes only the page dialog without injecting VM keystrokes. */
 export function Modal({
   open,
   onClose,

@@ -1,7 +1,6 @@
 /**
- * VM 路线冒烟 harness：在 Node 内启动 v86，执行真实原版 EXE。
- * 输入组合由调用方传入，不读 VM_GAME / VM_SCENARIO 等选择类环境变量。
- * 追踪类 VM_TRACE* / VM_FRAME_PPM / VM_PROFILE 仍可在调试时叠加。
+ * VM route smoke harness: start v86 in Node and execute a real original EXE.
+ * Callers supply input combinations; do not read selection variables such as VM_GAME / VM_SCENARIO. Trace variables VM_TRACE* / VM_FRAME_PPM / VM_PROFILE remain available for debugging.
  */
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -58,42 +57,42 @@ function v86WasmPath(): string {
 }
 
 export interface VmSmokeOptions {
-  /** 固定 EXE 回归可使用主程序缓存，资源仍来自游戏目录；不覆盖玩家本地 EXE。 */
+  /** Fixed-EXE regressions may use the executable cache while resources still come from the game directory; never overwrite the player's local EXE. */
   executablePath?: string;
   gameId: SupportedGameId;
-  /** 默认 [[1, 1]]（原默认 VM_CLICK_X/Y）。 */
+  /** Defaults to [[1, 1]] (the original VM_CLICK_X/Y default). */
   clicks?: readonly VmClick[];
   clickGapMessages?: number;
   clickGaps?: readonly number[];
   settleMessages?: number;
-  /** 默认跟注册表 menuReadyGate。 */
+  /** Defaults to the registry's menuReadyGate. */
   waitMenuReady?: boolean;
   batchPointerClick?: boolean;
   hoverOnly?: boolean;
-  /** 前面点正常点击，最后一点只注入 WM_MOUSEMOVE，用于跨页 hover 回归。 */
+  /** Click earlier points normally; inject only WM_MOUSEMOVE at the final point for cross-page hover regressions. */
   finalHoverOnly?: boolean;
-  /** 指定某次点击按下后拖到目标坐标再松开，用于验证真实滚动条拖动。 */
+  /** Drag a specified press to target coordinates before releasing, to verify real scrollbar dragging. */
   dragTargets?: Readonly<Record<number, VmClick>>;
   firstClickAfterMs?: number;
   timeoutMs?: number;
   enableFastRead?: boolean;
   clockRate?: number;
-  /** 覆盖客体内存大小，主要用于诊断大映像游戏。 */
+  /** Override guest memory size, mainly to diagnose games with large images. */
   memoryBytes?: number;
   targetCalls?: number;
-  /** 无消息泵的装载/动画循环达到调用数后结束；仅用于已确认的旧游戏启动路线。 */
+  /** Finish loading/animation loops without a message pump after a call count; only for confirmed legacy-game startup routes. */
   completeAtTargetCalls?: boolean;
   keys?: readonly number[];
-  /** 每次点击前等待的 shell 页标题片段；空串表示不设门控。 */
+  /** Shell-page title fragment to await before each click; an empty string disables the gate. */
   clickPageTitles?: readonly string[];
-  /** 按键序列延后到第 N 次 hypercall 后注入。 */
+  /** Delay key-sequence injection until after hypercall N. */
   keysAfterCalls?: number;
   skipFrameCheck?: boolean;
-  /** 对最终呈现帧断言，避免只验证消息路线却漏掉空白控件。 */
+  /** Assert on the final presented frame so message-route checks do not miss blank controls. */
   assertFinalFrame?: (frame: VmFrame) => void;
-  /** 检查交互后的控件状态，防止滚动条只有外观而无法选择隐藏条目。 */
+  /** Check control state after interaction so a merely visual scrollbar cannot pass without selecting hidden items. */
   assertFinalState?: (shim: Win32Shim, memory: V86) => void;
-  /** 显式实验入口：首次执行前安装客体探针，分配器独占预留启动桩区。 */
+  /** Explicit experimental entry: install guest probes before first execution; the allocator exclusively reserves the startup-stub region. */
   prepareGuest?: (memory: V86, executable: Uint8Array, reserve: (bytes: number) => number) => void;
 }
 
@@ -135,7 +134,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
   const expectedInputDispatches = inputDispatchTotal;
   const batchPointerClick = options.batchPointerClick === true;
   let dragPosted = false;
-  // 主菜单就绪门控：首个点击必须等 0x4af1a4 计数 ≥ 25，否则第一击被吞掉、路线错位。
+  // Main-menu readiness gate: wait for the counter at 0x4af1a4 to reach 25 before the first click, or the click is swallowed and the route shifts.
   const waitMenuReady = options.waitMenuReady ?? GAME.menuReadyGate === true;
   const firstClickAfter = Date.now() + Math.max(0, options.firstClickAfterMs ?? 0);
   const timeoutMs = Math.max(1_000, options.timeoutMs ?? 60_000);
@@ -164,13 +163,13 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
   if (GAME.smokeEntry !== undefined && image.entry !== GAME.smokeEntry) {
     throw new Error(`PE 入口错误: 0x${image.entry.toString(16)}`);
   }
-  // XWIS 分发的 RA2 在原版导入表外多出启动握手 ord1；两种 EXE 均由 profile 支持。
+  // XWIS-distributed RA2 adds startup-handshake ord1 outside the original import table; the profile supports both EXEs.
   const launcherImports =
     GAME_ID === 'ra2' ? image.importList.filter((imported) => imported.key === 'XWIS.DLL!ord1').length : 0;
   if (GAME.smokeImports !== undefined && image.importList.length - launcherImports !== GAME.smokeImports) {
     throw new Error(`PE 导入数错误: ${image.importList.length}`);
   }
-  /** 跑一轮 VM：装载 EXE → 输入路线 → 完成/超时/异常。 */
+  /** Run one VM round: load EXE -> input route -> completion/timeout/exception. */
   async function runPass() {
     const mapTrace: unknown[] = [];
     const stats = {
@@ -195,7 +194,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
     let probeNext = stubNext;
     options.prepareGuest?.(emulator, exe, (size) => {
       const address = probeNext;
-      // 0xc0000 起属于 shim 动态桩，不能因当前字节为零就占用。
+      // The region from 0xc0000 belongs to dynamic shim stubs; zero current bytes do not make it available.
       if (!Number.isInteger(size) || size <= 0 || address + size > 0xc0000) throw new Error('实验探针桩区不足');
       probeNext = (address + size + 15) & ~15;
       return address;
@@ -207,7 +206,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
     let frameBytes = 0;
     let lastFrameSize = '';
     let lastFrame: VmFrame | null = null;
-    // 定时帧 dump（界面时序观察：标题→菜单的自动过渡等）。
+    // Periodic frame dumps for UI timing observations, such as automatic title-to-menu transitions.
     const frameEveryMs = Math.max(0, Number(process.env.VM_FRAME_EVERY_MS ?? 0) | 0);
     const frameTimer =
       frameEveryMs > 0
@@ -263,8 +262,8 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
         console.log(`📁 客体写文件 ${path} ${bytes.length}B`);
       },
     });
-    // 真机上游戏目录里有原版 EXE；虚拟文件层同样要能打开它。
-    // normalizeGuestPath 保留 GAME 前缀，须以完整路径挂载才能匹配。
+    // On a real machine, the original EXE exists in the game directory; the virtual file layer must also be able to open it.
+    // normalizeGuestPath retains the GAME prefix, so mount the full path to match.
     shim.mountFile(`C:\\GAME\\${EXECUTABLE}`, exe);
     let linkedEntry = image.entry;
     for (const preload of GAME.preloadFiles ?? []) {
@@ -282,8 +281,8 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
     if (linkedEntry !== image.entry) writeU32(emulator, HYPERCALL_ENTRY, linkedEntry);
     shim.setGameClockRate(options.clockRate ?? 1);
 
-    // DPlay 持续探测：轮询 tick 里观察 shim 状态变化（DP 创建可能发生在重载期间，
-    // settle 后单点检查会漏报），完成时按观察到的最大值判定。
+    // Continuous DPlay probing: observe shim-state changes in polling ticks. DP creation can occur during reload,
+    // so a single post-settle check may miss it. Judge completion using the maximum observed value.
     const dpSeen = { created: 0, hosting: false, joined: false, players: 0 };
     let dpProbeLastLog = '';
     const watchDplay = (): void => {
@@ -302,16 +301,16 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
     let calls = 0;
     let stackWatchSeen = false;
     let breakOriginal: number | undefined;
-    // 单步模式：VM_STEP_AFTER 次 API 调用后置 TF，boot #1 handler 逐指令发布 EIP。
+    // Single-step mode: set TF after VM_STEP_AFTER API calls; boot's #1 handler publishes EIP after each instruction.
     const stepAfter = Math.max(0, Number(process.env.VM_STEP_AFTER ?? 0) | 0);
     let stepTraceMode = false;
     const stepTrace: number[] = [];
     const callCounts = new Map<string, number>();
-    // VM_PROFILE 计时：每个导入的 host 侧累计耗时（毫秒）与最大值。
+    // VM_PROFILE timing: cumulative and maximum host-side duration per import, in milliseconds.
     const callTimes = new Map<string, number>();
     const callMaxTimes = new Map<string, number>();
     let dispatchTotalMs = 0;
-    // harness 侧文件解析/读取/挂载累计（对应生产环境 syncGuestFile 的 provider 往返）。
+    // Cumulative harness file resolution/read/mount cost, corresponding to production syncGuestFile provider round trips.
     let fileMountMs = 0;
     let fileMountCount = 0;
     const profileT0 = performance.now();
@@ -339,7 +338,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
     const tracedShowWindows = new Set<string>();
     const defaultControlMessages = new Map<string, { count: number; result: number; wParam: number; lParam: number }>();
     const recentCalls: string[] = [];
-    // 同步原语/消息使用计数（验证「加载卡死是否与事件桩相关」）：按句柄类型细分。
+    // Synchronization primitive/message usage counts by handle type, to investigate whether event stubs cause loading stalls.
     const syncOps = {
       createEvent: 0,
       setEvent: 0,
@@ -355,14 +354,14 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
       createThread: 0,
       fileOpenByThread: new Map<number, number>(),
     };
-    // VM_TRACE_AFTER_CLICK：在最后一次点击的 WM_LBUTTONDOWN 之后才开始全量追踪，
-    // 用于观察 gadget/菜单对单次点击的精确反应，避免被启动期海量调用淹没。
+    // VM_TRACE_AFTER_CLICK starts full tracing only after the final click's WM_LBUTTONDOWN,
+    // showing precise gadget/menu responses to one click without overwhelming startup traffic.
     const traceAfterClick = process.env.VM_TRACE_AFTER_CLICK === '1';
     let traceArmed = false;
-    // VM_TRACE_AFTER_CALLS：第 N 次 hypercall 之后才输出 VM_TRACE 行（配合
-    // VM_KEYS_AFTER_CALLS 观察按键注入后的客体反应，跳过地图装载期海量调用）。
+    // VM_TRACE_AFTER_CALLS prints VM_TRACE lines only after hypercall N; combine it with
+    // VM_KEYS_AFTER_CALLS to observe guest responses after key injection while skipping map-loading traffic.
     const traceAfterCalls = Math.max(0, Number(process.env.VM_TRACE_AFTER_CALLS ?? 0) | 0);
-    // 保留少量 COM/OLE 边界及返回值；地图装载期间调用数以百万计，不能开全量 VM_TRACE。
+    // Retain a few COM/OLE boundaries and return values; millions of map-loading calls make full VM_TRACE impractical.
     const recentComCalls: string[] = [];
     const recentBinkCalls: string[] = [];
     const formatProfile = () => {
@@ -376,7 +375,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
         .slice(0, 16)
         .map(([size, count]) => `${size}B×${count}`)
         .join(', ');
-      // 按 host 累计耗时排序：次数 × 每次耗时 的完整视图。
+      // Sort by cumulative host duration for the complete call count x cost-per-call view.
       const topTimes = [...callTimes]
         .sort((left, right) => right[1] - left[1])
         .slice(0, 20)
@@ -394,7 +393,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
       let waiting = false;
       let stopped = false;
       const notify = () => queueMicrotask(service);
-      // VM_PROFILE 时间线：每秒输出调用增量、host 耗时增量与增量 Top5，定位各阶段热点。
+      // VM_PROFILE timeline: report call/time deltas and the top five incremental costs every second to locate phase-specific hotspots.
       let timelineLastCalls = 0;
       let timelineLastDispatchMs = 0;
       let timelineLastFrames = 0;
@@ -424,7 +423,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
             timelineLastFrames = frames;
           }, 1000)
         : undefined;
-      // EIP 采样（VM_EIP_SAMPLE_MS）：按时间抽样 [指令计数, EIP]，崩溃时回放轨迹。
+      // EIP sampling (VM_EIP_SAMPLE_MS): periodically sample [instruction count, EIP] to replay the trace after a crash.
       const eipSampleMs = Math.max(0, Number(process.env.VM_EIP_SAMPLE_MS ?? 0) | 0);
       const eipSamples: Array<[number, number]> = [];
       const eipSnapshots = new Map<number, string>();
@@ -440,7 +439,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
               const eip = cpu?.get_real_eip?.();
               if (eip !== undefined) eipSamples.push([emulator.get_instruction_counter(), eip]);
               if (eipSamples.length > 16384) eipSamples.splice(0, 8192);
-              // 低区→高区（装载区）跳变检测：定位执行流跳进装载区的指令来源。
+              // Detect low-to-high (loading-region) transitions to locate the instruction that jumped into the loading region.
               if (eip !== undefined) {
                 if (eip < 0x1000000) lastLowEip = eip;
                 else if (eip > 0x40000000 && lastLowEip) {
@@ -450,7 +449,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
                   lastLowEip = 0;
                 }
               }
-              // 装载区（内存顶下方 8MB）内的执行位置：采样时抓指令字节快照。
+              // For execution in the loading region (8 MB below memory top), capture instruction-byte snapshots when sampling.
               const top = memoryBytes;
               if (eip !== undefined && eip > top - 8 * 1024 * 1024 && eip < top && !eipSnapshots.has(eip & ~0xf)) {
                 eipSnapshots.set(
@@ -464,7 +463,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
               }
             }, eipSampleMs)
           : undefined;
-      // 战场冻结诊断（VM_BATTLE_DUMP_MS）：周期性输出当前 EIP、最近调用、网络调用计数。
+      // Battlefield freeze diagnostics (VM_BATTLE_DUMP_MS): periodically report current EIP, recent calls, and network-call counts.
       const battleDumpMs = Math.max(0, Number(process.env.VM_BATTLE_DUMP_MS ?? 0) | 0);
       let battleEips: number[] = [];
       const battleSampleTimer =
@@ -488,29 +487,29 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
               const timerCalls = recentCalls.filter(
                 (c) => c.includes('TickCount') || c.includes('imeGetTime') || c.includes('PerformanceCounter'),
               ).length;
-              // 主循环推进标志位（0x522ed0 消息循环里检查的开关）。
+              // Main-loop progress flag checked by the message loop at 0x522ed0.
               const flagA = readU32(emulator, 0xa522ac);
               const flagB = readU32(emulator, 0xa522e0);
               const flagC = readU32(emulator, 0xa522d4);
-              // RA2 加载就绪链诊断：0x690246 调 0x522c50 置 [0xa522ac]=1 的前置条件。
-              const flagA41 = readU32(emulator, 0xa41664); // 需==1
-              const flagB0 = readU32(emulator, 0xa522b0); // 需!=0
-              const flagD0 = readU32(emulator, 0xa522d0); // 需==0
-              // 主游戏状态机（0x5138ee）转移关键：状态运行器 0x516f00 检查
-              // [0x7d20e0]==-2 或 [0x850828]==1 才进 setup 路径，否则返回 state 7。
+              // RA2 load-readiness chain diagnostics: prerequisites for 0x690246 calling 0x522c50 to set [0xa522ac]=1.
+              const flagA41 = readU32(emulator, 0xa41664); // Must equal 1
+              const flagB0 = readU32(emulator, 0xa522b0); // Must be nonzero
+              const flagD0 = readU32(emulator, 0xa522d0); // Must equal 0
+              // Key main-game state-machine transition (0x5138ee): state runner 0x516f00 enters setup only when
+              // [0x7d20e0]==-2 or [0x850828]==1; otherwise it returns state 7.
               const flag850 = readU32(emulator, 0x850828);
               const flag7d2 = readU32(emulator, 0x7d20e0);
-              // 状态机持久化模式 [0xa3d298]：0→初进 state18(建加载框), 4→state17, 其他→state16。
-              // [0xa40d05]!=0 → state 8；[0xa40d13]!=0 → 跳过初始化段。
+              // Persistent state-machine mode [0xa3d298]: 0 -> initial state18 (create loading dialog), 4 -> state17, otherwise -> state16.
+              // [0xa40d05]!=0 -> state 8; [0xa40d13]!=0 -> skip initialization.
               const statePersist = readU32(emulator, 0xa3d298);
               const flagD05 = readU32(emulator, 0xa40d05);
               const flagD13 = readU32(emulator, 0xa40d13);
-              // 0x73a300 场景装载流水线的内部子状态 [0xa3d2a4]（0..5 经 0x73a65c 分派），
-              // [0x7db55c]：2=循环等待, -1=推进。
+              // Internal substate [0xa3d2a4] of the scene-loading pipeline at 0x73a300 (0..5 dispatched through 0x73a65c);
+              // [0x7db55c]: 2 = wait in a loop, -1 = advance.
               const loadSub = readU32(emulator, 0xa3d2a4);
               const flagB55c = readU32(emulator, 0x7db55c);
-              // 0x753110 用 [0xa72d00]（COM 加载器对象）发起异步加载；==0 则跳过、直接进模态
-              // 循环空等。容器 0xb26cb8 的计数（0x76e7a0）与串 0xb29018 也在前置检查里。
+              // 0x753110 starts asynchronous loading through [0xa72d00] (the COM loader object); zero skips it and enters an idle
+              // modal loop. Prerequisites also check container 0xb26cb8's count (0x76e7a0) and the string at 0xb29018.
               const comLoader = readU32(emulator, 0xa72d00);
               const comLoaderVt = comLoader ? readU32(emulator, comLoader) : 0;
               const wmTimer = shim.inspectPointerState().wmTimerDispatches;
@@ -525,14 +524,14 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
               } catch {
                 /* ignore */
               }
-              // 游戏世界推进门控对象：[0xa522cc] 的 +0x34/+0x38 差值决定是否推进。
+              // World-progress gate object: the difference between +0x34 and +0x38 of [0xa522cc] determines whether to advance.
               const gateObj = readU32(emulator, 0xa522cc);
               const g34 = gateObj ? readU32(emulator, gateObj + 0x34) : 0;
               const g38 = gateObj ? readU32(emulator, gateObj + 0x38) : 0;
               const gateStr = `obj=0x${gateObj.toString(16)} +34=${g34} +38=${g38} 差=${(g34 - g38) | 0}`;
               const getTimeFn = readU32(emulator, 0x831558);
-              // 实验：0x83155c 是游戏主 tick 计数器（0x409310 递增）。采样它随墙钟的
-              // 增速，直接量化游戏逻辑推进速度（speed5 应约 30 tick/秒）。
+              // Experiment: 0x83155c is the main game tick counter (incremented at 0x409310). Sample its increase against
+              // wall time to measure actual logic progress directly (speed5 should be about 30 ticks/second).
               const gameTick = readU32(emulator, 0x83155c);
               console.log(
                 `🔬 [${emulator.get_instruction_counter()}] 采样${battleEips.length} EIP热点=${top} 定时器=${timerCalls} WM_TIMER=${wmTimer} TSC.hi=${tscStr.split(' ')[0]} 门控${gateStr} getTimeFn=0x${getTimeFn.toString(16)} 标志=${flagA}/${flagB}/${flagC} shortGame=${emulator.read_memory(0xa3d2c2, 1)[0]} a41664=${flagA41} b0=0x${flagB0.toString(16)} d0=0x${flagD0.toString(16)} 850=0x${flag850.toString(16)} 7d2=0x${flag7d2.toString(16)} a3d298=0x${statePersist.toString(16)} d05=${flagD05} d13=${flagD13} loadSub=${loadSub} b55c=${flagB55c} comLoader=0x${comLoader.toString(16)}/vt0x${comLoaderVt.toString(16)} gameTick=${gameTick} 最近=${recentCalls.slice(-5).join('→') || '无'}`,
@@ -556,7 +555,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
               console.log(
                 `🔬 House：local=0x${localHouse.toString(16)} vector=0x${houseVector.toString(16)} ${houses.join(' ') || '无'}`,
               );
-              // 客体线程快照：确认游戏逻辑线程是否阻塞。
+              // Guest thread snapshot: check whether the game logic thread is blocked.
               const threads = shim
                 .inspectGuestThreads()
                 .map(
@@ -568,8 +567,8 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
               console.log(
                 `🔬 同步原语：createEvent=${syncOps.createEvent} setEvent=${syncOps.setEvent} resetEvent=${syncOps.resetEvent} waitMutex=${syncOps.waitMutex} waitEvent=${syncOps.waitEvent} waitOther=${syncOps.waitOther} waitMulti=${syncOps.waitMulti} post=${syncOps.postMessage} send=${syncOps.sendMessage} postThread=${syncOps.postThread} createThread=${syncOps.createThread} 文件打开按线程=${[...syncOps.fileOpenByThread.entries()].map(([t, c]) => `#${t}:${c}`).join(',')}`,
               );
-              // 加载完成判定（0x5bdb4f）：列表 [0xa3fa80] 计数 [0xa3fa8c]，项 +0x5b==-1 为完成。
-              // 几乎全部完成才发 0x6e0 推进 [0xa3d2a4]。dump 项状态看卡在哪些项。
+              // Load-completion check (0x5bdb4f): list [0xa3fa80], count [0xa3fa8c], with item +0x5b==-1 meaning complete.
+              // Only when nearly all items finish is 0x6e0 sent to advance [0xa3d2a4]. Dump item states to identify stalls.
               const itemCount = readU32(emulator, 0xa3fa8c);
               const itemList = readU32(emulator, 0xa3fa80);
               const a71e8c = readU32(emulator, 0xa71e8c);
@@ -585,7 +584,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
               console.log(
                 `🔬 加载项：总数=${itemCount} 已完成=${doneCount} 待完成=${itemCount - doneCount} a71e8c=0x${a71e8c.toString(16)} 待完成项=${pendingItems.slice(0, 8).join(' ') || '无'}`,
               );
-              // 主线程栈帧：还原主循环调用链。
+              // Main-thread stack frames reconstruct the main-loop call chain.
               const cpu2 = (emulator as unknown as { v86?: { cpu?: { reg32?: Int32Array } } }).v86?.cpu;
               const esp = cpu2?.reg32?.[4];
               if (esp) {
@@ -596,7 +595,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
                 }
                 console.log(`🔬 主线程栈帧：[${frames.map((v) => '0x' + v.toString(16)).join(',')}]`);
               }
-              // 后台线程恢复 EIP + 栈帧：定位加载/逻辑线程卡点（不只抓主线程）。
+              // Background-thread resume EIPs and stack frames locate loading/logic-thread stalls beyond the main thread.
               for (const thread of shim.inspectGuestThreads()) {
                 if (thread.current || thread.terminated) continue;
                 const savedEsp = readU32(emulator, GUEST_THREAD_CONTEXT_ESPS + thread.id * 4);
@@ -625,7 +624,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
                 console.log(
                   `🖼️ surface列表：${list.map((s) => `0x${s.object.toString(16)}(${s.width}x${s.height}b${s.bpp}c0x${s.caps.toString(16)})`).join(' ')}`,
                 );
-                if (lastFrame) writePpm('/tmp/surf-presented.ppm', lastFrame); // 同一时刻的合成呈现帧
+                if (lastFrame) writePpm('/tmp/surf-presented.ppm', lastFrame); // Composited presentation frame at the same instant
                 let idx = 0;
                 for (const s of list) {
                   if (s.height === 600 && s.bpp === 16) {
@@ -642,7 +641,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
             }, battleDumpMs)
           : undefined;
       const formatEipSamples = (): string => {
-        // 连续相同 EIP 合并为一段，输出最近 40 段。
+        // Coalesce consecutive identical EIPs into segments and print the latest 40.
         const runs: Array<{ eip: number; count: number; insn: number }> = [];
         for (const [insn, eip] of eipSamples) {
           const last = runs[runs.length - 1];
@@ -691,13 +690,13 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
           console.log(`📊 宿主输入：${JSON.stringify(shim.inspectHostInputTrace())}`);
           console.log(`📊 窗口快照：${JSON.stringify(shim.inspectWindowState())}`);
           console.log(`📊 客体线程：${JSON.stringify(shim.inspectGuestThreads())}`);
-          // 每条睡眠线程的恢复 EIP（continuation 在 pushad 帧 +36），定位各自卡点。
+          // Each sleeping thread's resume EIP (continuation at pushad frame +36), to locate individual stalls.
           for (const thread of shim.inspectGuestThreads()) {
             if (thread.current || thread.terminated) continue;
             const savedEsp = readU32(emulator, GUEST_THREAD_CONTEXT_ESPS + thread.id * 4);
             if (!savedEsp) continue;
             const cont = readU32(emulator, savedEsp + 36);
-            // 沿栈向上找 .text 内的返回地址，还原调用链。
+            // Walk up the stack for return addresses in .text to reconstruct the call chain.
             const frames: number[] = [];
             for (let off = 36; off < 0x400 && frames.length < 6; off += 4) {
               const value = readU32(emulator, savedEsp + off);
@@ -727,7 +726,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
                 `error=0x${readU32(emulator, HYPERCALL_EXCEPTION_ERROR).toString(16)}`,
             );
           }
-          // 主线程正在 hypercall 桩里；从当前 esp 沿栈找 .text 返回地址还原加载循环。
+          // The main thread is in a hypercall stub; scan from current ESP for .text return addresses to reconstruct the loading loop.
           const esp = cpu?.reg32?.[4];
           if (esp) {
             const frames: number[] = [];
@@ -746,19 +745,19 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
         watchDplay();
         const exception = readU32(emulator, HYPERCALL_EXCEPTION);
         if (exception === 1 && stepTraceMode) {
-          // 单步轨迹：记录 EIP 后清除发布信号，#1 handler 自己 iret 继续执行。
+          // Single-step trace: record EIP and clear the publication signal; the #1 handler resumes through iret.
           stepTrace.push(readU32(emulator, HYPERCALL_EXCEPTION_EIP));
           if (stepTrace.length >= 2500) {
-            // VM_STEP_ON_CLICK 用：抓到 2500 条后停 TF，回全速。
+            // For VM_STEP_ON_CLICK: clear TF after 2500 instructions and return to full speed.
             stepTraceMode = false;
             writeU32(emulator, 0x60050, 0);
           }
           writeU32(emulator, HYPERCALL_EXCEPTION, 0);
           return;
         }
-        // HYPERCALL_EXCEPTION 保存 vector + 1；INT3 是向量 3，因此这里应为 4。
+        // HYPERCALL_EXCEPTION stores vector + 1; INT3 is vector 3, so the value here must be 4.
         if (exception === 4 && breakOriginal !== undefined) {
-          // int3 断点：打印现场后终止（exception_common 已停机）。
+          // int3 breakpoint: print context and terminate (exception_common has already halted).
           cleanup();
           const eip = readU32(emulator, HYPERCALL_EXCEPTION_EIP);
           const reg = (name: string) => {
@@ -1041,7 +1040,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
               ` parent=0x${(args[2] ?? 0).toString(16)}, dlgproc=0x${(args[3] ?? 0).toString(16)})` +
               ` 调用自=0x${readU32(emulator, stack).toString(16)}`,
           );
-          // CreateDialogParamA 的 args[1] 是资源名而非模板指针，只 dump Indirect 变体。
+          // CreateDialogParamA args[1] is a resource name, not a template pointer; dump only Indirect variants.
           if (imported.key.includes('Indirect')) {
             dumpDialogTemplate(emulator, args[1] ?? 0);
           }
@@ -1121,7 +1120,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
           );
         }
         if (!first) first = imported.key;
-        // 兼容阻塞 GetMessageA 与 RA2 的 PeekMessageA + 自有节拍器消息泵。
+        // Support both blocking GetMessageA and RA2's PeekMessageA pump with its own ticker.
         if (imported.key === 'USER32.DLL!GetMessageA' || imported.key === 'USER32.DLL!PeekMessageA') {
           if (!reachedMainLoop) mainLoopMs = performance.now() - profileT0;
           reachedMainLoop = true;
@@ -1132,9 +1131,9 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
           const releasePoint = drag ? (drag[1] << 16) | drag[0] : point;
           const shellPageTitle = shim.inspectShellPageTitle().toLowerCase();
           const expectedPageTitle = clickPageTitles[inputIndex] ?? '';
-          // RA2 很早就进入 PeekMessage 循环，不能把“消息泵存在”误当成菜单就绪。
-          // 等 GUI:MainMenu 的标题控件真正从对话框模板创建后再注入首击；此时
-          // 主菜单按钮也已创建，命中测试才能得到 Button 而不是顶层窗口。
+          // RA2 enters PeekMessage early, so a running message pump does not imply menu readiness.
+          // Inject the first click only after the GUI:MainMenu title control is actually created from the dialog template.
+          // Main-menu buttons then exist too, allowing hit testing to find a Button rather than the top-level window.
           const ra2FirstMenuReady =
             GAME_ID !== 'ra2' || inputIndex > 0 || shellPageTitle.includes(expectedPageTitle || 'mainmenu');
           const expectedShellPageReady =
@@ -1142,7 +1141,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
           if (inputPhase === 0 && clickGap > 0) {
             clickGap--;
           } else if (inputPhase === 0 && Date.now() < firstClickAfter) {
-            // 墙钟门控：启动过场期间不点击。
+            // Wall-clock gate: do not click during the startup cutscene.
           } else if (
             inputPhase === 0 &&
             ra2FirstMenuReady &&
@@ -1152,16 +1151,16 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
               !waitMenuReady ||
               readU32(emulator, 0x004a_f1a4) >= 25)
           ) {
-            // 首击前帧 dump：屏幕过渡检测（标题→菜单等），与完成后帧对比。
+            // Pre-click frame dump for screen-transition detection (title -> menu, etc.) and comparison with the final frame.
             if (process.env.VM_FRAME_PPM_BEFORE && inputIndex === 0 && lastFrame) {
               writePpm(process.env.VM_FRAME_PPM_BEFORE, lastFrame);
             }
             shim.setCursorPosition(currentX, currentY);
             shim.postMessage(0x0200, 0, point); // WM_MOUSEMOVE
             if (batchPointerClick && !pointHoverOnly && !drag) {
-              // 浏览器不会等 WndProc 返回才产生 pointerup。原版可能在
-              // WM_LBUTTONDOWN 内进入 modal 消息泵，所以先把 up 排入队列。
-              // VM_STEP_ON_CLICK：最后一个点击点按下前开 TF 单步，抓菜单动作处理流。
+              // Browsers do not wait for WndProc to return before producing pointerup. The original game may enter a
+              // modal message pump inside WM_LBUTTONDOWN, so enqueue the release in advance.
+              // VM_STEP_ON_CLICK: enable TF before the final click's press to capture menu-action handling.
               if (process.env.VM_STEP_ON_CLICK === '1' && inputIndex === inputPoints.length - 1 && !stepTraceMode) {
                 stepTraceMode = true;
                 writeU32(emulator, 0x60050, 1);
@@ -1213,7 +1212,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
               shim.getHostInputDispatchCount() >= inputDispatchBases[inputIndex]! + (drag ? 3 : 2))
           ) {
             shim.setKeyState(0x01, false);
-            // 弹层在按下时关闭会消费抬起；该输入已完成，不应等待客体再分发。
+            // Closing a popup on press consumes the release; that input is complete and must not wait for another guest dispatch.
             if (shim.postMessage(0x0202, 0, releasePoint) === false) dispatchedInput.push(0x0202);
             inputPhase = 3;
           } else if (
@@ -1227,7 +1226,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
               inputPhase = 0;
               clickGap = clickGaps[inputIndex] ?? clickGapMessages;
             } else if (keyIndex < keySequence.length) {
-              // 点击路线结束后依次注入按键（VM_KEYS=VK 码列表）。
+              // After the click route finishes, inject keys in sequence (VM_KEYS is a list of VK codes).
               inputPhase = 4;
             } else if ((!targetCalls || calls >= targetCalls) && settleMessages-- <= 0) {
               cleanup();
@@ -1235,9 +1234,9 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
               return;
             }
           } else if (inputPhase === 4 && calls >= keysAfterCalls) {
-            // 按键注入：DOWN/CHAR/UP 各只发一次（观察派发前会经过多个 GetMessageA 拍，
-            // 无护栏会重复入队）。可打印 ASCII 键补发 WM_CHAR——游戏输入框可能只吃
-            // TranslateMessage 产物，而真实按键的 CHAR 由循环里的 TranslateMessage 生成。
+            // Key injection sends DOWN/CHAR/UP only once each; several GetMessageA ticks may occur before observed dispatch,
+            // so unguarded injection would queue duplicates. Add WM_CHAR for printable ASCII keys because game text fields
+            // may consume only TranslateMessage output; real key CHAR messages are generated by TranslateMessage in the loop.
             const vk = keySequence[keyIndex]!;
             const printable = vk >= 0x20 && vk <= 0x7e;
             const lastDispatched = dispatchedKey.at(-1);
@@ -1306,7 +1305,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
             fileMountCount++;
           }
         }
-        // 与 VmCore 的异步 provider 枚举桥接等价；只 stat 匹配项，不预读 MIX 内容。
+        // Equivalent to VmCore's asynchronous provider-enumeration bridge; stat only matches without pre-reading MIX contents.
         if (imported.key === 'KERNEL32.DLL!FindFirstFileA' && args[0] && args[1]) {
           const pattern = readCString(emulator, args[0]);
           const search = guestFileSearch(pattern);
@@ -1475,21 +1474,21 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
           waiting = false;
           if (stepAfter > 0 && calls >= stepAfter && !stepTraceMode) {
             stepTraceMode = true;
-            // guest 侧注入：boot 的 IRQ handler 见 0x60050 置位时给 iret 帧置 TF。
+            // Guest-side injection: boot's IRQ handler sets TF in the iret frame when 0x60050 is set.
             writeU32(emulator, 0x60050, 1);
           }
           if (process.env.VM_BREAK_AT) {
             const breakAt = Number(process.env.VM_BREAK_AT) | 0;
             const breakAfter = Number(process.env.VM_BREAK_AFTER ?? 0) | 0;
-            // 客体可能运行时改写目标区：过早写入的 0xCC 会被覆盖。
-            // VM_BREAK_AFTER 指定在第 N 次 API 后才落断点。
+            // The guest may rewrite the target region at runtime, overwriting an early 0xCC.
+            // VM_BREAK_AFTER installs the breakpoint only after API call N.
             if (breakAt && calls >= breakAfter && breakOriginal === undefined) {
               breakOriginal = emulator.read_memory(breakAt, 1)[0]!;
               emulator.write_memory([0xcc], breakAt); // int3
             }
           }
           if (process.env.VM_STACK_WATCH) {
-            // 跳板区监视：指定地址起 16 字节，找出写入发生的 API 边界。
+            // Watch 16 bytes from the specified trampoline address to identify the API boundary where a write occurs.
             const watchAddr = Number(process.env.VM_STACK_WATCH_ADDR ?? 0x6ffbc0) | 0;
             const bytes = emulator.read_memory(watchAddr, 16);
             const nonzero = bytes.some((byte) => byte !== 0);
@@ -1502,13 +1501,13 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
               );
             }
           }
-          // 网络泵注入：队列非空时借本 hypercall 的返回路径在主线跑一次泵体
+          // Network-pump injection: when the queue is nonempty, use this hypercall's return path to run the pump once on the main thread
           writeU32(emulator, HYPERCALL_EAX, result.eax);
           writeU32(emulator, HYPERCALL_EDX, result.edx ?? 0);
           writeU32(emulator, HYPERCALL_REQUEST, 0);
           emulator.serial0_send('\0');
-          // VM_TARGET_CALLS 是稳定性观测边界；RA2 的主节拍在素材装载后不必
-          // 再调用 PeekMessage，因此不能把完成检查只挂在下一条消息 API 上。
+          // VM_TARGET_CALLS is the stability observation boundary. After asset loading, RA2's main ticker need not call
+          // PeekMessage again, so completion checks cannot depend solely on the next message API.
           const inputRoundTripComplete =
             dispatchedInput.length >= expectedInputDispatches ||
             shim.getHostInputDispatchCount() >= expectedInputDispatches;
@@ -1531,8 +1530,8 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
         }
         if (threadDelay) {
           waiting = true;
-          // 与 vmCore 一致：尚无 runnable 线程时继续等待，不能只延迟一次
-          // 就让未获得锁的线程从 EnterCriticalSection 返回。
+          // Match vmCore: keep waiting while no thread is runnable; a single delay must not let a thread return from
+          // EnterCriticalSection before acquiring the lock.
           const resume = () => {
             if (stopped) return;
             try {
@@ -1562,8 +1561,8 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
       frames,
       frameBytes,
       lastFrameSize,
-      // lastFrame 仅在 onFrame 闭包内赋值，TS 控制流把返回点窄化为 null；
-      // 显式恢复声明类型（仅类型层修正，运行时行为不变）。
+      // lastFrame is assigned only inside the onFrame closure, so TS narrows the return point to null;
+      // explicitly restore its declared type (type-only correction; runtime behavior is unchanged).
       lastFrame: lastFrame as VmFrame | null,
       calls,
       first,
@@ -1621,7 +1620,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
     profileT0,
   } = final;
 
-  // 各游戏 CRT 的首个 API 不同，期望值由注册表 smokeFirstCall 提供。
+  // Each game's CRT begins with a different API; the registry's smokeFirstCall supplies the expected value.
   if (GAME.smokeFirstCall && first !== GAME.smokeFirstCall) {
     throw new Error(`首个 API 异常: ${first}`);
   }
@@ -1649,8 +1648,8 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
   }
   const minimumCalls = GAME_ID === 'ra2' || GAME_ID === 'yr' ? 4_000 : 10_000;
   if (calls < minimumCalls) throw new Error(`WinMain 调用轨迹过短: ${calls}`);
-  // RA2/YR 会直接采用 INI 中的视频模式；e2e 工作区可配成
-  // 1440×900 等尺寸，只要确实产生了主帧即可。其他旧游戏仍校验 800×600。
+  // RA2/YR use the INI video mode directly; an e2e workspace may configure 1440x900 or another size,
+  // provided a real primary frame is produced. Other legacy games still require 800x600.
   const fixedFrameSize = GAME_ID !== 'ra2' && GAME_ID !== 'yr';
   if (!options.skipFrameCheck && (!frames || (fixedFrameSize && lastFrameSize !== '800x600'))) {
     throw new Error(`DirectDraw 主表面未输出: frames=${frames}, size=${lastFrameSize}`);
@@ -1664,8 +1663,8 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
           : [0x0200, 0x0201, 0x0202],
     )
     .join(',');
-  // 按键路线或发现轮（VM_DP_PROBE）可能让游戏进入 modal 消息泵
-  // 重派发队列里的鼠标消息，不校验往返次数。
+  // Key routes or discovery rounds (VM_DP_PROBE) may enter a modal pump and redispatch queued mouse
+  // messages, so do not assert round-trip counts.
   const expectedHostDispatches = expectedInputDispatches;
   const synchronouslyDispatched = shim.getHostInputDispatchCount() >= expectedHostDispatches;
   if (
@@ -1688,20 +1687,20 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
         controls: shim.inspectControlItems(),
       }),
     );
-  // 完成后帧先落盘：探测抛错时也能拿到点击后的界面帧。
+  // Write the final frame first so the post-click UI survives a later probe exception.
   if (process.env.VM_FRAME_PPM && lastFrame) writePpm(process.env.VM_FRAME_PPM, lastFrame);
   options.assertFinalState?.(shim, emulator);
   if (options.assertFinalFrame) {
     if (!lastFrame) throw new Error('没有可验证的最终画面');
     options.assertFinalFrame(lastFrame);
   }
-  // VM_FRAME_RAW：原始 8-bit 索引面 + 调色板落盘（Graphics.dat 位图用当前调色板重渲染）。
+  // VM_FRAME_RAW: persist the raw 8-bit indexed surface and palette (rerender Graphics.dat bitmaps with the current palette).
   if (process.env.VM_FRAME_RAW && lastFrame) {
     writeFileSync(process.env.VM_FRAME_RAW, Buffer.from(lastFrame.pixels));
     writeFileSync(`${process.env.VM_FRAME_RAW}.pal`, Buffer.from(lastFrame.palette));
     console.log(`💾 原始索引帧 ${lastFrame.width}×${lastFrame.height} → ${process.env.VM_FRAME_RAW}`);
   }
-  // VM_MEM_SNAP：客体 RAM 快照落盘（内存 diff 定位屏幕状态变量用）。
+  // VM_MEM_SNAP: persist a guest RAM snapshot for memory diffs that locate screen-state variables.
   if (process.env.VM_MEM_SNAP) {
     const from = Number(process.env.VM_MEM_SNAP_FROM ?? 0x400000);
     const to = Number(process.env.VM_MEM_SNAP_TO ?? 0x5000000);
@@ -1709,8 +1708,8 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
     writeFileSync(process.env.VM_MEM_SNAP, Buffer.from(buf));
     console.log(`💾 客体内存快照 0x${from.toString(16)}..0x${to.toString(16)} → ${process.env.VM_MEM_SNAP}`);
   }
-  // VM_CSF_SCAN：扫描客体内存里游戏解码后的字符串（逗号分隔的 ASCII/UTF-16
-  // 关键词）与原始 CSF 缓存（" LBL" 头），定位国旗行字符串的字节来源。
+  // VM_CSF_SCAN: scan guest memory for decoded game strings (comma-separated ASCII/UTF-16 keywords)
+  // and raw CSF caches (" LBL" headers) to identify the byte sources of flag-row strings.
   if (process.env.VM_CSF_SCAN) {
     const heap = shim.inspectHeapState();
     const from = 0x400000;
@@ -1746,8 +1745,8 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
       }
       console.log(`🔎 ${pattern.label} 命中 ${hits}`);
     }
-    // " LBL" 原始 CSF 条目头：就地解析 label/string 并打印（游戏可能缓存
-    // 解包后的 ra2.csf 缓冲）。
+    // Raw CSF entry header " LBL": parse and print the label/string in place; the game may cache the
+    // unpacked ra2.csf buffer.
     let lblHits = 0;
     for (let addr = from; addr < to - 4 && lblHits < 12; addr += chunk) {
       const buf = emulator.read_memory(addr, Math.min(chunk, to - addr));
@@ -1770,8 +1769,8 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
       }
     }
     console.log(`🔎 LBL 命中 ${lblHits}`);
-    // ListBox 条目字节：游戏经 LB_ADDSTRING 填入的已解码字符串（CSF 解码结果
-    // 的直接证据），逐字符打印码位。
+    // ListBox item bytes: decoded strings inserted through LB_ADDSTRING provide direct evidence of CSF
+    // decoding results. Print the code point of each character.
     for (const control of shim.inspectControlItems()) {
       if (!control.items.length) continue;
       console.log(`📋 hwnd=0x${control.hwnd.toString(16)} ${control.className} sel=${control.selection}`);
@@ -1783,7 +1782,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
       }
     }
   }
-  // DPlay 探测：菜单路线发现用（持续监测见 watchDplay；VM_DP_EXPECT 未达预期即失败）。
+  // DPlay probe for menu-route discovery (see watchDplay for continuous monitoring; unmet VM_DP_EXPECT fails).
   if (process.env.VM_DP_PROBE) {
     console.log(
       `🔎 DPlay 探测（全程峰值）：created=${dpSeen.created} hosting=${dpSeen.hosting} ` +
@@ -1800,7 +1799,7 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
       console.log(`✅ DPlay 探测达成: ${expect}`);
     }
   }
-  // 点击单步轨迹：菜单动作处理流（VM_STEP_ON_CLICK=1）。
+  // Click single-step trace: menu-action handling (VM_STEP_ON_CLICK=1).
   if (process.env.VM_STEP_ON_CLICK === '1' && stepTrace.length) {
     console.log(
       `👣 点击单步（前 160）: ${stepTrace
@@ -1951,9 +1950,9 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
 
 function clampClicks(clicks: readonly VmClick[]): Array<[number, number]> {
   if (!clicks.length) throw new Error('点击路线不能为空');
-  // WM_*BUTTON/WM_MOUSEMOVE 的 lParam 使用 16-bit 有符号客户区坐标。
-  // 帧缓冲尺寸可由 RA2.INI 配置，不能把 1440×900 等测试点硬截成
-  // 旧的 800×600 边界，否则右侧 shell 按钮的 hover 会被误投到对话框空白处。
+  // WM_*BUTTON/WM_MOUSEMOVE lParam uses signed 16-bit client coordinates.
+  // RA2.INI can configure framebuffer dimensions; do not clip test points for sizes such as 1440x900 to
+  // the old 800x600 bounds, or right-side shell-button hover events land in empty dialog space.
   return clicks.map(([x, y]) => [
     Math.max(-0x8000, Math.min(0x7fff, x | 0)),
     Math.max(-0x8000, Math.min(0x7fff, y | 0)),
@@ -2078,7 +2077,7 @@ function readI16(memory: V86, address: number): number {
   return value & 0x8000 ? value | 0xffff_0000 : value;
 }
 
-/** 读模板变长字段：0xFFFF→序数，否则按 UTF-16LE 字符串（DLGTEMPLATE 字符串均为 Unicode）。 */
+/** Read variable-length template fields: 0xFFFF -> ordinal; otherwise UTF-16LE string (all DLGTEMPLATE strings are Unicode). */
 function templateField(memory: V86, address: number): { next: number; text: string } {
   const first = readU16(memory, address);
   if (first === 0xffff) return { next: address + 4, text: `#${readU16(memory, address + 2)}` };
@@ -2094,7 +2093,7 @@ function templateField(memory: V86, address: number): { next: number; text: stri
     const text = new TextDecoder('utf-16le').decode(raw.subarray(0, utf16End));
     return { next: address + utf16End + 2, text: JSON.stringify(text) };
   }
-  // 无 UTF-16 终止符：退回 ANSI（Big5）单字节扫描。
+  // No UTF-16 terminator: fall back to an ANSI (Big5) single-byte scan.
   const nul = raw.indexOf(0);
   const bytes = raw.subarray(0, nul < 0 ? raw.length : nul);
   return {
@@ -2103,7 +2102,7 @@ function templateField(memory: V86, address: number): { next: number; text: stri
   };
 }
 
-/** 探测用：解析 DLGTEMPLATE/DLGTEMPLATEEX 并逐项打印控件（模板地址、control id、坐标、标题）。 */
+/** Probe helper: parse DLGTEMPLATE/DLGTEMPLATEEX and print every control's template address, ID, coordinates, and title. */
 function dumpDialogTemplate(memory: V86, address: number): void {
   try {
     const isEx = readU16(memory, address) === 1 && readU16(memory, address + 2) === 0xffff;

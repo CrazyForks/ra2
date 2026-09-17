@@ -1,11 +1,11 @@
 import { preventThirdPartyDownloads } from '../../helpers/offlineBrowser';
-/** GAN 分支网络数值回归：独立解释权重、比较旧模型、消费输出后再计时。 */
+/** GAN branch numerical regression: interpret weights independently, compare the old model, and consume output before timing. */
 import assert from 'node:assert/strict';
 import { chromium } from '@playwright/test';
 
 const browser = await chromium.launch({ args: ['--no-sandbox', '--enable-unsafe-swiftshader'] });
 try {
-  const page = await browser.newPage({ ignoreHTTPSErrors: true });
+  const page = await browser.newPage({ locale: 'zh-CN', ignoreHTTPSErrors: true });
   await preventThirdPartyDownloads(page);
   await page.goto(process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15174/');
   const result = await page.evaluate<{

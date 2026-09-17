@@ -1,16 +1,13 @@
 /**
- * 合成 PE 端到端冒烟：CI 上无原版游戏资源也能守住核心回归——
- * PE 装载、hypercall 握手、堆/虚拟内存、文件读取、临界区、
- * WndProc 回调跳板（SendMessage 同步 + GetMessage/DispatchMessage 泵）、
- * Sleep 挂起唤醒、ExitProcess 退出码。
+ * Synthetic PE end-to-end smoke tests protect core regressions in CI without original game assets: PE loading, hypercall handshake, heap/virtual memory, file reads, critical sections, WndProc callback trampolines (synchronous SendMessage and GetMessage/DispatchMessage pump), Sleep suspend/wake, and ExitProcess exit codes.
  *
- * 客体程序在每个检查点失败时以步骤码调用 ExitProcess，非零退出码即步骤号。
+ * The guest calls ExitProcess with the checkpoint number on failure; a nonzero exit code identifies the failed step.
  */
 import { describe, expect, it } from 'vitest';
 import { FIXTURE_ABI } from '../../fixture/fixtureProgram';
 import { runFixture, type FixtureMode } from '../../fixture/runFixture';
 
-/** 两种模式下都必须真实 hypercall 过的导入（fast 模式里 _lread/临界区走客体内桩）。 */
+/** Imports that must perform real hypercalls in both modes (_lread/critical sections use guest stubs in fast mode). */
 const COMMON_EXPECTED_CALLS = [
   'KERNEL32.DLL!GetVersion',
   'KERNEL32.DLL!GetCommandLineA',
@@ -36,34 +33,34 @@ const COMMON_EXPECTED_CALLS = [
   'USER32.DLL!DispatchMessageA',
   'USER32.DLL!DefWindowProcA',
 ];
-/** fast 模式下被客体内高速桩接管、不产生 hypercall 的导入。 */
+/** Imports handled by guest fast stubs without hypercalls in fast mode. */
 const FAST_PATH_CALLS = [
   'KERNEL32.DLL!_lread',
   'KERNEL32.DLL!InitializeCriticalSection',
   'KERNEL32.DLL!EnterCriticalSection',
   'KERNEL32.DLL!LeaveCriticalSection',
-  // ra2 起 GetLastError/SetLastError 在 fast 模式直读共享页，不过 host。
+  // Since RA2, GetLastError/SetLastError access the shared page directly in fast mode, bypassing the host.
   'KERNEL32.DLL!GetLastError',
 ];
 
 describe.each(['slow', 'fast'] as FixtureMode[])('fixture PE 端到端（%s 模式）', (mode) => {
   it('全部检查点通过，ExitProcess(0)', async () => {
     const result = await runFixture(mode);
-    // 退出码非 0 时是客体自检失败的步骤号（见 fixtureProgram.ts 头部清单）。
+    // A nonzero exit code identifies the failed guest self-check step (see the list at the top of fixtureProgram.ts).
     expect(result.exitCode).toBe(0);
     expect(result.firstCall).toBe('KERNEL32.DLL!GetVersion');
 
     for (const key of COMMON_EXPECTED_CALLS) {
       expect(result.callCounts.get(key) ?? 0, `缺少 hypercall: ${key}`).toBeGreaterThanOrEqual(1);
     }
-    // 消息泵往返次数精确匹配：3×WM_USER + WM_QUIT。
+    // Message-pump round trips match exactly: 3x WM_USER + WM_QUIT.
     expect(result.callCounts.get('USER32.DLL!GetMessageA')).toBe(4);
     expect(result.callCounts.get('USER32.DLL!DispatchMessageA')).toBe(3);
     expect(result.callCounts.get('USER32.DLL!PostMessageA')).toBe(3);
     expect(result.callCounts.get('USER32.DLL!SendMessageA')).toBe(2);
 
     if (mode === 'slow') {
-      // 慢速模式全部导入都过 host：fast 路径导入也要各出现预期次数。
+      // In slow mode, all imports cross the host; fast-path imports must also appear the expected number of times.
       expect(result.callCounts.get('KERNEL32.DLL!_lread')).toBe(2);
       for (const key of FAST_PATH_CALLS.slice(1)) {
         expect(result.callCounts.get(key) ?? 0, `缺少 hypercall: ${key}`).toBeGreaterThanOrEqual(1);
@@ -71,12 +68,12 @@ describe.each(['slow', 'fast'] as FixtureMode[])('fixture PE 端到端（%s 模�
       expect(result.callCounts.get('KERNEL32.DLL!EnterCriticalSection')).toBe(2);
       expect(result.callCounts.get('KERNEL32.DLL!LeaveCriticalSection')).toBe(2);
     } else {
-      // 快速模式：_lread 与无竞争的临界区 Enter/Leave 在客体内完成。
+      // Fast mode: _lread and uncontended critical-section Enter/Leave complete inside the guest.
       for (const key of FAST_PATH_CALLS) {
         expect(result.callCounts.get(key) ?? 0, `${key} 不应产生 hypercall`).toBe(0);
       }
     }
-    // 覆盖完整性：fixture ABI 里的每个导入要么被调用、要么被快速桩接管。
+    // Coverage completeness: every fixture ABI import is either called or handled by a fast stub.
     for (const key of Object.keys(FIXTURE_ABI)) {
       const called = (result.callCounts.get(key) ?? 0) > 0;
       const fastPathed = mode === 'fast' && FAST_PATH_CALLS.includes(key);

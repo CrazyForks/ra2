@@ -1,9 +1,8 @@
+import { t } from '../../shared/i18n/translate';
 /**
- * Win32 键盘消息的构造与注入助手。
+ * Helpers for constructing and injecting Win32 keyboard messages.
  *
- * 本模块保持纯函数、无模块级可变状态、无 DOM：page.ts 没有 HMR accept，
- * 模块失效会沿依赖链整页刷新，此处若持有状态会随 HMR 泄漏。
- * 真实 KeyboardEvent 与触屏按键栏构造的 SyntheticKey 都满足 KeyLike。
+ * Keep pure functions, no module-level mutable state, and no DOM: page.ts has no HMR accept, so invalidation propagates into a full-page refresh; state held here would leak across HMR. Both real KeyboardEvent and touch-toolbar SyntheticKey satisfy KeyLike.
  */
 
 export interface KeyLike {
@@ -15,13 +14,13 @@ export interface KeyLike {
   metaKey: boolean;
 }
 
-/** 接收按键注入的 VM 外壳；Win32GameVm 天然满足，无需引入 adapter 依赖。 */
+/** VM-shell keyboard-injection target; Win32GameVm satisfies this without an adapter dependency. */
 export interface KeyStrokeTarget {
   postMessage(message: number, wParam?: number, lParam?: number): void;
   setKeyState(virtualKey: number, down: boolean): void;
 }
 
-/** 客体切换分辨率时保持锁定光标在屏幕上的相对位置。 */
+/** Preserve the locked cursor's relative screen position when guest resolution changes. */
 export function rescaleLogicalPointer(
   x: number,
   y: number,
@@ -36,8 +35,8 @@ export function rescaleLogicalPointer(
   const sourceHeight = Math.max(1, fromHeight);
   const scaleAxis = (value: number, source: number, target: number): number => {
     if (value <= 0 || target <= 1) return 0;
-    // 边界必须映射到边界：799/800 扩到 1440 时，普通比例只能得到 1438.2，
-    // 锁定光标会在分辨率切换后永久差一列，边缘滚屏也随之失效。
+    // Map edges exactly to edges: scaling 799/800 to 1440 by ordinary ratios gives only 1438.2,
+    // permanently leaving the locked cursor one column short after resolution changes and breaking edge scrolling.
     if (value >= source - 1) return target - 1;
     return Math.max(0, Math.min(target - 1, (value * target) / source));
   };
@@ -45,8 +44,7 @@ export function rescaleLogicalPointer(
 }
 
 /**
- * macOS 会在 DOM 层把 Ctrl+主键改写成 secondary button；游戏需要看到原始的
- * Ctrl+左键组合。只在 Apple 平台还原，其他平台的 Ctrl+真右键保持不变。
+ * macOS rewrites Ctrl+primary as a secondary button in the DOM, but the game needs the original Ctrl+left-click. Restore only on Apple platforms, preserving genuine Ctrl+right-click elsewhere.
  */
 export function normalizePointerButton(button: number, ctrlKey: boolean, platform: string, buttons = 0): number {
   return ctrlKey &&
@@ -162,7 +160,7 @@ export function virtualKey(event: KeyLike): number {
   return keys[event.code] ?? 0;
 }
 
-/** TranslateMessage 在真 Windows 上会为这些按键产生 WM_CHAR。 */
+/** Real Windows TranslateMessage generates WM_CHAR for these keys. */
 export function win32CharacterCode(event: KeyLike): number | null {
   if (event.ctrlKey || event.altKey || event.metaKey) return null;
   if (event.key.length === 1) return event.key.charCodeAt(0);
@@ -176,8 +174,8 @@ export function win32CharacterCode(event: KeyLike): number | null {
 }
 
 /**
- * 模拟一次物理按键，语义与 page.ts 的 window keydown/keyup 路径一致：
- * down → setKeyState + WM_KEYDOWN/SYSKEYDOWN + WM_CHAR；up → WM_KEYUP/SYSKEYUP。
+ * Simulate one physical keystroke with page.ts window keydown/keyup semantics:
+ * down -> setKeyState + WM_KEYDOWN/SYSKEYDOWN + WM_CHAR; up -> WM_KEYUP/SYSKEYUP.
  */
 export function syntheticKeyStroke(vm: KeyStrokeTarget, code: string, down: boolean): void {
   const event: KeyLike = {
@@ -206,15 +204,15 @@ export type CheatTextValidation =
 
 const CHEAT_TEXT_PATTERN = /^[A-Za-z0-9 ()]+$/;
 
-/** 校验并规范化秘籍文本：只去掉两端 ASCII 空格，保留短语内部空格。 */
+/** Validate and normalize cheat text by trimming only outer ASCII spaces, preserving spaces within phrases. */
 export function normalizeCheatText(text: string): CheatTextValidation {
   const normalized = text.replace(/^ +| +$/g, '');
-  if (!normalized) return { ok: false, error: '请输入作弊码。' };
+  if (!normalized) return { ok: false, error: t('请输入作弊码。') };
   if (normalized.length > CHEAT_TEXT_MAX_LENGTH) {
-    return { ok: false, error: `作弊码不能超过 ${CHEAT_TEXT_MAX_LENGTH} 个字符。` };
+    return { ok: false, error: t('作弊码不能超过 {0} 个字符。', CHEAT_TEXT_MAX_LENGTH) };
   }
   if (!CHEAT_TEXT_PATTERN.test(normalized)) {
-    return { ok: false, error: '只能输入英文字母、数字、空格或括号。' };
+    return { ok: false, error: t('只能输入英文字母、数字、空格或括号。') };
   }
   return { ok: true, text: normalized };
 }
@@ -232,9 +230,9 @@ function cheatCharacterEvent(character: string): KeyLike | null {
 
 function syntheticCheatCharacterStroke(vm: KeyStrokeTarget, character: string, down: boolean): void {
   const event = cheatCharacterEvent(character);
-  if (!event) throw new Error(`无法发送字符：${character}`);
+  if (!event) throw new Error(t('无法发送字符：{0}', character));
   const vk = virtualKey(event);
-  if (!vk) throw new Error(`无法发送字符：${character}`);
+  if (!vk) throw new Error(t('无法发送字符：{0}', character));
   vm.setKeyState(vk, down);
   vm.postMessage(down ? 0x0100 : 0x0101, vk, keyLParam(event, !down, !down));
   if (down) vm.postMessage(0x0102, character.charCodeAt(0), keyLParam(event, false, false));
@@ -244,7 +242,7 @@ function tapSyntheticKey(vm: KeyStrokeTarget, code: string): void {
   try {
     syntheticKeyStroke(vm, code, true);
   } finally {
-    // 无论按下阶段是否抛错，都尝试把按键释放，避免 VM 留下卡住的状态。
+    // Attempt key release even if the down phase throws, avoiding stuck guest key state.
     syntheticKeyStroke(vm, code, false);
   }
 }
@@ -259,7 +257,7 @@ function sendNormalizedCheatText(vm: KeyStrokeTarget, text: string): void {
   }
 }
 
-/** 发送原版秘籍输入序列：F9 → 文本 → Enter。 */
+/** Send the original cheat-input sequence: F9 -> text -> Enter. */
 export function sendCheatSequence(vm: KeyStrokeTarget, text: string): CheatTextValidation {
   const validation = normalizeCheatText(text);
   if (!validation.ok) return validation;
@@ -269,7 +267,7 @@ export function sendCheatSequence(vm: KeyStrokeTarget, text: string): CheatTextV
   return validation;
 }
 
-/** 发送一次测试模式快捷键，例如 F8、F11、H 或 U。 */
+/** Send one test-mode shortcut, such as F8, F11, H, or U. */
 export function sendCheatKey(vm: KeyStrokeTarget, code: string): void {
   tapSyntheticKey(vm, code);
 }

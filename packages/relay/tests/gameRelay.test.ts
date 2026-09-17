@@ -256,7 +256,7 @@ describe('RA2 network relay', () => {
     host.hello('ignored');
     const welcome = await host.next(isType('welcome'));
     if (welcome.t !== 'welcome') throw new Error('relay did not welcome the host');
-    // 回归：分配循环此前只跳过 low=0，首个连接会拿到 10.247.0.1（high=0）。
+    // Regression: the allocation loop previously skipped only low=0, giving the first connection 10.247.0.1 (high=0).
     expect(welcome.addr).not.toBe((RELAY_SUBNET_PREFIX | 0x0001) >>> 0);
     expect(isAssignableRoomAddress(welcome.addr)).toBe(true);
   });
@@ -411,7 +411,7 @@ describe('RA2 network relay', () => {
       a: new Uint8Array([1]),
     };
     host.send(packet);
-    // 同连接 pong 是前一数据报已经经过 relay 的屏障，不用任意睡眠判断丢包。
+    // A pong on the same connection is a barrier proving the preceding datagram passed through the relay; do not infer packet loss from arbitrary sleeps.
     host.send({ t: 'ping', n: 1, at: 0 });
     await host.next(isType('pong'));
     expect(harness.relay.getFaultStats().dropped).toBe(1);

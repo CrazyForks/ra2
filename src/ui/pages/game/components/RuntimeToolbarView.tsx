@@ -1,3 +1,4 @@
+import { t, localizeLabel, localizeText } from '../../../shared/i18n/translate';
 import type { ReShadeMode } from '../../../../graphics/reshadePreset';
 import { Component, lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
@@ -12,11 +13,12 @@ import type { UpscaleMode } from '../vmFrameRenderer';
 import { controlsCollapsed } from '../state/uiState';
 import { DEFAULT_VOLUME_PERCENT } from '../../../../adapter/audio';
 import { useStore } from '../../../shared/state/useStore';
+import { isDesktopEdge, showEdgeMouseNotice } from './edgeMouseNotice';
 
-// 在导入边界裁掉实验，生产构建不携带 ONNX/实验 Worker，而不只是隐藏按钮。
+// Remove experiments at the import boundary so production excludes ONNX/experimental Workers, rather than merely hiding buttons.
 const loadModelProbeDialog = import.meta.env.DEV
   ? () => import('./ModelProbeDialog').then((module) => ({ default: module.ModelProbeDialog }))
-  : () => Promise.reject(new Error('模型实验仅在开发模式可用'));
+  : () => Promise.reject(new Error(t('模型实验仅在开发模式可用')));
 let modelProbeDialogPromise: ReturnType<typeof loadModelProbeDialog> | undefined;
 
 const preloadModelProbeDialog = () => {
@@ -35,7 +37,12 @@ class ModelProbeDialogLoadBoundary extends Component<{ children: ReactNode }, { 
 
   render() {
     if (this.state.error) {
-      return <p role="alert">模型实验加载失败：{this.state.error.message}</p>;
+      return (
+        <p role="alert">
+          {t('模型实验加载失败：')}
+          {localizeText(this.state.error.message)}
+        </p>
+      );
     }
     return this.props.children;
   }
@@ -55,9 +62,9 @@ export interface ToolbarModel {
   mapsAvailable: boolean;
 }
 const resolutions = ['', '800x600', '1024x768', '1280x720', '1280x800', '1440x900', '1600x900', '1920x1080'];
-const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+const errorText = (error: unknown) => localizeText(error instanceof Error ? error.message : String(error));
 function CheatContent({ game, callbacks }: { game: CheatGuideGameId | null; callbacks: RuntimeToolbarCallbacks }) {
-  const [status, setStatus] = useState('页面只报告已交给 VM，不代表游戏接受。');
+  const [status, setStatus] = useState(t('页面只报告已交给 VM，不代表游戏接受。'));
   const guide = game === null ? null : CHEAT_GUIDES[game];
   const send = (raw: string) => {
     const result = normalizeCheatText(raw);
@@ -67,7 +74,7 @@ function CheatContent({ game, callbacks }: { game: CheatGuideGameId | null; call
     }
     try {
       callbacks.onSendCheatText(result.text);
-      setStatus(`已将「${result.text}」交给 VM。`);
+      setStatus(t('已将「{0}」交给 VM。', result.text));
     } catch (error) {
       setStatus(errorText(error));
     }
@@ -75,7 +82,7 @@ function CheatContent({ game, callbacks }: { game: CheatGuideGameId | null; call
   return (
     <>
       <div id="vm-cheat-content">
-        <p className="cheat-guide-steps">{guide?.steps ?? '当前游戏尚未提供经过验证的指南。'}</p>
+        <p className="cheat-guide-steps">{guide?.steps ?? t('当前游戏尚未提供经过验证的指南。')}</p>
         <div className="cheat-entry-list">
           {guide?.entries.map((entry, index) => (
             <article key={index} className="cheat-entry">
@@ -93,16 +100,16 @@ function CheatContent({ game, callbacks }: { game: CheatGuideGameId | null; call
                     className="toolbar-button"
                     onClick={() => {
                       if (!navigator.clipboard) {
-                        setStatus('当前浏览器不允许复制，请手动复制。');
+                        setStatus(t('当前浏览器不允许复制，请手动复制。'));
                         return;
                       }
                       void navigator.clipboard.writeText(entry.text).then(
-                        () => setStatus('已复制'),
+                        () => setStatus(t('已复制')),
                         (error) => setStatus(errorText(error)),
                       );
                     }}
                   >
-                    复制
+                    {t('复制')}{' '}
                   </button>
                 )}
                 <button
@@ -113,20 +120,20 @@ function CheatContent({ game, callbacks }: { game: CheatGuideGameId | null; call
                     else
                       try {
                         callbacks.onSendCheatKey(entry.keyCode);
-                        setStatus(`已将「${entry.label}」交给 VM。`);
+                        setStatus(t('已将「{0}」交给 VM。', entry.label));
                       } catch (error) {
                         setStatus(errorText(error));
                       }
                   }}
                 >
-                  {entry.kind === 'text' ? '发送到游戏' : '发送按键'}
+                  {entry.kind === 'text' ? t('发送到游戏') : t('发送按键')}
                 </button>
               </div>
             </article>
           ))}
         </div>
         <section className="cheat-custom">
-          <h3>自定义秘籍</h3>
+          <h3>{t('自定义秘籍')}</h3>
           <form
             className="cheat-custom-form"
             onSubmit={(event) => {
@@ -134,7 +141,7 @@ function CheatContent({ game, callbacks }: { game: CheatGuideGameId | null; call
               send(String(new FormData(event.currentTarget).get('cheat') ?? ''));
             }}
           >
-            <label htmlFor="vm-cheat-custom-input">手机软键盘输入秘籍</label>
+            <label htmlFor="vm-cheat-custom-input">{t('手机软键盘输入秘籍')}</label>
             <input
               id="vm-cheat-custom-input"
               name="cheat"
@@ -145,7 +152,7 @@ function CheatContent({ game, callbacks }: { game: CheatGuideGameId | null; call
               spellCheck={false}
             />
             <button type="submit" className="toolbar-button">
-              发送到游戏
+              {t('发送到游戏')}{' '}
             </button>
           </form>
         </section>
@@ -235,52 +242,52 @@ export function RuntimeToolbarView({
         id="vm-controls-toggle"
         className="toolbar-button"
         type="button"
-        aria-label="收起或展开控制栏"
+        aria-label={t('收起或展开控制栏')}
         aria-expanded={!collapsed}
         onClick={() => setControlsCollapsed(!collapsed)}
       >
         {collapsed ? '☰' : '✕'}
       </button>
-      <span className="brand">{model.title}</span>
-      <output id="vm-fps" title={model.rendererDetail}>
+      <span className="brand">{localizeLabel(model.title)}</span>
+      <output id="vm-fps" title={localizeText(model.rendererDetail)}>
         {model.fps}
       </output>
-      <output id="vm-performance" title={message || model.performanceTitle}>
-        {message || model.performance}
+      <output id="vm-performance" title={localizeText(message || model.performanceTitle)}>
+        {localizeText(message || model.performance)}
       </output>
       <div className="resolution-controls">
-        <span className="label">超分</span>
+        <span className="label">{t('超分')}</span>
         <GameSelect
           id="vm-upscale"
           nativeId="vm-upscale-mode"
-          label="实时超分模式"
+          label={t('实时超分模式')}
           value={model.upscaleMode}
           options={[
-            { value: 'off', label: '关闭' },
-            { value: 'bicubic', label: 'Bicubic（非 AI）' },
-            { value: 'fsr', label: 'FSR 1.0（柔和）' },
-            { value: 'fsr-rcas-soft', label: 'FSR 1.0+RCAS（轻锐化）' },
-            { value: 'fsr-rcas', label: 'FSR 1.0+RCAS（锐化）' },
-            { value: 'scalefx', label: 'ScaleFX 3×（像素画）' },
-            { value: 'fast', label: 'CNN（快速）' },
-            { value: 'gan', label: 'GAN-M（画质）' },
+            { value: 'off', label: t('关闭') },
+            { value: 'bicubic', label: t('Bicubic（非 AI）') },
+            { value: 'fsr', label: t('FSR 1.0（柔和）') },
+            { value: 'fsr-rcas-soft', label: t('FSR 1.0+RCAS（轻锐化）') },
+            { value: 'fsr-rcas', label: t('FSR 1.0+RCAS（锐化）') },
+            { value: 'scalefx', label: t('ScaleFX 3×（像素画）') },
+            { value: 'fast', label: t('CNN（快速）') },
+            { value: 'gan', label: t('GAN-M（画质）') },
           ]}
           onChange={(value) => callbacks.onUpscaleMode?.(value as UpscaleMode)}
         />
       </div>
       <div className="resolution-controls reshade-controls">
-        <span className="label" title="SweetFX 的 Vibrance 与 LumaSharpen 浏览器移植">
+        <span className="label" title={t('SweetFX 的 Vibrance 与 LumaSharpen 浏览器移植')}>
           ReShade
         </span>
         <GameSelect
           id="vm-reshade"
           nativeId="vm-reshade-mode"
-          label="ReShade 后处理"
+          label={t('ReShade 后处理')}
           value={model.reshadeMode ?? 'off'}
           options={[
-            { value: 'off', label: '关闭' },
-            { value: 'enhance', label: '色彩 + 锐化' },
-            { value: 'compare', label: '左右对照' },
+            { value: 'off', label: t('关闭') },
+            { value: 'enhance', label: t('色彩 + 锐化') },
+            { value: 'compare', label: t('左右对照') },
           ]}
           onChange={(value) => {
             try {
@@ -293,14 +300,14 @@ export function RuntimeToolbarView({
         />
         <output id="vm-reshade-status" role="status">
           {model.reshadeMode === 'compare'
-            ? '左：原图 · 右：增强'
+            ? t('左：原图 · 右：增强')
             : model.reshadeMode === 'enhance'
-              ? '已开启 · 色彩 + 锐化'
-              : '已关闭'}
+              ? t('已开启 · 色彩 + 锐化')
+              : t('已关闭')}
         </output>
       </div>
-      <div className="rate-controls vm-clock-controls" role="group" aria-label="时钟倍率">
-        <span>时钟</span>
+      <div className="rate-controls vm-clock-controls" role="group" aria-label={t('时钟倍率')}>
+        <span>{t('时钟')}</span>
         {[1, 2, 4].map((rate) => (
           <button
             key={rate}
@@ -315,18 +322,18 @@ export function RuntimeToolbarView({
         ))}
       </div>
       <div className="resolution-controls">
-        <span className="label">分辨率</span>
+        <span className="label">{t('分辨率')}</span>
         <GameSelect
           id="vm-resolution"
-          label="游戏分辨率"
+          label={t('游戏分辨率')}
           value={model.resolution}
           disabled={changingResolution}
-          options={resolutions.map((value) => ({ value, label: value.replace('x', '×') || '跟随 INI' }))}
+          options={resolutions.map((value) => ({ value, label: value.replace('x', '×') || t('跟随 INI') }))}
           onChange={(value) => void chooseResolution(value)}
         />
       </div>
       <div className="volume-controls slider-item">
-        <span className="label">主音量</span>
+        <span className="label">{t('主音量')}</span>
         <div className="slider-fields">
           <input
             id="vm-volume"
@@ -335,7 +342,7 @@ export function RuntimeToolbarView({
             max="100"
             step="1"
             value={volume}
-            aria-label="主音量"
+            aria-label={t('主音量')}
             onChange={(event) => {
               const value = Number(event.target.value);
               setVolume(value);
@@ -343,11 +350,11 @@ export function RuntimeToolbarView({
               try {
                 localStorage.setItem('vm-master-volume', String(value));
               } catch {
-                /* 隐私模式只保留会话值。 */
+                /* Private mode retains only the session value. */
               }
             }}
           />
-          <input id="vm-volume-value" type="text" disabled readOnly value={`${volume}%`} aria-label="主音量读数" />
+          <input id="vm-volume-value" type="text" disabled readOnly value={`${volume}%`} aria-label={t('主音量读数')} />
         </div>
       </div>
       <button
@@ -357,7 +364,7 @@ export function RuntimeToolbarView({
         disabled={!!busy || !model.mapsAvailable || !callbacks.onQuickStart}
         onClick={() => setQuickStart(true)}
       >
-        快速开局…
+        {t('快速开局…')}{' '}
       </button>
       {ModelProbeDialog && (
         <button
@@ -367,7 +374,7 @@ export function RuntimeToolbarView({
           disabled={!callbacks.onCaptureProbe}
           onClick={() => setProbe(true)}
         >
-          模型实验…
+          {t('模型实验…')}{' '}
         </button>
       )}
       {import.meta.env.DEV && callbacks.onLiveModel && (
@@ -377,7 +384,7 @@ export function RuntimeToolbarView({
           type="button"
           onClick={() => void run('stop-model', () => callbacks.onLiveModel!(null))}
         >
-          停止整帧模型
+          {t('停止整帧模型')}{' '}
         </button>
       )}
       <button
@@ -387,7 +394,7 @@ export function RuntimeToolbarView({
         disabled={model.cheatGame === null}
         onClick={() => setCheats(true)}
       >
-        作弊码指南
+        {t('作弊码指南')}{' '}
       </button>
       <button
         id="vm-save-download"
@@ -396,7 +403,7 @@ export function RuntimeToolbarView({
         disabled={!!busy}
         onClick={() => void run('download', callbacks.onDownloadSave)}
       >
-        {busy === 'download' ? '正在打包…' : '下载存档'}
+        {busy === 'download' ? t('正在打包…') : t('下载存档')}
       </button>
       <button
         id="vm-save-upload"
@@ -405,7 +412,7 @@ export function RuntimeToolbarView({
         disabled={!!busy}
         onClick={() => file.current?.click()}
       >
-        {busy === 'upload' ? '正在校验…' : '上传存档'}
+        {busy === 'upload' ? t('正在校验…') : t('上传存档')}
       </button>
       <input
         ref={file}
@@ -424,14 +431,14 @@ export function RuntimeToolbarView({
         className="toolbar-button"
         type="button"
         disabled={!!busy || !model.mapsAvailable}
-        title={model.mapsAvailable ? '建议在开始对局前附加地图包' : '游戏启动后可附加地图包'}
+        title={model.mapsAvailable ? t('建议在开始对局前附加地图包') : t('游戏启动后可附加地图包')}
         onClick={() =>
           void run('maps', async () => {
             await callbacks.onCustomMaps?.();
           })
         }
       >
-        附加地图包…
+        {t('附加地图包…')}{' '}
       </button>
       <button
         id="vm-change-source"
@@ -440,36 +447,55 @@ export function RuntimeToolbarView({
         disabled={!!busy}
         onClick={() => void run('source', callbacks.onChangeSource)}
       >
-        {busy === 'source' ? '正在安全停止…' : '更换游戏目录…'}
+        {busy === 'source' ? t('正在安全停止…') : t('更换游戏目录…')}
       </button>
       <button id="vm-join-group" className="toolbar-button" type="button" onClick={openGroupJoinDialog}>
-        加入微信群
+        {t('加入微信群')}{' '}
       </button>
+      <a
+        id="vm-open-source"
+        className="toolbar-button"
+        href="https://github.com/ra2-games/ra2"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        GitHub
+      </a>
+      {isDesktopEdge() && (
+        <button
+          id="vm-edge-notice"
+          className="toolbar-button"
+          type="button"
+          onClick={() => void showEdgeMouseNotice(true)}
+        >
+          Edge 提醒
+        </button>
+      )}
       <button
         id="vm-fullscreen"
         className="toolbar-button"
         type="button"
         onClick={() => void toggleImmersiveFullscreen(canvas).catch((error) => setMessage(errorText(error)))}
       >
-        {fullscreen ? '退出全屏' : '全屏'}
+        {fullscreen ? t('退出全屏') : t('全屏')}
       </button>
       {createPortal(
         <Modal
           id="vm-cheat-dialog"
           open={cheats && model.cheatGame !== null}
-          title="作弊码指南"
+          title={t('作弊码指南')}
           onClose={() => setCheats(false)}
           className="cheat-dialog"
         >
           <header>
-            <h2 id="vm-cheat-dialog-title">作弊码指南</h2>
+            <h2 id="vm-cheat-dialog-title">{t('作弊码指南')}</h2>
             <button
               id="vm-cheat-dialog-close"
               className="toolbar-button"
               type="button"
               onClick={() => setCheats(false)}
             >
-              关闭
+              {t('关闭')}{' '}
             </button>
           </header>
           <CheatContent game={model.cheatGame} callbacks={callbacks} />
@@ -481,7 +507,7 @@ export function RuntimeToolbarView({
         callbacks.onCaptureProbe &&
         createPortal(
           <ModelProbeDialogLoadBoundary>
-            <Suspense fallback={<p role="status">正在打开模型实验…</p>}>
+            <Suspense fallback={<p role="status">{t('正在打开模型实验…')}</p>}>
               <ModelProbeDialog
                 capture={callbacks.onCaptureProbe}
                 live={callbacks.onLiveModel}
@@ -495,16 +521,16 @@ export function RuntimeToolbarView({
         createPortal(
           <Modal
             open
-            title="快速开局"
+            title={t('快速开局')}
             onClose={() => setQuickStart(false)}
             busy={busy === 'quick'}
             className="quick-start-dialog"
           >
-            <h3>重新启动并进入遭遇战设置？</h3>
-            <p>当前游戏会关闭，未保存的对局进度会丢失，联机会断开。资源未缓存时需重新选择游戏文件。</p>
-            <p>这会直达设置页，国家、地图和开始战斗仍由你选择。</p>
+            <h3>{t('重新启动并进入遭遇战设置？')}</h3>
+            <p>{t('当前游戏会关闭，未保存的对局进度会丢失，联机会断开。资源未缓存时需重新选择游戏文件。')}</p>
+            <p>{t('这会直达设置页，国家、地图和开始战斗仍由你选择。')}</p>
             <button type="button" className="dialog-button" disabled={!!busy} onClick={() => setQuickStart(false)}>
-              取消
+              {t('取消')}{' '}
             </button>
             <button
               type="button"
@@ -517,7 +543,7 @@ export function RuntimeToolbarView({
                 })
               }
             >
-              {busy === 'quick' ? '正在安全重启…' : '重启并进入遭遇战'}
+              {busy === 'quick' ? t('正在安全重启…') : t('重启并进入遭遇战')}
             </button>
             {message && <p role="alert">{message}</p>}
           </Modal>,

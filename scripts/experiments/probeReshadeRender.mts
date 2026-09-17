@@ -1,4 +1,4 @@
-/** 外部 LaserBlit 编译输出在真实 RA2 帧上的开发探针；不加载插件 DLL。 */
+/** Development probe for external LaserBlit compiler output on real RA2 frames; does not load plugin DLLs. */
 import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
@@ -11,7 +11,11 @@ const source = await readFile(shaderPath, 'utf8');
 const output = resolve(process.env.RA2_POST_OUTPUT ?? '.tmp-reshade-render');
 await mkdir(output);
 const browser = await chromium.launch({ args: ['--no-sandbox', '--enable-unsafe-swiftshader'] });
-const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1200, height: 900 } });
+const context = await browser.newContext({
+  locale: 'zh-CN',
+  ignoreHTTPSErrors: true,
+  viewport: { width: 1200, height: 900 },
+});
 await context.addInitScript(() => localStorage.setItem('vm-resolution-ra2', '800x600'));
 await context.route('**/src/ui/pages/game/page.ts*', async (route) => {
   const response = await route.fetch(),
@@ -44,7 +48,7 @@ try {
   await page.goto(`${process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15185'}/?start-page=battle&vm-worker=0`);
   await selectDevelopmentGame(page, 'ra2');
   await page.waitForFunction(`globalThis.__postArgs?.[0]?.width === 800`, {}, { timeout: 150000 });
-  // 沿用 RA2 基地车探针的只读场景证据；本入口固定 RA2，不能用于 YR。
+  // Reuse read-only scene evidence from the RA2 MCV probe; this entry point is RA2-only and cannot be used for YR.
   await page.waitForFunction(
     `(()=>{const s=globalThis.__postCore?.shim;if(!s)return false;const h=s.readU32(0xa35db4);return h && s.readU32(h+0x5438)>0;})()`,
     {},
@@ -54,7 +58,7 @@ try {
   await page.waitForTimeout(3000);
   const after = await page.evaluate<number>('globalThis.__postCore.shim.readU32(0xa40d2c)');
   assert.ok(after > before, '原生模拟未推进');
-  // 同一次浏览器任务内重绘同一帧，避免不同开局或模拟推进干扰画面对照。
+  // Redraw the same frame within one browser task so different starts or simulation progress cannot distort the image comparison.
   const result = await page.evaluate(async (source) => {
     const moduleUrl = '/src/graphics/experimental/reshadeLaser.ts';
     const { createReshadeLaser } = await import(/* @vite-ignore */ moduleUrl);
@@ -77,7 +81,7 @@ try {
       plain = read();
     let differences = 0;
     for (let i = 0; i < base.length; i++) differences += base[i] !== plain[i] ? 1 : 0;
-    // 此输入仅检验 shader 是否参与真实帧呈现，不表示已提取原插件的游戏数据。
+    // This input only verifies shader participation in real-frame presentation; it does not establish extraction of the original plugin's game data.
     renderer.setPostProcess((gl: WebGL2RenderingContext) =>
       createReshadeLaser(gl, source, () => ({
         inGame: true,

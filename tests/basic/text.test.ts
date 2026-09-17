@@ -1,4 +1,4 @@
-/** shim/text.ts 纯函数单元测试：窄字符串解码、路径归一化、MessageBox 默认按钮等。 */
+/** shim/text.ts pure-function unit tests: narrow-string decoding, path normalization, default MessageBox buttons, etc. */
 import { describe, expect, it } from 'vitest';
 import {
   decodeAnsi,
@@ -53,9 +53,9 @@ describe('normalizeGuestPath', () => {
 describe('defaultMessageBoxResult', () => {
   it('按按钮组与 DEFBUTTON 位选默认按钮', () => {
     expect(defaultMessageBoxResult(0)).toBe(1); // MB_OK → IDOK
-    expect(defaultMessageBoxResult(1)).toBe(1); // MB_OKCANCEL 默认 IDOK
+    expect(defaultMessageBoxResult(1)).toBe(1); // MB_OKCANCEL defaults to IDOK
     expect(defaultMessageBoxResult(1 | 0x100)).toBe(2); // DEFBUTTON2 → IDCANCEL
-    expect(defaultMessageBoxResult(3)).toBe(6); // MB_YESNOCANCEL 默认 IDYES
+    expect(defaultMessageBoxResult(3)).toBe(6); // MB_YESNOCANCEL defaults to IDYES
     expect(defaultMessageBoxResult(3 | 0x200)).toBe(2); // DEFBUTTON3 → IDCANCEL
     expect(defaultMessageBoxResult(4)).toBe(6); // MB_YESNO → IDYES
     expect(defaultMessageBoxResult(5)).toBe(4); // MB_RETRYCANCEL → IDRETRY

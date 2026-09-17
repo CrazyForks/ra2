@@ -1,4 +1,4 @@
-/** RA2/YR Win32 ABI 表的关键 stdcall 参数字节数。 */
+/** Critical stdcall argument byte counts in the RA2/YR Win32 ABI tables. */
 import { describe, expect, it } from 'vitest';
 import { RA2_ABI } from '../../src/games/ra2/abi';
 import { YR_ABI } from '../../src/games/yr/abi';
@@ -19,8 +19,8 @@ describe('RA2/YR Win32 ABI 表', () => {
   });
 
   it('YR 只补充 RA2 未登记的项，不静默改写继承来的清理字节数', () => {
-    // 重复登记同值条目会让两份表悄悄分叉，改写继承值则是一次真实的 ABI 变更，
-    // 两种都要在评审时可见，而不是藏在展开里。
+    // Duplicate registrations with the same value can silently diverge between tables; overriding an inherited value is an actual ABI change.
+    // Both must be visible during review rather than hidden in object spreads.
     expect(Object.keys(YR_ABI).filter((key) => !(key in RA2_ABI))).toEqual([
       'KERNEL32.DLL!GetTempFileNameA',
       'IMM32.DLL!ImmAssociateContext',

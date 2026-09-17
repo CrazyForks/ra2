@@ -1,7 +1,7 @@
 import type { GameFileProvider } from '../contracts';
 import { normalizeGuestPath } from '../../vm86/paths';
 
-/** 把父目录中的某个子目录映射成独立的游戏根，不泄漏给 VM。 */
+/** Map a parent subdirectory to an independent game root, hiding the parent from the VM. */
 export class ScopedGameFileProvider implements GameFileProvider {
   readonly label: string;
   private readonly prefix: string;

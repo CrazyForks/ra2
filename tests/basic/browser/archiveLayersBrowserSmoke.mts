@@ -1,5 +1,5 @@
 import { preventThirdPartyDownloads } from '../../helpers/offlineBrowser';
-/** 无游戏素材：真实 ZIP/7z 解压 Worker、启动层顺序、延迟读取与失败语义。 */
+/** No game assets: real ZIP/7z extraction Workers, startup-layer ordering, deferred reads, and failure semantics. */
 import assert from 'node:assert/strict';
 import SevenZip from '7z-wasm';
 import { zipSync } from 'fflate';
@@ -23,13 +23,13 @@ assert.equal(seven.callMain(['a', '-t7z', '/fixture.7z', '/input']), 0);
 const sevenBytes = new Uint8Array(seven.FS.readFile('/fixture.7z'));
 const duplicate = zipSync({ ...files, 'other/ra2.mix': new Uint8Array([99]) });
 const broken = Buffer.from(zip);
-// 破坏其他层的压缩载荷，目录和启动层仍可读；验证晚到的错误不被当成成功。
+// Corrupt compressed payloads in other layers while keeping the directory and startup layer readable; verify late errors are not treated as success.
 const name = broken.indexOf(Buffer.from('theme.mix'));
 assert.ok(name > 0);
 broken[name + 'theme.mix'.length + 3] ^= 0xff;
 const browser = await chromium.launch({ args: ['--no-sandbox'] });
 try {
-  const page = await browser.newPage({ ignoreHTTPSErrors: true });
+  const page = await browser.newPage({ locale: 'zh-CN', ignoreHTTPSErrors: true });
   await preventThirdPartyDownloads(page);
   await page.goto(process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15174');
   for (const [kind, bytes] of [
@@ -43,9 +43,9 @@ try {
   ] as const) {
     const result = await page.evaluate(
       async ({ data, kind }) => {
-        // @ts-ignore 浏览器通过 Vite 加载模块。
+        // @ts-ignore The browser loads modules through Vite.
         const { openGameArchive } = await import('/src/adapter/gameArchiveLayers.ts');
-        // @ts-ignore 浏览器通过 Vite 加载模块。
+        // @ts-ignore The browser loads modules through Vite.
         const { ProgressiveGameFileProvider } = await import('/src/adapter/progressiveFiles.ts');
         try {
           const bytes = new Uint8Array(data);

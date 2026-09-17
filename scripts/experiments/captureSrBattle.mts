@@ -1,14 +1,18 @@
-/** SR 画质评测素材：真实 RA2 盟军战役，无模型/插值，记录原始画布像素。 */
+/** SR image-quality evaluation material: real RA2 Allied campaign, recording original canvas pixels without models or interpolation. */
 import { selectDevelopmentGame } from '../../tests/helpers/selectDevelopmentGame';
 import { chromium } from '@playwright/test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 const output = process.env.RA2_SR_OUTPUT ?? '.tmp-sr-battle';
-mkdirSync(output); // 证据目录已存在时拒绝覆盖。
+mkdirSync(output); // Refuse to overwrite an existing evidence directory.
 const browser = await chromium.launch({
   args: ['--no-sandbox', '--enable-unsafe-swiftshader', '--js-flags=--max-old-space-size=4096'],
 });
 try {
-  const page = await browser.newPage({ ignoreHTTPSErrors: true, viewport: { width: 1000, height: 800 } });
+  const page = await browser.newPage({
+    locale: 'zh-CN',
+    ignoreHTTPSErrors: true,
+    viewport: { width: 1000, height: 800 },
+  });
   await page.addInitScript(() => localStorage.setItem('vm-resolution-ra2', '800x600'));
   await page.goto(
     `${process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15175'}/?debug=1&clicks=714,221;714,221;454,188`,
@@ -42,7 +46,7 @@ try {
       await page.keyboard.press('h');
       await page.waitForTimeout(15000);
     }
-    // 一次性在 drawArrays 提交后同步读取，避免 preserveDrawingBuffer=false 返回空图。
+    // Read synchronously once after drawArrays submits, avoiding empty images with preserveDrawingBuffer=false.
     const data = await page.evaluate(async () => {
       const c = document.querySelector<HTMLCanvasElement>('#screen')!;
       c.width = 800;

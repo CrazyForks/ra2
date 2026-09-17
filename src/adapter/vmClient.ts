@@ -18,22 +18,22 @@ const REQUEST_TIMEOUT_MS = 10000;
 const STARTUP_TIMEOUT_MS = 120000;
 
 export interface WorkerVmClientOptions {
-  /** Worker 正常终止或异常退出时释放宿主持有的会话资源。 */
+  /** Release host-owned session resources when the Worker terminates normally or exits unexpectedly. */
   onTerminated?: () => void;
-  /** 显式实验导航；缺省保持原版启动。 */
+  /** Explicit experimental navigation; preserve original startup by default. */
   startupPage?: string;
-  /** 启动时注入 RA2.INI/RA2MD.INI 的内存分辨率覆盖。 */
+  /** In-memory resolution overlay injected into RA2.INI/RA2MD.INI at startup. */
   resolution?: GameResolution | null;
-  /** 本次 VM 的原生 [MultiPlayer] Handle；不与其他 tab 共享。 */
+  /** Native [MultiPlayer] Handle for this VM; never shared with other tabs. */
   playerName?: string;
-  /** 测试注入 Worker；生产环境默认创建 module worker。 */
+  /** Worker injection for tests; production creates a module Worker by default. */
   workerFactory?: () => Worker;
-  /** 测试注入音频汇聚器；生产环境默认创建 WebAudioPcmSink。 */
+  /** Audio-sink injection for tests; production creates WebAudioPcmSink by default. */
   audio?: WebAudioPcmSink;
   startupTimeoutMs?: number;
-  /** init 消息随附 transfer 的缓冲（会话包文件副本）；仅 init 使用一次。 */
+  /** Buffers transferred with init (copies of session-package files); used exactly once for init. */
   initTransfer?: Transferable[];
-  /** 调用者保证 onFrame 替换上一帧后不再使用旧像素；默认关闭以兼容保留快照的消费者。 */
+  /** The caller guarantees old pixels are no longer used once onFrame replaces them; disabled by default for consumers retaining snapshots. */
   recycleFrames?: boolean;
 }
 
@@ -42,8 +42,10 @@ interface PendingRequest {
   reject: (reason: Error) => void;
 }
 
-/** worker 模式客户端：VM 整体跑在 Dedicated Worker，主线程只做音频汇入、输入转发与回调分发。
- *  公开接口与 Win32GameVm 对齐（VmShell），page.ts 不感知运行线程。 */
+/**
+ * Worker-mode client: the whole VM runs in a Dedicated Worker; the main thread only handles audio output, input forwarding, and callback dispatch.
+ * The public interface matches Win32GameVm (VmShell), keeping page.ts independent of the execution thread.
+ */
 export class WorkerVmClient implements VmShell {
   private readonly worker: Worker;
   private readonly onTerminated: (() => void) | undefined;
@@ -100,7 +102,7 @@ export class WorkerVmClient implements VmShell {
     });
   }
 
-  /** Worker 加载探测：超时/onerror → reject，由 createVmShell 回退。 */
+  /** Worker-load probe: timeout/onerror rejects, allowing createVmShell to fall back. */
   waitProbe(): Promise<void> {
     return this.probeReady;
   }
@@ -108,7 +110,7 @@ export class WorkerVmClient implements VmShell {
   async start(): Promise<void> {
     this.ensureActive();
     this.removeAudioUnlock = this.audio.installUserGestureUnlock(document);
-    // 卸载路径无法 await：pagehide 尽力提交排队中的存档写入（worker 经 flush 消息执行）。
+    // Unload cannot await: pagehide makes a best-effort flush of queued save writes, executed in the Worker via a flush message.
     const flushOnPagehide = () => {
       void this.flushFiles().catch(() => {});
     };
@@ -160,7 +162,7 @@ export class WorkerVmClient implements VmShell {
     return normalized;
   }
 
-  /** 主音量：所有客体音频汇合后的线性增益 0..1。 */
+  /** Master volume: linear gain 0..1 after combining all guest audio. */
   setMasterVolume(linear: number): void {
     this.send({ type: 'volume', linear });
   }
@@ -206,7 +208,7 @@ export class WorkerVmClient implements VmShell {
   }
 
   attachMapFiles(files: ReadonlyMap<string, Uint8Array>): Promise<VmAttachResult> {
-    // 复制精确视图再 transfer，不能拆走前端缓存；CSF 不必跨线程发送。
+    // Copy the exact view before transfer to avoid detaching the frontend cache; CSF need not cross threads.
     const entries = [...files]
       .filter(([path]) => !path.toLowerCase().endsWith('.csf'))
       .map(([path, bytes]) => ({ path, bytes: new Uint8Array(bytes) }));
@@ -225,7 +227,7 @@ export class WorkerVmClient implements VmShell {
     }
   }
 
-  /** 请求/响应关联：超时或销毁时 reject，防止悬挂 promise。 */
+  /** Correlate requests and responses; reject on timeout or destruction to prevent dangling promises. */
   private request<T>(
     build: (requestId: number) => MainToWorkerMessage,
     transfer?: Transferable[],
@@ -313,7 +315,7 @@ export class WorkerVmClient implements VmShell {
             }
           }
         } finally {
-          // 页面回调异常也不能永久堵住 worker 帧管线。
+          // Page callback errors must not permanently block the Worker frame pipeline.
           this.ackFrameAtPresentationBoundary(message.frameId);
         }
         break;
@@ -415,12 +417,12 @@ export class WorkerVmClient implements VmShell {
       try {
         await this.request((requestId) => ({ type: 'control', action: 'stop', requestId }), undefined, true);
       } catch {
-        /* 销毁路径尽力而为 */
+        /* Best-effort destruction cleanup. */
       }
       try {
         await this.request((requestId) => ({ type: 'flush', requestId }), undefined, true);
       } catch {
-        /* 卸载路径尽力而为 */
+        /* Best-effort unload cleanup. */
       }
     }
     this.worker.onmessage = null;
@@ -438,8 +440,9 @@ export class WorkerVmClient implements VmShell {
     this.lifecycle = 'destroyed';
   }
 
-  /** onFrame 会让页面登记同一轮 rAF 绘制；随后登记 ACK，保证 ACK 放行下一帧前
-   *  当前帧已经到达实际显示边界。后台标签页 rAF 暂停时会自然向 worker 施加背压。 */
+  /**
+   * onFrame schedules the page's drawing in the same rAF cycle; schedule ACK afterward so the current frame reaches the actual display boundary before ACK releases the next frame. Paused rAF in background tabs naturally backpressures the Worker.
+   */
   private ackFrameAtPresentationBoundary(frameId: number): void {
     this.pendingFrameAck = frameId;
     if (this.frameAckRaf !== null) return;

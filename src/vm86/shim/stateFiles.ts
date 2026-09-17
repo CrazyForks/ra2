@@ -1,7 +1,5 @@
 /**
- * 同步 Win32 文件层的状态与挂载（mixin 拆分自 state.ts）：
- * 文件字节、稀疏区间、快速文件镜像与时间戳。挂在 ShimState 之后、
- * 所有文件 API 分派（kernel32）之前。
+ * Synchronous Win32 file state/mounting, extracted from state.ts: file bytes, sparse ranges, fast mirrors, and timestamps. Apply after ShimState and before all Kernel32 file dispatch.
  */
 import type { FileState } from '../win32';
 import { normalizeGuestPath } from '../paths';
@@ -12,17 +10,17 @@ export type ShimFilesChain = InstanceType<ReturnType<typeof withShimFiles>>;
 export function withShimFiles<TBase extends Constructor<ShimState>>(Base: TBase) {
   return class extends Base {
     protected readonly files = new Map<string, Uint8Array>();
-    /** 稀疏挂载的逻辑长度；bytes 只保存解析索引所需的前缀。 */
+    /** Logical length of sparse mounts; bytes holds only the index prefix. */
     protected readonly fileLogicalSizes = new Map<string, number>();
-    /** 可由 provider 按区间补页的稀疏文件，以及已经取得的非前缀区间。 */
+    /** Sparse files supporting provider range reads, plus already fetched non-prefix ranges. */
     protected readonly rangeBackedFiles = new Set<string>();
     protected readonly sparseFileRanges = new Map<string, Array<{ offset: number; bytes: Uint8Array }>>();
     protected readonly fileHandles = new Map<number, FileState>();
     protected nextFileHandle = 0x4000;
     protected readonly freeFileHandles: number[] = [];
-    /** 文件层 per-file FILETIME（100ns 自 1601）：SetFileTime 写入 → FindFirstFileA 读回。 */
+    /** Per-file FILETIME, 100ns since 1601: SetFileTime writes it and FindFirstFileA reads it. */
     protected readonly fileTimes = new Map<string, { created: bigint; accessed: bigint; written: bigint }>();
-    /** PE 资源句柄 → 已映射的数据；LockResource 直接返回模块映像内指针。 */
+    /** PE resource handles to mapped data; LockResource returns pointers directly into module images. */
     protected readonly loadedResources = new Map<number, { module: number; data: number; size: number }>();
     protected fileMirrorBytes = 0;
     protected readonly fastFileMirrorLimit: number;
@@ -31,9 +29,9 @@ export function withShimFiles<TBase extends Constructor<ShimState>>(Base: TBase)
     protected readonly fastFileMirrorFiles: ReadonlySet<string> | null;
     protected nextFastFileMirror: number;
     protected readonly sharedFileMirrors = new Map<string, { ptr: number; size: number }>();
-    /** 大文件无法镜像时按“原因 + 路径”去重，避免游戏反复探测档案刷屏并拖慢主线程。 */
+    /** Deduplicate large-file mirror failures by reason and path so repeated archive probes cannot flood logs or slow the main thread. */
     protected readonly warnedFileMirrorSkips = new Set<string>();
-    /** 未镜像句柄的 hypercall 读计数（诊断高频慢读用，句柄关闭时清除）。 */
+    /** Hypercall read counts for unmirrored handles, diagnosing frequent slow reads; clear on close. */
     protected readonly unmirroredReads = new Map<number, number>();
 
     constructor(...args: any[]) {
@@ -54,7 +52,7 @@ export function withShimFiles<TBase extends Constructor<ShimState>>(Base: TBase)
       if (this.failedOpens.length > 16) this.failedOpens.shift();
     }
 
-    /** 读取当前文件层中某挂载路径的字节（含客体写入后的状态）。 */
+    /** Read mounted-path bytes from the current file layer, including guest writes. */
     getMountedFileBytes(path: string): Uint8Array | undefined {
       const normalized = normalizeGuestPath(path);
       if (!normalized) return undefined;
@@ -64,13 +62,13 @@ export function withShimFiles<TBase extends Constructor<ShimState>>(Base: TBase)
       return mirror ? this.memory.read_memory(mirror.ptr, mirror.size).slice() : undefined;
     }
 
-    /** 路径是否已有 canonical 快照；大只读档案可据此避免反复 fetch/复制。 */
+    /** Whether a path already has a canonical snapshot, avoiding repeated fetches/copies of large read-only archives. */
     hasMountedFile(path: string): boolean {
       const normalized = normalizeGuestPath(path);
       return normalized ? this.files.has(normalized) || this.sharedFileMirrors.has(normalized) : false;
     }
 
-    /** VM 执行期间可由 host 按需把原版资源挂载进同步 Win32 文件层。 */
+    /** The host may mount original resources into the synchronous Win32 file layer on demand while the VM runs. */
     mountFile(path: string, bytes: Uint8Array, takeOwnership = false, logicalSize = bytes.length): void {
       const normalized = normalizeGuestPath(path);
       // Provider/read buffers may be reused by the browser or modified by the
@@ -82,13 +80,13 @@ export function withShimFiles<TBase extends Constructor<ShimState>>(Base: TBase)
       }
     }
 
-    /** 标记稀疏文件可在 ReadFile 边界由 host 按需取得真实区间。 */
+    /** Mark sparse files whose actual ranges the host may fetch on demand at ReadFile boundaries. */
     markFileRangeBacked(path: string): void {
       const normalized = normalizeGuestPath(path);
       if (normalized && this.fileLogicalSizes.has(normalized)) this.rangeBackedFiles.add(normalized);
     }
 
-    /** 把 provider 取得的区间补进稀疏文件，不分配完整 300+MiB 容器。 */
+    /** Add provider-fetched ranges to sparse files without allocating the entire 300+MiB container. */
     mountFileRange(path: string, offset: number, bytes: Uint8Array): void {
       const normalized = normalizeGuestPath(path);
       if (!normalized || !bytes.length || !this.fileLogicalSizes.has(normalized)) return;
@@ -99,7 +97,7 @@ export function withShimFiles<TBase extends Constructor<ShimState>>(Base: TBase)
       this.rangeBackedFiles.add(normalized);
     }
 
-    /** 下一次同步 ReadFile 是否落在尚未补页的稀疏区；VmCore 据此暂停客体做 Range fetch。 */
+    /** Whether the next synchronous ReadFile targets an unfetched sparse range; VmCore suspends the guest for Range fetch accordingly. */
     inspectFileReadRequest(
       handle: number,
       requested: number,
@@ -167,7 +165,7 @@ export function withShimFiles<TBase extends Constructor<ShimState>>(Base: TBase)
       return written;
     }
 
-    /** 写入/更新文件层内容并同步时间戳（created 首次建立，written/accessed 随写入刷新）。 */
+    /** Write/update file-layer content and timestamps: initialize created once; refresh written/accessed on writes. */
     protected storeFile(path: string, bytes: Uint8Array): void {
       this.files.set(path, bytes);
       this.fileLogicalSizes.delete(path);
@@ -182,12 +180,12 @@ export function withShimFiles<TBase extends Constructor<ShimState>>(Base: TBase)
       }
     }
 
-    /** 当前客体时间（毫秒）→ FILETIME（1601-01-01 起 100ns，BigInt 保精度）。 */
+    /** Convert current guest milliseconds to FILETIME, 100ns since 1601-01-01, using BigInt for precision. */
     protected guestNowFileTime(): bigint {
       return BigInt(Math.round(this.clock.wallNow())) * 10_000n + 116_444_736_000_000_000n;
     }
 
-    /** 已知的虚拟目录，或任何已挂载文件的父目录，视为“存在目录”。 */
+    /** Known virtual directories and parents of mounted files count as existing directories. */
     protected isVirtualDirectory(path: string): boolean {
       if (path === 'windows' || path === 'windows/system' || path === 'windows/temp' || path === 'game') {
         return true;

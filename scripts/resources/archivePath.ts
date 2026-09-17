@@ -8,7 +8,7 @@ export interface ArchivePathApi {
 
 const hostPath: ArchivePathApi = { relative, isAbsolute, sep };
 
-/** 判断归档目标是否是根目录下的非空相对路径。 */
+/** Whether the archive target is a nonempty relative path under the root directory. */
 export function isArchiveTargetWithinRoot(root: string, target: string, pathApi: ArchivePathApi = hostPath): boolean {
   const relativeTarget = pathApi.relative(root, target);
   return (

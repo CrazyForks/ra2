@@ -8,12 +8,7 @@ const ORIGINAL = new Uint8Array([
 ]);
 
 /**
- * RA2 1.006 快速游戏原本只统计 BaseUnit[0..1]，共辉第三项 CMCV 虽生成却
- * 不被算作基地，开局零建筑便判负。原地替换 55 字节，不换 EXE、不重排 MOD。
- * ESI 是 House，Rules+9D4/9E0 是 BaseUnit 数据/数量；Type+B90 是单位类型索引。
- * House+5430 是按类型计数的向量（+4 数据，+8 长度）。原访问器 491D10 对越界
- * 索引扩容填零；这里直接当作零处理，避免扩容，并用无符号比较排除负索引。
- * 保持 EBP 为计数向量、EDI 为总数、栈不变；4E4AD3 起的建筑数量/判负流程不动。
+ * RA2 1.006 Short Game counts only BaseUnit[0..1], so Gonghui's third CMCV is created but not counted as a base, causing immediate defeat with zero buildings. Replace 55 bytes in place without changing the EXE or rearranging MOD files. ESI is House; Rules+9D4/9E0 holds BaseUnit data/count; Type+B90 is the unit-type index. House+5430 is the per-type count vector (+4 data, +8 length). Original accessor 491D10 grows and zero-fills out-of-range indexes; treat them as zero directly to avoid allocation, rejecting negative indexes with unsigned comparison. Preserve EBP as the vector, EDI as the total, and the stack; retain building-count/defeat logic from 4E4AD3 onward.
  */
 const PATCH = new Uint8Array([
   0xa1,
@@ -44,7 +39,7 @@ const PATCH = new Uint8Array([
   0x85,
   0xc9,
   0x7e,
-  0x17, // 循环：test ecx,ecx / jle 完成
+  0x17, // Loop: test ecx,ecx / jle done.
   0x49,
   0x8b,
   0x14,
@@ -59,7 +54,7 @@ const PATCH = new Uint8Array([
   0x55,
   0x08,
   0x73,
-  0xed, // cmp edx,[ebp+8] / jae 循环
+  0xed, // cmp edx,[ebp+8] / jae loop.
   0x8b,
   0x45,
   0x04, // mov eax,[ebp+4]
@@ -67,13 +62,13 @@ const PATCH = new Uint8Array([
   0x3c,
   0x90,
   0xeb,
-  0xe5, // add edi,[eax+edx*4] / jmp 循环
+  0xe5, // add edi,[eax+edx*4] / jmp loop.
   0x90,
   0x90,
   0x90,
 ]);
 
-/** 整段签名校验后才写，允许重复调用；不同版本及 YR 字节不匹配时不修改。 */
+/** Write only after checking the entire signature; allow repeated calls and leave mismatching versions or YR bytes untouched. */
 export function patchRa2ShortGame(memory: GuestMemory): boolean {
   const current = memory.read_memory(ADDRESS, ORIGINAL.length);
   const matches = (expected: Uint8Array) =>

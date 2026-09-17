@@ -1,19 +1,19 @@
 /**
- * 从原版游戏 PE32 提取图标组资源：
- *  - favicon.ico：GROUP_ICON 目录 + 各 RT_ICON 图片字节原样拼接（零重编码）
- *  - favicon-192.png / apple-touch-icon.png：最大图标解码 DIB 后最近邻放大
- *  - --games 模式另输出每款已支持游戏的选择图标 icons/<id>.png（游戏选择 UI 用）
+ * Extract icon-group resources from the original game's PE32:
+ * - favicon.ico: concatenate the GROUP_ICON directory and original RT_ICON image bytes without re-encoding.
+ * - favicon-192.png / apple-touch-icon.png: decode the largest icon's DIB and upscale with nearest-neighbor sampling.
+ * - --games also emits icons/<id>.png for each supported game's selection UI.
  *
- * 用法：pnpm exec tsx scripts/assets/extractIcon.mts game/ra2/game.exe [public/]
- *       pnpm exec tsx scripts/assets/extractIcon.mts --games [public/]
- * 零依赖；PNG 由 node:zlib + 手写 chunk/CRC 生成，输出确定可复现。
+ * Usage: pnpm exec tsx scripts/assets/extractIcon.mts game/ra2/game.exe [public/]
+ *        pnpm exec tsx scripts/assets/extractIcon.mts --games [public/]
+ * No dependencies; PNG uses node:zlib and handwritten chunks/CRC for deterministic, reproducible output.
  */
 import { deflateSync } from 'node:zlib';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-const APP_BACKGROUND: [number, number, number] = [0x09, 0x09, 0x14]; // 页面底色 #090914
+const APP_BACKGROUND: [number, number, number] = [0x09, 0x09, 0x14]; // Page background #090914.
 
 interface PeSection {
   name: string;
@@ -24,8 +24,8 @@ interface PeSection {
 }
 
 interface IconEntry {
-  width: number; // 0 表示 256
-  height: number; // 0 表示 256
+  width: number; // 0 means 256.
+  height: number; // 0 means 256.
   colors: number;
   planes: number;
   bitCount: number;
@@ -38,13 +38,13 @@ interface ExtractedGroup {
   images: Map<number, Buffer>;
 }
 
-/** 游戏选择 UI 的图标来源（id 与 src/games/catalog.ts 的 SUPPORTED_GAMES 对应）。 */
+/** Icon sources for the game selection UI; IDs match SUPPORTED_GAMES in src/games/catalog.ts. */
 const GAME_ICON_SOURCES = [
   { id: 'ra2', exe: 'game/ra2/game.exe' },
   { id: 'yr', exe: 'game/ra2/gamemd.exe' },
 ] as const;
 
-/** 游戏选择按钮图标尺寸：原版图标最大 48×48，整数 2× 放大到 96 供 hidpi 显示（CSS 显示 48px）。 */
+/** Game selection icons: original icons are at most 48x48; upscale exactly 2x to 96 for HiDPI display (48px in CSS). */
 const GAME_ICON_SIZE = 96;
 
 function main(): void {
@@ -64,7 +64,7 @@ function main(): void {
   generateFavicons(positional[0]!, resolve(positional[1] ?? 'public'), check);
 }
 
-/** favicon 三件套：ico 目录 + 最大图标解码 DIB 后最近邻放大的两个 PNG。 */
+/** Three favicon assets: ICO directory plus two PNGs made by decoding the largest icon's DIB and upscaling with nearest-neighbor sampling. */
 function generateFavicons(exePath: string, outDir: string, check: boolean): void {
   const exe = readFileSync(resolve(exePath));
   const group = extractIconGroup(exe);
@@ -77,13 +77,13 @@ function generateFavicons(exePath: string, outDir: string, check: boolean): void
   const ico = buildIco(group);
   emit(resolve(outDir, 'favicon.ico'), ico, check, `favicon.ico：${group.entries.length} 个图标（${ico.length} 字节）`);
 
-  // PNG：取面积最大的图标，同面积取色深更高者。
+  // PNG: choose the largest icon by area, breaking ties by higher color depth.
   const best = [...group.entries].sort(
     (a, b) => b.width * b.height - a.width * a.height || b.bitCount - a.bitCount,
   )[0]!;
   const rgba = decodeIconImage(group.images.get(best.id)!, best);
   console.log(`favicon-192/apple-touch-icon 源：${best.width}×${best.height} @ ${best.bitCount}bpp`);
-  // favicon-192 保留透明（Chrome 各 UI 背景兼容）；apple-touch-icon 必须填平（iOS 把 alpha 渲成黑色）。
+  // Keep favicon-192 transparent for Chrome UI backgrounds; flatten apple-touch-icon because iOS renders alpha as black.
   const transparent = upscale(rgba, best.width, best.height, 192, 192);
   const flattened = flattenBackground(transparent, APP_BACKGROUND);
   emit(resolve(outDir, 'favicon-192.png'), encodePng(transparent, 192, 192), check, 'favicon-192.png：192×192');
@@ -91,7 +91,7 @@ function generateFavicons(exePath: string, outDir: string, check: boolean): void
   emit(resolve(outDir, 'apple-touch-icon.png'), encodePng(apple, 180, 180), check, 'apple-touch-icon.png：180×180');
 }
 
-/** --games 模式：favicon 三件套 + 每款已支持游戏的选择图标 → <outDir>/icons/<id>.png。 */
+/** --games mode: the three favicon assets plus each supported game's selection icon at <outDir>/icons/<id>.png. */
 function generateGameIcons(outDir: string, check: boolean): void {
   const faviconSource = resolve(GAME_ICON_SOURCES[0]!.exe);
   if (existsSync(faviconSource)) generateFavicons(faviconSource, outDir, check);
@@ -125,13 +125,13 @@ function generateGameIcons(outDir: string, check: boolean): void {
   if (failed) process.exitCode = 1;
 }
 
-/** --check 模式下与磁盘文件逐字节比对，不一致退出 1；否则仅在内容变化时写入。 */
+/** In --check mode, compare disk files byte for byte and exit 1 on mismatch; otherwise write only changed content. */
 function emit(path: string, bytes: Buffer, check: boolean, log: string): void {
   let onDisk: Buffer | null = null;
   try {
     onDisk = readFileSync(path);
   } catch {
-    // 首次生成
+    // Initial generation.
   }
   if (check) {
     if (!onDisk || !onDisk.equals(bytes)) {
@@ -145,7 +145,7 @@ function emit(path: string, bytes: Buffer, check: boolean, log: string): void {
   console.log(log);
 }
 
-/** 遍历资源树；子目录/数据偏移优先按真 RVA 映射，失败则按 .rsrc 节 raw base + offset（本 exe 链接器的行为）。 */
+/** Traverse the resource tree; map child-directory/data offsets as actual RVAs first, falling back to .rsrc raw base + offset for this EXE's linker. */
 function extractIconGroup(exe: Buffer): ExtractedGroup | null {
   const pe = exe.readUInt32LE(0x3c);
   if (exe.toString('ascii', pe, pe + 4) !== 'PE\0\0') throw new Error('不是 PE 文件');
@@ -175,7 +175,7 @@ function extractIconGroup(exe: Buffer): ExtractedGroup | null {
     }
     return null;
   };
-  // 怪癖兜底：本 exe 的资源树指针是相对 .rsrc 节 raw base 的文件偏移。
+  // Quirk fallback: this EXE's resource-tree pointers are file offsets relative to the .rsrc section's raw base.
   const resolveTreeOffset = (value: number): number | null => {
     const direct = rvaToOff(value);
     if (direct !== null && direct >= rsrcSection.raw && direct < rsrcSection.raw + rsrcSize) return direct;
@@ -224,7 +224,7 @@ function extractIconGroup(exe: Buffer): ExtractedGroup | null {
       // RT_ICON：types=[3, id, lang]
       icons.set(names[0] ?? types[1], data);
     } else if (types[0] === 14 && !groups.length) {
-      // RT_GROUP_ICON：types=[14, name, lang]，name 已是数字 id
+      // RT_GROUP_ICON: types=[14, name, lang]; name is already a numeric ID.
       const count = exe.readUInt16LE(off + 4);
       const entries: IconEntry[] = [];
       for (let i = 0; i < count; i++) {
@@ -256,10 +256,10 @@ function extractIconGroup(exe: Buffer): ExtractedGroup | null {
   return group.entries.length && group.images.size ? group : null;
 }
 
-/** ICO 头 + 目录项 + 图片字节原样拼接（RT_ICON 资源本身即完整 ICO 图片条目）。 */
+/** Concatenate the ICO header, directory entries, and original image bytes; each RT_ICON resource is already a complete ICO image entry. */
 function buildIco(group: ExtractedGroup): Buffer {
   const entries = group.entries.filter((e) => group.images.has(e.id));
-  // ICONDIRENTRY 16 字节 = GRPICONDIRENTRY 14 字节 + dwImageOffset(4)。
+  // ICONDIRENTRY is 16 bytes: GRPICONDIRENTRY (14 bytes) plus dwImageOffset (4).
   const header = 6 + entries.length * 16;
   const parts: Buffer[] = [Buffer.alloc(header)];
   parts[0].writeUInt16LE(0, 0);
@@ -282,7 +282,7 @@ function buildIco(group: ExtractedGroup): Buffer {
   return Buffer.concat(parts);
 }
 
-/** 解码单个图标图片（BITMAPINFOHEADER + 调色板 + XOR + AND 掩码）为 RGBA。 */
+/** Decode one icon image (BITMAPINFOHEADER + palette + XOR + AND mask) to RGBA. */
 function decodeIconImage(bytes: Buffer, entry: IconEntry): Uint8Array {
   const { width, height } = entry;
   const bpp = entry.bitCount;
@@ -300,7 +300,7 @@ function decodeIconImage(bytes: Buffer, entry: IconEntry): Uint8Array {
   const andStart = xorStart + xorStride * height;
   const rgba = new Uint8Array(width * height * 4);
   for (let y = 0; y < height; y++) {
-    // DIB 自底向上：第 y 个输出行对应位图数据第 (height-1-y) 行。
+    // Bottom-up DIB: output row y corresponds to bitmap data row (height-1-y).
     const srcY = height - 1 - y;
     const xorRow = xorStart + srcY * xorStride;
     const andRow = andStart + srcY * andStride;
@@ -334,7 +334,7 @@ function decodeIconImage(bytes: Buffer, entry: IconEntry): Uint8Array {
   return rgba;
 }
 
-/** 最近邻放大，逐像素拷贝 RGBA（保留 alpha，填平交给 flattenBackground）。 */
+/** Nearest-neighbor upscaling copies RGBA pixel by pixel; preserve alpha and leave flattening to flattenBackground. */
 function upscale(rgba: Uint8Array, srcW: number, srcH: number, dstW: number, dstH: number): Buffer {
   const out = Buffer.alloc(dstW * dstH * 4);
   for (let y = 0; y < dstH; y++) {
@@ -352,7 +352,7 @@ function upscale(rgba: Uint8Array, srcW: number, srcH: number, dstW: number, dst
   return out;
 }
 
-/** 透明像素填背景色，alpha 归 255（apple-touch-icon 用）。 */
+/** Fill transparent pixels with the background color and set alpha to 255 for apple-touch-icon. */
 function flattenBackground(rgba: Buffer, background: readonly number[]): Buffer {
   const out = Buffer.from(rgba);
   for (let i = 0; i < rgba.length; i += 4) {
@@ -366,7 +366,7 @@ function flattenBackground(rgba: Buffer, background: readonly number[]): Buffer 
   return out;
 }
 
-// ---- 极简 PNG 编码器（RGBA8，filter 0，单 IDAT）----
+// ---- Minimal PNG encoder (RGBA8, filter 0, one IDAT) ----
 
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);

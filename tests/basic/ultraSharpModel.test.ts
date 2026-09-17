@@ -1,3 +1,4 @@
+import '../helpers/chineseLocale';
 import { expect, it } from 'vitest';
 import {
   normalizeUltraSharpOutputShape,

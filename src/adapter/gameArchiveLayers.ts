@@ -4,8 +4,9 @@ import { extractArchiveFiles } from '../utils/archive/archiveExtract';
 import { SessionGameFileProvider } from '../platform/browser/files/sessionFiles';
 import { ProgressiveGameFileProvider } from './progressiveFiles';
 
-/** 启动层完成即返回 provider，其余解压继续。无法确认完整目录的嵌套/NSIS
- * 格式沿用完整解压回退；失败不可发布不完整缓存或用空字节冒充未解出的文件。 */
+/**
+ * Return a provider as soon as the startup layer is ready while other extraction continues. Nested/NSIS formats whose complete directories cannot be established retain full-extraction fallback; failures must not publish incomplete caches or substitute empty bytes for unextracted files.
+ */
 export function openGameArchive(
   bytes: Uint8Array | Blob,
   gameId: SupportedGameId | undefined,

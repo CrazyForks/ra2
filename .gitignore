@@ -11,7 +11,7 @@ dist/
 .env*
 .tmp*
 .idea
-# 本地超分权重与 Python 缓存不随源码提交。
+# Do not commit local super-resolution weights or Python caches with source code.
 *.onnx
 *.onnx.data
 *.pth

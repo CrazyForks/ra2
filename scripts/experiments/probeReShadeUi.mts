@@ -1,4 +1,4 @@
-/** 真实游戏内操作 ReShade 下拉，使用同一帧验证增强与关闭恢复。 */
+/** Operate the ReShade dropdown in a real game; verify enhancement and restoration after disabling it against the same frame. */
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
@@ -8,7 +8,11 @@ import { selectDevelopmentGame } from '../../tests/helpers/selectDevelopmentGame
 const output = resolve(process.env.RA2_POST_OUTPUT ?? '.tmp-reshade-ui');
 await mkdir(output);
 const browser = await chromium.launch({ args: ['--no-sandbox', '--enable-unsafe-swiftshader'] });
-const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width: 1200, height: 900 } });
+const context = await browser.newContext({
+  locale: 'zh-CN',
+  ignoreHTTPSErrors: true,
+  viewport: { width: 1200, height: 900 },
+});
 await context.addInitScript(() => localStorage.setItem('vm-resolution-ra2', '800x600'));
 await context.route('**/src/ui/pages/game/page.ts*', async (route) => {
   const response = await route.fetch(),
@@ -41,7 +45,7 @@ try {
   await page.goto(`${process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15185'}/?start-page=battle&vm-worker=0`);
   await selectDevelopmentGame(page, 'ra2');
   await page.waitForFunction(`globalThis.__postArgs?.[0]?.width === 800`, {}, { timeout: 150000 });
-  // 沿用 RA2 基地车探针的只读场景证据；本入口固定 RA2，不能用于 YR。
+  // Reuse read-only scene evidence from the RA2 MCV probe; this entry point is RA2-only and cannot be used for YR.
   await page.waitForFunction(
     `(()=>{const s=globalThis.__postCore?.shim;if(!s)return false;const h=s.readU32(0xa35db4);return h && s.readU32(h+0x5438)>0;})()`,
     {},

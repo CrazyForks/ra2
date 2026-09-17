@@ -1,5 +1,5 @@
-// 查找对目标 VA 的直接调用/跳转（E8 rel32 call、E9 rel32 jmp）。
-// 用法：tsx ra2FindXref.mts <exe> <targetVaHex> [...]
+// Find direct calls/jumps to a target VA (E8 rel32 call, E9 rel32 jmp).
+// Usage: tsx ra2FindXref.mts <exe> <targetVaHex> [...]
 import { readFileSync } from 'node:fs';
 
 const [, , exePath, ...addrs] = process.argv;

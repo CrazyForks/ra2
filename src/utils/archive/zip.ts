@@ -1,22 +1,22 @@
-/** 通用 ZIP 读取：原生流解压与 fflate 回退，保留旧编码和重复条目的处理约定。 */
+/** General-purpose ZIP reading: native stream decompression with fflate fallback, preserving legacy encoding and duplicate-entry conventions. */
 import { Unzip, UnzipInflate } from 'fflate';
 import { normalizeWindowsPath } from '../windowsPath';
 
 export interface ZipArchiveEntry {
-  /** normalizeWindowsPath 归一化后的客体内路径（小写、无盘符）。 */
+  /** Guest path normalized by normalizeWindowsPath: lowercase, without a drive letter. */
   path: string;
-  /** 原始条目名末段（保留大小写），用于构造导入计划里的 File。 */
+  /** Final original entry-name component with case preserved, used to construct File objects in import plans. */
   name: string;
-  /** 解压后的文件内容；provider 直接持有，调用方不得再修改。 */
+  /** Decoded content owned directly by the provider; callers must not modify it afterward. */
   bytes: Uint8Array<ArrayBuffer>;
 }
 
-/** 单批推入 Unzip 的压缩字节数：批间让出主线程，解压几百 MB 也不会卡死 UI。 */
+/** Compressed bytes per Unzip batch; yield the main thread between batches so hundreds of MB cannot freeze the UI. */
 const PUSH_CHUNK_BYTES = 1024 * 1024;
-/** 解压进度回读节流（按字节累计，避免逐块刷屏）。 */
+/** Throttle extraction-progress reports by accumulated bytes rather than logging every block. */
 const PROGRESS_INTERVAL_MS = 100;
 
-/** 旧 ZIP 未标 UTF-8 时 fflate 返回逐字节字符；从中央目录确认标志后再解码。 */
+/** For legacy ZIPs lacking UTF-8 flags, fflate returns bytewise characters; inspect central-directory flags before decoding. */
 function legacyZipNames(bytes: Uint8Array): Map<string, string> {
   const names = new Map<string, string>();
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
@@ -38,7 +38,7 @@ function legacyZipNames(bytes: Uint8Array): Map<string, string> {
             names.set(original, new TextDecoder(encoding, { fatal: true }).decode(raw));
             break;
           } catch {
-            /* 尝试下一种旧归档编码；无法解码时保持原字节映射。 */
+            /* Try the next legacy encoding; preserve the original byte mapping if none decodes. */
           }
         }
       }
@@ -49,24 +49,24 @@ function legacyZipNames(bytes: Uint8Array): Map<string, string> {
   return names;
 }
 
-/** 跳过目录占位、macOS 归档垃圾（__MACOSX）与 AppleDouble 元数据（._*）条目。 */
+/** Skip directory placeholders, macOS __MACOSX archive clutter, and AppleDouble ._* metadata. */
 function isUsableZipEntry(name: string): boolean {
   if (name.endsWith('/')) return false;
   return name.split('/').every((part) => !part.startsWith('._') && part !== '__MACOSX');
 }
 
-/** 原生解压的并发条目数：native inflate 异步执行，多条目并行摊薄大包解压时间。 */
+/** Concurrent native-inflate entries; asynchronous parallel decoding spreads large-package extraction work. */
 const NATIVE_UNZIP_CONCURRENCY = 4;
 
 interface ZipCdEntry {
-  /** 中央目录原始条目名（可能未按 UTF-8 解码）。 */
+  /** Raw central-directory entry name, potentially not yet UTF-8 decoded. */
   name: string;
   method: number;
   compressedSize: number;
   localOffset: number;
 }
 
-/** 解析 ZIP 中央目录（EOCD 定位 + 条目元数据），原生解压路径用。 */
+/** Parse the ZIP central directory through EOCD lookup and entry metadata for native extraction. */
 function readCentralDirectory(bytes: Uint8Array): ZipCdEntry[] {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let eocd = -1;
@@ -89,7 +89,7 @@ function readCentralDirectory(bytes: Uint8Array): ZipCdEntry[] {
     const extraLength = view.getUint16(offset + 30, true);
     const commentLength = view.getUint16(offset + 32, true);
     const localOffset = view.getUint32(offset + 42, true);
-    // UTF-8 标志置位时按规范直接解码；否则 latin1 原样保留，交给 legacyZipNames 猜旧编码。
+    // Decode directly when the UTF-8 flag is set; otherwise preserve latin1 bytes for legacyZipNames encoding detection.
     const rawName = bytes.subarray(offset + 46, offset + 46 + nameLength);
     const name = flags & 0x800 ? new TextDecoder('utf-8').decode(rawName) : new TextDecoder('latin1').decode(rawName);
     entries.push({ name, method, compressedSize, localOffset });
@@ -98,7 +98,7 @@ function readCentralDirectory(bytes: Uint8Array): ZipCdEntry[] {
   return entries;
 }
 
-/** 用原生 DecompressionStream 解单个条目（ZIP raw deflate）；stored 条目直接切片。 */
+/** Decode one ZIP raw-deflate entry with native DecompressionStream; slice stored entries directly. */
 async function inflateZipEntry(bytes: Uint8Array, entry: ZipCdEntry): Promise<Uint8Array<ArrayBuffer>> {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const nameLength = view.getUint16(entry.localOffset + 26, true);
@@ -111,7 +111,7 @@ async function inflateZipEntry(bytes: Uint8Array, entry: ZipCdEntry): Promise<Ui
   const writer = stream.writable.getWriter();
   const reader = stream.readable.getReader();
   const write = (async () => {
-    // fetch/文件读入的 zip 缓冲一定是 ArrayBuffer 承载；此处仅为满足 BufferSource 类型。
+    // Fetched/file-read ZIP buffers always use ArrayBuffer; this assertion only satisfies BufferSource typing.
     await writer.write(compressed as Uint8Array<ArrayBuffer>);
     await writer.close();
   })();
@@ -135,7 +135,7 @@ async function inflateZipEntry(bytes: Uint8Array, entry: ZipCdEntry): Promise<Ui
   return output;
 }
 
-/** 原生 DecompressionStream 解压：native inflate 比 JS 快数倍，且异步不卡主线程。 */
+/** Native DecompressionStream: native inflate is several times faster than JS and asynchronous, avoiding main-thread blocking. */
 async function readZipArchiveNative(
   bytes: Uint8Array,
   onProgress?: (extractedFiles: number, extractedBytes: number) => void,
@@ -184,14 +184,13 @@ async function readZipArchiveNative(
 }
 
 /**
- * 异步流式解压 zip 为条目列表。大小写归一化后同路径的条目保留第一个（ZIP 里
- * 同名大小写变体通常只是同一文件），其余跳过。返回顺序为归档内出现顺序。
+ * Stream-decompress ZIP asynchronously into entries. Keep the first path after case normalization, skipping later case variants that usually represent the same file. Preserve archive entry order.
  */
 export async function readZipArchive(
   bytes: Uint8Array,
   onProgress?: (extractedFiles: number, extractedBytes: number) => void,
 ): Promise<ZipArchiveEntry[]> {
-  // 原生解压优先（Chromium/FF/Safari/Node 均提供）；异常或不可用时回退 fflate。
+  // Prefer native decompression, available in Chromium/Firefox/Safari/Node; fall back to fflate if unavailable or failing.
   if (typeof DecompressionStream === 'function') {
     try {
       return await readZipArchiveNative(bytes, onProgress);
@@ -258,7 +257,7 @@ export async function readZipArchive(
         offset + PUSH_CHUNK_BYTES >= bytes.length,
       );
       if (streamError) break;
-      // 解压是同步 CPU 密集循环：批间让出事件循环，进度文字与取消状态才能更新。
+      // Decompression is a synchronous CPU-heavy loop; yield between batches so progress text and cancellation state can update.
       await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
     }
   } catch (error) {

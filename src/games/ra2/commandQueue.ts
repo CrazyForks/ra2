@@ -2,7 +2,7 @@ import type { GuestMemory } from '../../vm86/win32';
 import { createCommandQueueReader } from '../shared/commandQueue';
 import { RA2_STARTUP_PAGE_HASH } from './startupPage';
 
-/** RA2 1.006：独立核对 OutList 追加与 DoList 容量检查指令，不安装客体跳转。 */
+/** RA2 1.006: independently verify OutList append and DoList capacity-check instructions without installing guest jumps. */
 export function createRa2CommandQueueReader(memory: GuestMemory, hash: string) {
   return createCommandQueueReader(memory, hash, {
     hash: RA2_STARTUP_PAGE_HASH,

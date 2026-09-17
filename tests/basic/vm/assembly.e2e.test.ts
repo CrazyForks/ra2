@@ -29,7 +29,7 @@ const WORKER = PROGRAM + 0x1000;
 const memoryOp = (opcode: number[], address: number): number[] => [...opcode, ...le32(address)];
 const copy32 = (source: number, target: number): number[] => [...memoryOp([0xa1], source), ...memoryOp([0xa3], target)];
 
-/** 单独测协作切换时禁用 PIT 抢占，强制每次 API 返回交给另一线程。 */
+/** Disable PIT preemption when testing cooperative switching alone; force every API return to yield to another thread. */
 function cooperativePair(machine: GuestMachine): void {
   callShim(machine.shim, 'KERNEL32.DLL!CreateThread', [0, 0x10000, WORKER, 0, 0, 0]);
   machine.write(GUEST_THREAD_CRITICAL_DEPTH, 1);
@@ -44,14 +44,14 @@ describe('真实汇编上下文与并发回归', () => {
       callShim(m.shim, 'KERNEL32.DLL!CreateThread', [0, 0x10000, WORKER, 0, 0, 0]);
       const pitYield = m.api('Sleep', 4, (id, bytes) =>
         mode === 'PIT'
-          ? new Uint8Array([0xfb, 0xf4, 0xc2, 4, 0]) // 明确验证硬件 PIT 路径
+          ? new Uint8Array([0xfb, 0xf4, 0xc2, 4, 0]) // Explicitly verify the hardware PIT path
           : makeWin32ImportStubWithFastRead('KERNEL32.DLL', 'Sleep', id, bytes),
       );
       const hostYield = m.api('Sleep', 4);
       m.write(DATA, 0x077f);
       m.write(DATA + 4, 0x0b7f);
       m.code(PROGRAM, [
-        ...(mode === 'Sleep(0)' ? [0xb0, 0xef, 0xe6, 0x21] : []), // 屏蔽 PIT，保留 UART
+        ...(mode === 'Sleep(0)' ? [0xb0, 0xef, 0xe6, 0x21] : []), // Mask PIT, retain UART
         0xfa,
         0xdb,
         0xe3,
@@ -76,7 +76,7 @@ describe('真实汇编上下文与并发回归', () => {
       ]);
       await m.run();
       expect(m.read(DATA + 8) & 65535).toBe(0x077f);
-      expect(m.read(DATA + 12)).toBe(1); // fistp 应读回主线程压入的 1
+      expect(m.read(DATA + 12)).toBe(1); // fistp should read back the 1 pushed by the main thread
       expect(m.read(DATA + 16) & 65535).toBe(0x037f);
       expect(m.calls).toHaveLength(1);
       if (mode === 'Sleep(0)') expect(m.read(GUEST_SCHEDULER_TICKS), '软件让出不能推进 PIT tick').toBe(0);
@@ -93,12 +93,12 @@ describe('真实汇编上下文与并发回归', () => {
         0xb0,
         0xef,
         0xe6,
-        0x21, // 屏蔽 PIT；旧 sti/hlt 会停住，不能假通过
+        0x21, // Mask PIT; the old sti/hlt would stall and must not falsely pass
         ...push32(0),
         ...call32(sleep),
         0x9c,
         0x58,
-        ...memoryOp([0xa3], DATA), // pushfd; pop eax; 保存 IF
+        ...memoryOp([0xa3], DATA), // pushfd; pop eax; save IF
         ...finish,
       ]);
       await m.run();
@@ -113,7 +113,7 @@ describe('真实汇编上下文与并发回归', () => {
     await withGuestMachine(async (m) => {
       callShim(m.shim, 'KERNEL32.DLL!CreateThread', [0, 0x10000, WORKER, 0, 0, 0]);
       m.write(GUEST_THREAD_CRITICAL_DEPTH, 1);
-      m.write(GUEST_THREAD_RUN_STATES + 4, 7); // 真实 PIT 第 5 个 tick 才就绪
+      m.write(GUEST_THREAD_RUN_STATES + 4, 7); // Ready only on the fifth real PIT tick
       const sleep = m.api('Sleep', 4, (id, bytes) =>
         makeWin32ImportStubWithFastRead('KERNEL32.DLL', 'Sleep', id, bytes),
       );
@@ -139,8 +139,8 @@ describe('真实汇编上下文与并发回归', () => {
           0xbe,
           ...le32(marker),
           0xb9,
-          ...le32(1000), // esi、ecx 必须由各线程独立保存
-          ...memoryOp([0x89, 0x25], counter + 8), // 调用前 ESP
+          ...le32(1000), // Each thread must save ESI and ECX independently
+          ...memoryOp([0x89, 0x25], counter + 8), // ESP before the call
           ...body,
           0x75,
           -(body.length + 2) & 255,
@@ -164,7 +164,7 @@ describe('真实汇编上下文与并发回归', () => {
     await withGuestMachine(async (m) => {
       callShim(m.shim, 'KERNEL32.DLL!CreateThread', [0, 0x10000, WORKER, 0, 0, 0]);
       if (mode === 'sleeping')
-        m.write(GUEST_THREAD_RUN_STATES + 4, 102); // 第 100 个 tick 才就绪
+        m.write(GUEST_THREAD_RUN_STATES + 4, 102); // Ready only on tick 100
       else m.write(HYPERCALL_IMPORT_ACTIVE, 1);
       const sleep = m.api('Sleep', 4, (id, bytes) =>
         makeWin32ImportStubWithFastRead('KERNEL32.DLL', 'Sleep', id, bytes),
@@ -220,7 +220,7 @@ describe('真实汇编上下文与并发回归', () => {
         ...finish,
       ]);
       m.code(WORKER, [
-        ...memoryOp([0xd9, 0x3d], DATA + 64), // 新线程 control word
+        ...memoryOp([0xd9, 0x3d], DATA + 64), // New thread's control word
         ...memoryOp([0xd9, 0x2d], DATA + 4),
         0xd9,
         0xed, // fldcw; fldln2
@@ -342,7 +342,7 @@ describe('真实汇编上下文与并发回归', () => {
       ];
       m.code(PROGRAM, [...sendCode(111), ...memoryOp([0xa3], DATA + 128), ...push32(0), ...call32(sleep), ...finish]);
       m.code(WORKER, [...sendCode(222), ...memoryOp([0xa3], DATA + 132), ...push32(0), ...call32(sleep), 0xfa, 0xf4]);
-      m.code(wndproc, [0x8b, 0x44, 0x24, 0x10, 0xc2, 16, 0]); // 返回 lParam
+      m.code(wndproc, [0x8b, 0x44, 0x24, 0x10, 0xc2, 16, 0]); // Return lParam
       let sends = 0;
       const switchThread = m.afterCall!;
       m.afterCall = (call) => {

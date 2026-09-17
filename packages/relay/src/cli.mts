@@ -1,4 +1,4 @@
-/** 通用独立 WebSocket 中继；无需 TLS 证书，监听地址由部署者指定。 */
+/** Standalone, general-purpose WebSocket relay; no TLS certificate is required, and the deployer chooses the listen address. */
 import { createServer } from 'node:http';
 import { networkInterfaces } from 'node:os';
 import { parseArgs } from 'node:util';
@@ -77,7 +77,7 @@ async function stop() {
 }
 process.on('SIGINT', () => void stop());
 process.on('SIGTERM', () => void stop());
-// 维护先发 SIGUSR2，观察 healthz connections=0 后再 SIGTERM；不定时强踢旧对局。
+// For maintenance, send SIGUSR2, wait for healthz connections=0, then send SIGTERM; do not forcibly terminate existing games on a timer.
 process.on('SIGUSR2', () => relay.beginDrain());
 server.listen(port, host, () => {
   console.log(`[game-relay] listening ${host}:${port}`);

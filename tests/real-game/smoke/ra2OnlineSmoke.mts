@@ -1,13 +1,9 @@
 /**
- * RA2 可选包端到端冒烟（不进入 CI）：下载显式指定的战役地图包（约 2MB，
- * MAPS01.MIX + maps02.mix）与电影包（约 628MB ZIP，movies01/02.mix +
- * subtitle.txt），校验内容 SHA-256，再用两级 OverlayGameFileProvider 叠加在
- * 0 字节占位基包上（本体 < 战役 < 电影），确认稀疏播放所需语义
- * （readPrefix 返回真实 totalSize、战役/电影包独有文件 hasKnownFile 命中）。
+ * RA2 optional-package end-to-end smoke test (outside CI): download explicitly specified campaign maps (about 2 MB, MAPS01.MIX + maps02.mix) and movies (about 628 MB ZIP, movies01/02.mix + subtitle.txt), verify content SHA-256, then use two OverlayGameFileProvider layers over a zero-byte-placeholder base (base < campaign < movies).
+ * Verify sparse-playback semantics: readPrefix returns actual totalSize, and hasKnownFile finds files unique to campaign/movie packages.
  *
- * 用法：设置 RA2_CAMPAIGN_PACK_URL、RA2_MOVIES_PACK_URL 后运行
- * pnpm exec tsx tests/real-game/smoke/ra2OnlineSmoke.mts；内置 catalog 不再提供在线 ZIP 地址。
- * 耗时取决于网络；电影包内为 Bink 高熵数据，下载后解压快。
+ * Usage: set RA2_CAMPAIGN_PACK_URL and RA2_MOVIES_PACK_URL, then run pnpm exec tsx tests/real-game/smoke/ra2OnlineSmoke.mts. The built-in catalog no longer supplies online ZIP URLs.
+ * Runtime depends on the network; the movie package contains high-entropy Bink data and extracts quickly after download.
  */
 import { MemoryGameFileProvider } from '../../../src/resources/providers/memory';
 import { OverlayGameFileProvider } from '../../../src/resources/providers/overlay';
@@ -32,7 +28,7 @@ const moviesProvider = await loadRemoteGamePackage(moviesUrl, {
   onStatus: (message) => console.info(`[冒烟] ${message}`),
 });
 
-/** 包内内容 SHA-256（与完整游戏目录源文件一致；deflate 不改变内容）。 */
+/** SHA-256 hashes of package contents (identical to the full game directory's source files; deflate preserves content). */
 const EXPECTED: Readonly<Record<string, { expected: string; minBytes: number }>> = {
   'MAPS01.MIX': {
     expected: 'b9093c9ef7efc1d24c6259196fbe90c8b78a15d0af27c93c12e1c755e5196d74',
@@ -73,9 +69,9 @@ for (const [path, { expected, minBytes }] of Object.entries(EXPECTED)) {
   }
 }
 
-// 模拟联机精简基包：MAPS01/movies01 为 0 字节占位、无 maps02/movies02/subtitle；
-// 战役包与电影包依次作 overlay（本体 < 战役 < 电影）。稀疏播放走 readPrefix/
-// readRange：overlay 命中时必须返回真实 totalSize。
+// Simulate a trimmed multiplayer base: MAPS01/movies01 are zero-byte placeholders; maps02/movies02/subtitle are absent.
+// Overlay campaign and movie packages in order (base < campaign < movies). Sparse playback uses readPrefix/
+// readRange; overlay hits must return the actual totalSize.
 const placeholderBase = new MemoryGameFileProvider(
   new Map([
     ['MAPS01.MIX', new Uint8Array(0)],

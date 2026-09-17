@@ -1,3 +1,4 @@
+import { t, initializeWorkerLocale, type UiLocale } from '../../../shared/i18n/translate';
 import { probeTensor, probeFrameOutput, PROBE_MODELS, type ProbeImage, type ProbeReply } from './modelProbe';
 import type * as Ort from 'onnxruntime-web/webgpu';
 import ortWasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url';
@@ -16,23 +17,25 @@ const send = (reply: ProbeReply) =>
 
 onmessage = async (
   event: MessageEvent<
-    { type: 'load'; model: ArrayBuffer; modelId?: string } | { type: 'run' | 'run-frame'; image: ProbeImage }
+    | { type: 'load'; model: ArrayBuffer; modelId?: string; locale: UiLocale }
+    | { type: 'run' | 'run-frame'; image: ProbeImage }
   >,
 ) => {
   if (busy) {
-    send({ type: 'error', message: '当前实验尚未完成，请等待或关闭弹窗取消' });
+    send({ type: 'error', message: t('当前实验尚未完成，请等待或关闭弹窗取消') });
     return;
   }
   busy = true;
   try {
     if (event.data.type === 'load') {
-      if (session) throw new Error('模型已加载，请重新打开实验窗口后再更换');
+      initializeWorkerLocale(event.data.locale);
+      if (session) throw new Error(t('模型已加载，请重新打开实验窗口后再更换'));
       const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', event.data.model))]
         .map((n) => n.toString(16).padStart(2, '0'))
         .join('');
       const selectedId = event.data.modelId ?? 'ultra4x';
       const model = PROBE_MODELS.find((candidate) => candidate.id === selectedId);
-      if (!model || hash !== model.hash) throw new Error('模型哈希不匹配，请下载当前选择的指定版本 ONNX');
+      if (!model || hash !== model.hash) throw new Error(t('模型哈希不匹配，请下载当前选择的指定版本 ONNX'));
       scale = model.scale;
       half = model.id.endsWith('-fp16');
       const gpu = (
@@ -45,24 +48,24 @@ onmessage = async (
         }
       ).gpu;
       const adapter = await gpu?.requestAdapter({ powerPreference: 'high-performance' });
-      if (!adapter) throw new Error('此浏览器没有可用 WebGPU 适配器；不会退回 CPU 拖慢游戏');
+      if (!adapter) throw new Error(t('此浏览器没有可用 WebGPU 适配器；不会退回 CPU 拖慢游戏'));
       if (half && !(adapter as unknown as { features: Set<string> }).features.has('shader-f16'))
-        throw new Error('GPU 不支持 shader-f16，请选择 FP32 模型');
+        throw new Error(t('GPU 不支持 shader-f16，请选择 FP32 模型'));
       adapterName =
         [adapter.info?.vendor, adapter.info?.architecture, adapter.info?.description].filter(Boolean).join(' · ') ||
-        'WebGPU（未公开型号）';
-      // ORT 和 WASM 只在实验 Worker 中按需加载，普通游戏启动不请求这些资源。
+        t('WebGPU（未公开型号）');
+      // Load ORT and WASM on demand only in experimental Workers; normal game startup never requests these resources.
       ort = await import('onnxruntime-web/webgpu');
       ort.env.webgpu.adapter = adapter as NonNullable<typeof ort.env.webgpu.adapter>;
       ort.env.wasm.numThreads = 1;
-      // 显式交给 Vite 定位；开发依赖预打包后相对路径会指向首页 HTML 而不是 WASM。
+      // Let Vite resolve the location explicitly; after development prebundling, relative paths would resolve to homepage HTML instead of WASM.
       ort.env.wasm.wasmPaths = { wasm: new URL(ortWasmUrl, self.location.href).href };
-      // 已核对的 AnimeSharp 与 UltraSharp 共享 output/width/height 元数据签名；
-      // 两者都需要 DepthToSpace 的 Metal 绕行，但最终输出按各自登记的倍率校验。
-      // APISR 使用独立的 reconstruction/HW 签名，不做像素重排绕行。
+      // Verified AnimeSharp and UltraSharp models share the output/width/height metadata signature;
+      // both need the Metal DepthToSpace workaround, but validate final output against each model's registered scale.
+      // APISR uses its own reconstruction/HW signature and no pixel-shuffle workaround.
       const bytes = new Uint8Array(event.data.model);
-      // Nomos 导出时已使用独立输入/输出尺寸符号，不套用其他模型的元数据补丁。
-      // 它同样只有一个末端 DepthToSpace，保留 Metal 像素重排兼容路径。
+      // Nomos exports already use separate input/output dimension symbols; do not apply other models' metadata patches.
+      // It also has one final DepthToSpace node, so retain the Metal pixel-shuffle compatibility path.
       const prepared = model.id.startsWith('nomos2x')
         ? bytes
         : normalizeUltraSharpOutputShape(bytes, model.id === 'apisr2x' ? 'apisr2x' : 'ultra4x');
@@ -73,12 +76,12 @@ onmessage = async (
             ...(model.id !== 'apisr2x' ? { forceCpuNodeNames: ultraSharpCompatibilityNodes(bytes) } : {}),
           },
         ],
-        // 官方图含不能全分配到 WebGPU 的节点，保留 ORT 的逐算子 WASM 兼容。
-        // 界面明确报告混合执行和总耗时，不能称为纯 GPU kernel 时间。
+        // Some official graph nodes cannot run entirely on WebGPU; retain ORT's per-operator WASM fallback.
+        // The UI explicitly reports mixed execution and total duration, which must not be called pure GPU kernel time.
       });
       send({ type: 'ready', adapter: adapterName });
     } else {
-      if (!ort || !session) throw new Error('请先加载模型');
+      if (!ort || !session) throw new Error(t('请先加载模型'));
       const image = event.data.image;
       const height = image.height ?? image.size;
       if (
@@ -90,7 +93,7 @@ onmessage = async (
         height > (event.data.type === 'run-frame' ? 600 : 288) ||
         image.rgba.length !== image.size * height * 4
       )
-        throw new Error('输入尺寸超出实验上限或像素长度不匹配');
+        throw new Error(t('输入尺寸超出实验上限或像素长度不匹配'));
       const tensor = half
         ? new ort.Tensor('float16', halfRgbTensor(image.rgba), [1, 3, height, image.size])
         : new ort.Tensor('float32', probeTensor(image), [1, 3, height, image.size]);
@@ -104,7 +107,7 @@ onmessage = async (
           output.type === 'float16' && ArrayBuffer.isView(raw)
             ? decodeHalf(new Uint16Array(raw.buffer, raw.byteOffset, raw.byteLength / 2))
             : raw;
-        if (!(data instanceof Float32Array)) throw new Error('模型输出不是浮点像素');
+        if (!(data instanceof Float32Array)) throw new Error(t('模型输出不是浮点像素'));
         const result = probeFrameOutput(data, output.dims, image.size, height, scale);
         send({ type: 'result', image: result, milliseconds: performance.now() - started, adapter: adapterName });
       } finally {

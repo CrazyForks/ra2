@@ -1,6 +1,6 @@
 /**
- * 游戏分辨率偏好的本地持久化（拆分自 page.ts）：
- * 存储键与解析复用 games/resolution，页面与工具栏动作共用。
+ * Local game-resolution preference persistence, extracted from page.ts.
+ * Reuse storage keys/parsing from games/resolution, shared by page and toolbar actions.
  */
 import { gameResolutionValue, parseGameResolution, type GameResolution } from '../../../games/resolution';
 import type { SupportedGameId } from '../../../games/catalog';
@@ -21,6 +21,6 @@ export function storeResolution(gameId: SupportedGameId, resolution: GameResolut
     if (resolution) window.localStorage.setItem(key, gameResolutionValue(resolution));
     else window.localStorage.removeItem(key);
   } catch {
-    // 隐私模式等场景无法持久化；本次重启后仍安全回退原 INI。
+    // Persistence may be unavailable in private mode; safely fall back to the original INI after this restart.
   }
 }

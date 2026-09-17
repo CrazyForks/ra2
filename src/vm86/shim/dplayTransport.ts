@@ -103,11 +103,7 @@ interface WebSocketTransportOptions {
 }
 
 /**
- * 浏览器侧的 DirectPlay 传输地址。缺省目标 `/game` 是历史值：dev/preview 在该
- * 前缀下只提供本机游戏资源（不是 WebSocket 端点），因此不传 `url` 时升级必然
- * 失败并进入退避重连。当前联机走 relay 的虚拟局域网线协议；这条路径只在客体
- * 自行创建 DirectPlay 会话时才会用到，现有自动化测试只覆盖 Node 的
- * BroadcastChannel 默认值。
+ * Browser DirectPlay transport address. Default /game is historical: dev/preview serve only local game resources there, not WebSocket upgrades, so omitting url inevitably fails and enters reconnect backoff. Current multiplayer uses the relay virtual-LAN protocol; this path runs only when the guest creates DirectPlay sessions itself. Existing automation covers only Node's BroadcastChannel default.
  */
 function websocketUrl(clientId: string, suppliedUrl?: string): string {
   const pageLocation = globalThis.location;
@@ -196,8 +192,8 @@ export class WebSocketTransport implements DplayTransport {
       if (this.socket === socket) this.socket = null;
       if (this.closed) return;
       this.handlers.onClose?.();
-      // 1002/1008/1009 是协议/策略性关闭：重连只会再被关（1008 会成死循环），
-      // 永久不重连；网络断开（1006）与服务器重启（1001）/错误（1011）才退避重连。
+      // 1002/1008/1009 are protocol/policy closes; reconnecting would be rejected again, endlessly for 1008,
+      // so never reconnect. Back off and retry only network loss 1006, server restart 1001, or server error 1011.
       if (event.code === 1002 || event.code === 1008 || event.code === 1009) return;
       this.scheduleReconnect();
     };

@@ -1,8 +1,8 @@
-# 生成文件与第三方原文由各自工具/来源维护。
+# Generated files and third-party originals are maintained by their own tools/sources.
 **/pnpm-lock.yaml
 public/
 **/vendor/
 **/LICENSE*
 
-# 保留复制的第三方 skill 原文。
+# Preserve copied third-party skill originals.
 .agents/skills/

@@ -1,3 +1,4 @@
+import { t, uiLocale, localizeText } from '../../../shared/i18n/translate';
 import { useEffect, useRef, useState } from 'react';
 import { Modal } from './Modal';
 import {
@@ -25,7 +26,7 @@ function Preview({ image, scale }: { image: ProbeImage; scale: number }) {
   return <canvas ref={canvas} width={size} height={size} />;
 }
 
-/** 独立小块探针，不把秒级推理结果覆盖到实时画面；关闭即终止 Worker。 */
+/** Independent small-patch probe; never overlay seconds-late inference on the live frame. Closing terminates the Worker. */
 export function ModelProbeDialog({
   capture,
   live,
@@ -41,7 +42,7 @@ export function ModelProbeDialog({
   const worker = useRef<Worker | null>(null),
     generation = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const [status, setStatus] = useState('请先下载官方模型，再选择本地文件。仅本机推理，不上传模型或游戏画面。');
+  const [status, setStatus] = useState(t('请先下载官方模型，再选择本地文件。仅本机推理，不上传模型或游戏画面。'));
   const [ready, setReady] = useState(false),
     [busy, setBusy] = useState(false),
     [size, setSize] = useState(128);
@@ -60,7 +61,7 @@ export function ModelProbeDialog({
       reset();
       setBusy(false);
       setReady(false);
-      setStatus('实验超过 120 秒已终止，游戏继续使用原来的渲染器。可减小采样尺寸后重新加载模型。');
+      setStatus(t('实验超过 120 秒已终止，游戏继续使用原来的渲染器。可减小采样尺寸后重新加载模型。'));
     }, 120_000);
   };
   const load = async (file: File) => {
@@ -72,8 +73,8 @@ export function ModelProbeDialog({
     const token = generation.current;
     try {
       if (file.size < 1 || file.size > 40 * 1024 * 1024)
-        throw new Error(`请选择 ${model.name} ONNX（约 ${model.megabytes} MB）`);
-      setStatus('正在校验模型并初始化 WebGPU…');
+        throw new Error(t('请选择 {0} ONNX（约 {1} MB）', model.name, model.megabytes));
+      setStatus(t('正在校验模型并初始化 WebGPU…'));
       const modelBytes = await file.arrayBuffer();
       if (generation.current !== token) return;
       const instance = new Worker(new URL('../experiments/modelProbeWorker.ts', import.meta.url), { type: 'module' });
@@ -86,28 +87,33 @@ export function ModelProbeDialog({
       };
       instance.onerror = (event) => {
         event.preventDefault();
-        if (worker.current === instance) failed(`模型实验失败：${event.message}`);
+        if (worker.current === instance) failed(t('模型实验失败：{0}', event.message));
       };
       instance.onmessage = ({ data }: MessageEvent<ProbeReply>) => {
         if (worker.current !== instance) return;
         clearTimeout(timer.current);
         setBusy(false);
         if (data.type === 'error') {
-          failed(`模型实验失败：${data.message}`);
+          failed(t('模型实验失败：{0}', data.message));
           return;
         }
         if (data.type === 'ready') {
           setReady(true);
-          setStatus(`WebGPU 已就绪 · ${data.adapter}（允许 WASM 兼容算子）；可采样当前游戏中心区域。`);
+          setStatus(t('WebGPU 已就绪 · {0}（允许 WASM 兼容算子）；可采样当前游戏中心区域。', data.adapter));
         } else {
           setAfter(data.image);
           setStatus(
-            `${model.name} · ${data.milliseconds.toFixed(1)} ms/块（含兼容算子与回读）· ${data.adapter}；单次采样，不是游戏 FPS。`,
+            t(
+              '{0} · {1} ms/块（含兼容算子与回读）· {2}；单次采样，不是游戏 FPS。',
+              model.name,
+              data.milliseconds.toFixed(1),
+              data.adapter,
+            ),
           );
         }
       };
       deadline();
-      instance.postMessage({ type: 'load', model: modelBytes, modelId }, [modelBytes]);
+      instance.postMessage({ type: 'load', model: modelBytes, modelId, locale: uiLocale }, [modelBytes]);
     } catch (error) {
       if (generation.current !== token) return;
       reset();
@@ -122,8 +128,8 @@ export function ModelProbeDialog({
       setBefore(image);
       setAfter(null);
       setBusy(true);
-      setStatus('正在采样推理；可随时关闭实验窗口取消。');
-      // UI 留一份预览，仅转移独立副本；不触碰正在复用的 VM 帧缓冲。
+      setStatus(t('正在采样推理；可随时关闭实验窗口取消。'));
+      // Keep one UI preview and transfer only an independent copy; never touch recyclable VM frame buffers.
       const copy = { ...image, rgba: image.rgba.slice() };
       deadline();
       worker.current.postMessage({ type: 'run', image: copy }, [copy.rgba.buffer]);
@@ -133,15 +139,17 @@ export function ModelProbeDialog({
     }
   };
   return (
-    <Modal open title="WebGPU 模型实验" onClose={close} className="model-probe-dialog message-box">
+    <Modal open title={t('WebGPU 模型实验')} onClose={close} className="model-probe-dialog message-box">
       <header>
-        <h3>{model.name} · WebGPU 实验</h3>
+        <h3>
+          {model.name} {t('· WebGPU 实验')}
+        </h3>
         <button type="button" className="dialog-button" onClick={close}>
-          关闭并释放模型
+          {t('关闭并释放模型')}{' '}
         </button>
       </header>
       <fieldset>
-        <legend>实验模型</legend>
+        <legend>{t('实验模型')}</legend>
         {PROBE_MODELS.map((item) => (
           <label key={item.id}>
             <input
@@ -157,39 +165,43 @@ export function ModelProbeDialog({
                 setBusy(false);
                 setBefore(null);
                 setAfter(null);
-                setStatus('请下载并选择当前模型；切换已释放旧模型。');
+                setStatus(t('请下载并选择当前模型；切换已释放旧模型。'));
               }}
             />
             {item.name}
           </label>
         ))}
       </fieldset>
-      <p>采样仅测试画质与耗时，不替换实时画面；支持的模型可另外启用下方整帧显示。首轮含编译开销，建议重复采样。</p>
+      <p>
+        {t('采样仅测试画质与耗时，不替换实时画面；支持的模型可另外启用下方整帧显示。首轮含编译开销，建议重复采样。')}
+      </p>
       <p>
         {model.scale === 2
-          ? '原生 2× 模型，不是 4× 后缩小，也不是红警专用模型；请比较单位、文字和地形细节。'
-          : 'Metal 兼容：末端像素重排使用 WASM，卷积仍使用 WebGPU。'}
+          ? t('原生 2× 模型，不是 4× 后缩小，也不是红警专用模型；请比较单位、文字和地形细节。')
+          : t('Metal 兼容：末端像素重排使用 WASM，卷积仍使用 WebGPU。')}
       </p>
       {model.id.startsWith('animesharp2x-') && (
         <p>
-          Soft 适合较干净的输入；Sharp 面向严重退化输入，可能过度处理细节。建议在同一场景对照。Metal
-          兼容：末端像素重排使用 WASM。
+          {t(
+            'Soft 适合较干净的输入；Sharp 面向严重退化输入，可能过度处理细节。建议在同一场景对照。Metal 兼容：末端像素重排使用 WASM。',
+          )}{' '}
         </p>
       )}
       {model.id.startsWith('nomos2x') && (
         <p>
-          官方 safetensors 本地导出；下方链接不是官方 ONNX 下载。缺文件时按 docs/AI_UPSCALING.md 准备。末端像素重排使用
-          FP32 WASM。FP16 要求 shader-f16，是半精度转换而非 INT8 量化，画质和硬件延迟需实测。
+          {t(
+            '官方 safetensors 本地导出；下方链接不是官方 ONNX 下载。缺文件时按 docs/AI_UPSCALING.md 准备。末端像素重排使用 FP32 WASM。FP16 要求 shader-f16，是半精度转换而非 INT8 量化，画质和硬件延迟需实测。',
+          )}{' '}
         </p>
       )}
       <p>
         <a href={model.url} target="_blank" rel="noopener noreferrer">
-          下载当前模型 {model.id.endsWith('-fp16') ? 'FP16' : 'FP32'} ONNX（{model.megabytes} MB）↗
+          {t('下载当前模型')} {model.id.endsWith('-fp16') ? 'FP16' : 'FP32'} ONNX（{model.megabytes} MB）↗
         </a>{' '}
         · {model.license}
       </p>
       <label>
-        选择本地模型{' '}
+        {t('选择本地模型')}{' '}
         <input
           type="file"
           accept=".onnx"
@@ -203,7 +215,7 @@ export function ModelProbeDialog({
       </label>
       <div className="model-probe-actions">
         <label>
-          中心采样边长{' '}
+          {t('中心采样边长')}{' '}
           <input
             type="number"
             min={32}
@@ -215,15 +227,17 @@ export function ModelProbeDialog({
           />
         </label>
         <button type="button" className="dialog-button" disabled={!ready || busy} onClick={run}>
-          采样并推理
+          {t('采样并推理')}{' '}
         </button>
       </div>
-      <p role="status">{status}</p>
+      <p role="status">{localizeText(status)}</p>
       {isLiveModelId(model.id) && live && (
         <section>
           <p>
-            整帧显示实验：输入最多 800×600，输出最高 {800 * model.scale}×{600 * model.scale}
-            。异步单任务，画面可能明显滞后；不保证实时帧率或 1ms。请先用小块确认 GPU 能运行当前模型，再启用。
+            {t('整帧显示实验：输入最多 800×600，输出最高')} {800 * model.scale}×{600 * model.scale}
+            {t(
+              '。异步单任务，画面可能明显滞后；不保证实时帧率或 1ms。请先用小块确认 GPU 能运行当前模型，再启用。',
+            )}{' '}
           </p>
           <button
             type="button"
@@ -231,24 +245,24 @@ export function ModelProbeDialog({
             disabled={!ready || busy || !selectedFile}
             onClick={() => {
               if (!selectedFile || !isLiveModelId(model.id)) return;
-              // 先释放小块模型，避免同一 GPU 同时保留两套模型和激活缓存。
+              // Release the patch model first so one GPU does not retain two models and activation caches at once.
               reset();
               setReady(false);
               const file = selectedFile;
               close();
               void live(file, model.id).catch(() => {
-                /* 页面状态栏报告加载错误，停止按钮始终可用。 */
+                /* The page status bar reports loading errors; the stop button remains available. */
               });
             }}
           >
-            接入整帧显示并测延迟
+            {t('接入整帧显示并测延迟')}{' '}
           </button>
         </section>
       )}
       <div className="model-probe-comparison">
         {before && (
           <figure>
-            <figcaption>原图（最近邻显示）</figcaption>
+            <figcaption>{t('原图（最近邻显示）')}</figcaption>
             <Preview image={before} scale={1} />
           </figure>
         )}

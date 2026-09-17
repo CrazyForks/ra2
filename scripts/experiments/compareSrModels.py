@@ -1,4 +1,4 @@
-"""离线 SR 画质对比。只读本地权重与真实截图；输出 PNG、来源清单及预览页。"""
+"""Offline SR image-quality comparison. Read local weights and real screenshots; output PNGs, a source manifest, and a preview page."""
 import argparse
 import hashlib
 import json
@@ -95,7 +95,7 @@ def main():
             output = output.crop((pad * scale, pad * scale, (pad + size) * scale, (pad + size) * scale))
             filename = f"{index}-{ident}.png"
             output.save(args.output / filename)
-            # 比较面板统一 2x 展示；原倍率 PNG 始终单独保留，避免伪装原生倍率。
+            # Display comparison panels uniformly at 2x; retain native-scale PNGs separately so the display does not misrepresent native scale.
             display = output.resize((size * 2, size * 2), Image.Resampling.NEAREST if scale == 1 else Image.Resampling.LANCZOS)
             display.save(args.output / f"view-{filename}")
             item["results"].append({"file": filename, "ms_cpu": elapsed, "shape": list(result.shape)})

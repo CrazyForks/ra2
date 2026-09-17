@@ -1,4 +1,4 @@
-/** Node 工具使用的下载入口；浏览器只保留本地游戏包解析。 */
+/** Download entry point for Node tools; the browser retains only local game-package parsing. */
 import { loadRemoteGamePackageBytes, type RemotePackageOptions } from '../../src/adapter/gameZip';
 import { sha256Hex } from '../../src/utils/sha256';
 

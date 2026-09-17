@@ -1,3 +1,4 @@
+import { t, localizeText } from '../i18n/translate';
 import { Component, type ReactNode } from 'react';
 
 export class UiErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
@@ -9,10 +10,10 @@ export class UiErrorBoundary extends Component<{ children: ReactNode }, { error:
     if (!this.state.error) return this.props.children;
     return (
       <section className="panel" role="alert">
-        <h3>界面出现错误</h3>
-        <pre>{this.state.error}</pre>
+        <h3>{t('界面出现错误')}</h3>
+        <pre>{localizeText(this.state.error)}</pre>
         <button type="button" onClick={() => window.location.reload()}>
-          重新加载页面
+          {t('重新加载页面')}{' '}
         </button>
       </section>
     );

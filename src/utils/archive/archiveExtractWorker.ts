@@ -1,4 +1,4 @@
-/** 浏览器只负责 Worker 消息与 WASM 地址，提取算法与 CI 共用。 */
+/** The browser owns only Worker messaging and WASM locations; extraction algorithms are shared with CI. */
 import wasmUrl from '7z-wasm/7zz.wasm?url';
 import { createArchiveExtractor, type ArchiveExtractRequest } from './archiveExtractor';
 export type { ArchiveExtractRequest, ArchiveExtractResponse } from './archiveExtractor';

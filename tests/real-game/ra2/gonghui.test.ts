@@ -4,9 +4,9 @@ import { describe, expect, it } from 'vitest';
 import { resolveGameDir } from '../helpers/gameDir';
 import { runVmSmoke, type VmClick } from '../helpers/runVmSmoke';
 
-// 本回归显式使用共辉资源与主程序，不把普通 RA2 目录误当作 MOD 成功验证。
+// This regression explicitly uses Gonghui assets and executable; an ordinary RA2 directory cannot count as successful MOD verification.
 const enabled = process.env.VM_GONGHUI === '1' && existsSync(join(resolveGameDir('ra2'), 'expand01.mix'));
-// 显式要求共辉验收时，缺少 MOD 不能让整组测试静默跳过。
+// When Gonghui acceptance is explicitly requested, a missing MOD must not silently skip the entire suite.
 if (process.env.VM_REQUIRE_GAME_RESOURCES === '1' && process.env.VM_GONGHUI === '1' && !enabled) {
   throw new Error('共辉验收缺少 expand01.mix；请配置 VM_GAME_DIR');
 }

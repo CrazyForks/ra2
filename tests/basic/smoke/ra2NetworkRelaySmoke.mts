@@ -1,8 +1,6 @@
 /**
- * RA2 虚拟 LAN 房间中继冒烟：真实 WebSocket 客户端打内存中继。
- * 覆盖 hello/welcome 握手、虚拟地址分配、peer-join/peer-leave 广播、
- * 单播路由与源地址覆写、广播扇出（不回声发送者）、未知目标静默丢弃、
- * 版本不匹配拒绝、畸形/超大帧协议关闭、ping/pong 与房间回收。
+ * RA2 virtual-LAN room-relay smoke test: real WebSocket clients against an in-memory relay.
+ * Covers hello/welcome, virtual-address allocation, peer-join/peer-leave broadcasts, unicast routing and source rewriting, broadcast fanout without sender echo, silent dropping of unknown destinations, version rejection, protocol closure for malformed/oversized frames, ping/pong, and room cleanup.
  */
 import { strict as assert } from 'node:assert';
 import { createServer } from 'node:http';
@@ -133,7 +131,7 @@ async function main(): Promise<void> {
   };
 
   try {
-    // ---- 握手与成员广播 -------------------------------------------------------
+    // ---- Handshake and membership broadcasts ----
     const host = await open('host-one');
     host.hello(ROOM);
     const hostWelcome = await host.next(isType('welcome'));
@@ -148,14 +146,14 @@ async function main(): Promise<void> {
     assert.ok(joinerWelcome.t === 'welcome');
     const joinerAddr = joinerWelcome.addr;
     assert.notEqual(joinerAddr, hostAddr, '地址不重复');
-    // 后入者收到先入者的 peer-join 快照；先入者收到后入者的 peer-join 广播。
+    // New arrivals receive a peer-join snapshot of existing members; existing members receive the new arrival's peer-join broadcast.
     const joinerSeesHost = await joiner.next(isType('peer-join'));
     assert.ok(joinerSeesHost.t === 'peer-join' && joinerSeesHost.addr === hostAddr, 'joiner 看到 host');
     const hostSeesJoiner = await host.next(isType('peer-join'));
     assert.ok(hostSeesJoiner.t === 'peer-join' && hostSeesJoiner.addr === joinerAddr, 'host 看到 joiner');
     assert.equal(host.messages.length, 0, 'peer-join 不回声给发送者');
 
-    // ---- 单播路由 + 源地址覆写 ----------------------------------------------------
+    // ---- Unicast routing and source-address rewriting ----
     const forgedSrc = 0x0102_0304;
     const payload = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
     host.send({ t: 'datagram', src: forgedSrc, sport: 1234, dest: joinerAddr, dport: 7000, a: payload });
@@ -168,7 +166,7 @@ async function main(): Promise<void> {
     await sleep(60);
     assert.equal(host.messages.some(isType('datagram')), false, '单播不到达第三方/发送者');
 
-    // ---- 广播扇出 ------------------------------------------------------------------
+    // ---- Broadcast fanout ----
     const observer = await open('observer-one');
     observer.hello(ROOM);
     await observer.next(isType('welcome'));
@@ -191,7 +189,7 @@ async function main(): Promise<void> {
     assert.ok(observerBroadcast.t === 'datagram' && observerBroadcast.src === joinerAddr);
     assert.equal(joiner.messages.some(isType('datagram')), false, '广播不回声发送者');
 
-    // ---- 未知目标静默丢弃（UDP 语义，不是协议错误） --------------------------------------
+    // ---- Silently drop unknown destinations (UDP semantics, not a protocol error) ----
     host.send({ t: 'datagram', src: 0, sport: 1, dest: 0x0af7_6363, dport: 1, a: new Uint8Array([9]) });
     await sleep(60);
     assert.equal(host.socket.readyState, WebSocket.OPEN, '未知目标只丢包不断线');
@@ -201,12 +199,12 @@ async function main(): Promise<void> {
     const pong = await host.next(isType('pong'));
     assert.ok(pong.t === 'pong' && pong.n === 42 && pong.at === 123456, 'pong 回显 nonce');
 
-    // ---- 版本不匹配拒绝 ------------------------------------------------------------------
+    // ---- Reject version mismatches ----
     const mismatched = await open('mismatched');
     mismatched.hello(ROOM, OTHER_EXE_HASH);
     assert.equal(await mismatched.waitClosed(), 1008, 'exe 哈希不匹配拒绝入房');
 
-    // ---- 协议纪律 ---------------------------------------------------------------------
+    // ---- Protocol discipline ----
     const premature = await open('premature');
     premature.send({ t: 'datagram', src: 0, sport: 1, dest: hostAddr, dport: 1, a: new Uint8Array([1]) });
     assert.equal(await premature.waitClosed(), 1008, 'hello 前的 datagram 是协议违规');
@@ -219,7 +217,7 @@ async function main(): Promise<void> {
     oversized.socket.send(Buffer.alloc(RA2NET_MAX_FRAME_BYTES + 1));
     assert.equal(await oversized.waitClosed(), 1009, '超大帧 message-too-big');
 
-    // ---- 断线广播 peer-leave；房间回收后允许不同版本重新建房 --------------------------------
+    // ---- Broadcast peer-leave on disconnect; allow a different version after room cleanup ----
     await joiner.close();
     const leaveNotice = await host.next(isType('peer-leave'));
     assert.ok(leaveNotice.t === 'peer-leave' && leaveNotice.addr === joinerAddr, 'peer-leave 广播');
@@ -229,7 +227,7 @@ async function main(): Promise<void> {
     await observer.close();
     await sleep(60);
     const fresh = await open('fresh-one');
-    fresh.hello(ROOM, OTHER_EXE_HASH); // 房间已回收：旧版本约束随之消失
+    fresh.hello(ROOM, OTHER_EXE_HASH); // The room has been reclaimed, removing the old version constraint
     const freshWelcome = await fresh.next(isType('welcome'));
     assert.ok(freshWelcome.t === 'welcome', '空房间回收后重建');
 

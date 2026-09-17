@@ -1,8 +1,6 @@
 /**
- * 游戏文件层单元测试（迁移自 scripts/fileProviderSmoke.mts）：
- * Memory/Directory provider 的路径归一化与发现流程（含假 File System Access 句柄），
- * 以及 Win32Shim 的临界区、GetDriveTypeA、MCIWndCreateA+MM_MCINOTIFY、
- * 小块 _lwrite 合并落盘、存档 save→load 重开。
+ * Game file layer unit tests (migrated from scripts/fileProviderSmoke.mts):
+ * Memory/Directory provider path normalization and discovery (including fake File System Access handles), plus Win32Shim critical sections, GetDriveTypeA, MCIWndCreateA+MM_MCINOTIFY, coalesced small _lwrite writes, and save -> load reopening.
  */
 import { describe, expect, it } from 'vitest';
 import { DirectoryGameFileProvider } from '../../src/platform/browser/files/directory';
@@ -16,7 +14,7 @@ import { DRIVE_CDROM, DRIVE_FIXED, DRIVE_NO_ROOT_DIR } from '../../src/vm86/win3
 import type { Win32Shim } from '../../src/games/win32Shim';
 import { callShim, createGuestMemory, createTestShim, writeAsciiZ } from '../helpers/guestMemory';
 
-/** dispatch 一次并取无符号 EAX（等价原 smoke 里的局部 dispatch）。 */
+/** Dispatch once and read unsigned EAX (equivalent to the original smoke test's local dispatch). */
 function dispatch(shim: Win32Shim, key: string, args: number[] = []): number {
   return callShim(shim, key, args).eax >>> 0;
 }
@@ -60,7 +58,7 @@ describe('discoverGameSources', () => {
     expect(alternateSources[0]?.game.executable).toBe('game_custom.exe');
   });
 
-  // 任意 EXE 都能被发现；卸载程序（uninst*）、联机客户端和非 PE 文件跳过。
+  // Discover arbitrary EXEs; skip uninstallers (uninst*), multiplayer clients, and non-PE files.
   it('任意 EXE 可发现；卸载程序/联机客户端/非 PE 文件跳过', async () => {
     const generic = new MemoryGameFileProvider(
       new Map([
@@ -91,12 +89,12 @@ describe('directoryScopeOf', () => {
 });
 
 describe('OverlayGameFileProvider（战役包叠加语义）', () => {
-  // 模拟联机精简基包：movies01.mix 为 0 字节占位、无 maps02.mix；战役包作 overlay。
-  // 只玩遭遇战的用户不挂战役包，基包行为不变；挂上后电影走稀疏分页流式读取，
-  // readPrefix 必须返回真实 totalSize（>= 前缀长度）才会 markFileRangeBacked。
+  // Simulate a trimmed multiplayer base package: movies01.mix is a zero-byte placeholder and maps02.mix is absent; overlay the campaign package.
+  // Skirmish-only users keep base-package behavior without the campaign package. With it mounted, movies use sparse paged streaming;
+  // readPrefix must return the actual totalSize (>= prefix length) before markFileRangeBacked can run.
   it('overlay 文件赢过基包：read/readPrefix/readRange；readPrefix 返回真实 totalSize', async () => {
     const placeholderMovies = new Uint8Array(0);
-    const realMovies = new Uint8Array(8 * 1024 * 1024); // 模拟远大于 1MiB 稀疏前缀的电影容器
+    const realMovies = new Uint8Array(8 * 1024 * 1024); // Simulate a movie container much larger than the 1 MiB sparse prefix
     realMovies[12345] = 0xab;
     const base = new MemoryGameFileProvider(new Map([['movies01.mix', placeholderMovies]]), true, '联机精简基包');
     const campaign = new OverlayGameFileProvider(
@@ -114,7 +112,7 @@ describe('OverlayGameFileProvider（战役包叠加语义）', () => {
     const prefix = await campaign.readPrefix('movies01.mix', 1024 * 1024);
     expect(prefix).toBeTruthy();
     expect(prefix!.bytes.length).toBe(1024 * 1024);
-    expect(prefix!.totalSize).toBe(realMovies.length); // 真实逻辑长度 → range-backed
+    expect(prefix!.totalSize).toBe(realMovies.length); // Actual logical length -> range-backed
     const range = await campaign.readRange('movies01.mix', 12300, 512);
     expect(range![45]).toBe(0xab);
   });
@@ -129,16 +127,16 @@ describe('OverlayGameFileProvider（战役包叠加语义）', () => {
       false,
     );
 
-    // maps02.mix 只存在于战役包：读得到、hasKnownFile 不落缺失缓存。
+    // maps02.mix exists only in the campaign package: it is readable, and hasKnownFile does not cache it as missing.
     expect(campaign.hasKnownFile('maps02.mix')).toBe(true);
     expect(await campaign.read('maps02.mix')).toEqual(new Uint8Array([9, 9, 9]));
-    // 基包文件穿透（language.mix 仍由基包提供）。
+    // Fall through to base-package files (language.mix still comes from the base package).
     expect(campaign.hasKnownFile('language.mix')).toBe(true);
     expect(await campaign.read('language.mix')).toEqual(new Uint8Array([1, 2, 3]));
-    // 两方都没有的文件：hasKnownFile false（基包内存目录确定无此文件）。
+    // A file absent from both: hasKnownFile is false (the base package's in-memory directory establishes its absence).
     expect(campaign.hasKnownFile('thememd.mix')).toBe(false);
     expect(await campaign.read('thememd.mix')).toBe(null);
-    // list 合并两方条目。
+    // list merges entries from both.
     const listing = await campaign.list('');
     expect(listing).toContain('maps02.mix');
     expect(listing).toContain('language.mix');
@@ -154,7 +152,7 @@ describe('OverlayGameFileProvider（战役包叠加语义）', () => {
       false,
     );
     await campaign.write('subtitle.txt', new Uint8Array([7, 8]));
-    // 存档等写入应落到持久层（父 provider 写档），overlay 只挡读取。
+    // Save writes must reach the persistent layer (the parent provider); the overlay intercepts only reads.
     expect(await base.read('subtitle.txt')).toEqual(new Uint8Array([7, 8]));
     expect(await campaign.read('subtitle.txt')).toEqual(new Uint8Array([1]));
   });
@@ -162,15 +160,15 @@ describe('OverlayGameFileProvider（战役包叠加语义）', () => {
   it('parentFirst：本地完整安装优先（中文资源），在线包只补缺', async () => {
     const local = new MemoryGameFileProvider(
       new Map([
-        ['language.mix', new Uint8Array([1, 1, 1])], // 本地中文语言包
+        ['language.mix', new Uint8Array([1, 1, 1])], // Local Chinese language pack
         ['ra2.ini', new Uint8Array([2])],
       ]),
     );
     const online = new OverlayGameFileProvider(
       local,
       new Map([
-        ['language.mix', new Uint8Array([9, 9, 9])], // 包内英文语言包，不得遮蔽本地
-        ['game.exe', new Uint8Array([0x4d, 0x5a])], // 包内独有文件补缺
+        ['language.mix', new Uint8Array([9, 9, 9])], // The packaged English language pack must not override the local one
+        ['game.exe', new Uint8Array([0x4d, 0x5a])], // Files unique to the package fill gaps
       ]),
       '（在线覆盖）',
       false,
@@ -183,7 +181,7 @@ describe('OverlayGameFileProvider（战役包叠加语义）', () => {
     expect(await online.read('game.exe')).toEqual(new Uint8Array([0x4d, 0x5a]));
     expect(online.hasKnownFile('language.mix')).toBe(true);
     expect(online.hasKnownFile('missing.mix')).toBe(false);
-    // 写入始终走底层（本地目录），不因 parentFirst 改变。
+    // Writes always reach the underlying local directory, regardless of parentFirst.
     await online.write('Save/slot.sav', new Uint8Array([7]));
     expect(await local.read('Save/slot.sav')).toEqual(new Uint8Array([7]));
   });
@@ -305,7 +303,7 @@ describe('Win32Shim 系统语义', () => {
     expect(memory.bytes[criticalSectionPtr + 8], '完全退出应清除 RecursionCount').toBe(0);
   });
 
-  // 默认只有安装盘；光盘由实际 source 显式挂载，不能改变免光盘版本的启动分支。
+  // Only the installation drive exists by default; actual sources explicitly mount CDs, preserving startup branches for no-CD versions.
   it('GetDriveTypeA 默认仅安装盘；MessageBoxA 的 MB_YESNO 默认 IDYES', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory);
@@ -409,7 +407,7 @@ describe('Win32Shim 系统语义', () => {
     expect(dispatch(shim, 'USER32.DLL!SendMessageA', [mciWindow, 0x0010, 0, 0])).toBe(0);
   });
 
-  // 存档常用大量小块 _lwrite：客体内合并，只在 _lclose 时交给目录后端一次。
+  // Saving often uses many small _lwrite calls: coalesce them in the guest and send one write to the directory backend at _lclose.
   it('小块 _lwrite 合并落盘；持久化快照可重新打开读回（save→load）', () => {
     const memory = createGuestMemory();
     const persisted: Array<{ path: string; bytes: Uint8Array }> = [];
@@ -431,7 +429,7 @@ describe('Win32Shim 系统语义', () => {
     expect(persisted[0]?.bytes.length).toBe(16_384);
     expect([...persisted[0]!.bytes.subarray(0, 4)]).toEqual([0, 1, 2, 3]);
 
-    // 重新创建 VM/句柄层，从持久化快照加载刚保存的存档，覆盖 save → load 的实际句柄路径。
+    // Recreate the VM/handle layer and load the newly saved file from the persisted snapshot, covering the actual save -> load handle path.
     const loadedMemory = createGuestMemory();
     const loadedShim = createTestShim(loadedMemory);
     loadedShim.mountFile(persisted[0]!.path, persisted[0]!.bytes);

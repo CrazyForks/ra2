@@ -13,8 +13,8 @@ import { createThirdPartyCacheHandler } from './src/server/thirdPartyCache';
 type ViteHttpServer = NonNullable<ViteDevServer['httpServer']> | NonNullable<PreviewServer['httpServer']>;
 
 /**
- * 把本地且被 Git 忽略的 game/ 原版资源以 /game/* 路径暴露给浏览器。
- * 这样 fetch('/game/Title.bmp') 就能拿到原版数据文件，无需复制资源。
+ * Expose local, Git-ignored original game/ resources to the browser at /game/*.
+ * For example, fetch('/game/Title.bmp') reads the original data file without copying assets.
  */
 const GAME_DIR = resolve(process.env.RA2_GAME_ROOT || fileURLToPath(new URL('./game', import.meta.url)));
 
@@ -22,7 +22,7 @@ function gameAssetsPlugin(): Plugin {
   return {
     name: 'ra2:game-assets',
     configureServer(server) {
-      // 缓存不进 public/dist，生产构建与 preview 不提供此端点。
+      // The cache stays outside public/dist; production builds and preview do not expose this endpoint.
       server.middlewares.use(
         '/__third-party',
         createThirdPartyCacheHandler(
@@ -51,13 +51,13 @@ function ra2NetworkRelayPlugin(): Plugin {
   };
 }
 
-/** attachDplayRelay 只需要这两个成员；dev/preview 的 server 都是结构化子集。 */
+/** attachDplayRelay needs only these two members; dev/preview servers are structural subsets. */
 interface RelayHostServer {
   httpServer: ViteHttpServer | null;
   close(): Promise<void>;
 }
 
-/** RA2 虚拟局域网中继挂在 /ra2。 */
+/** Mount the RA2 virtual-LAN relay at /ra2. */
 function attachRa2NetworkRelay(server: RelayHostServer): void {
   const httpServer = server.httpServer;
   if (!httpServer) return;
@@ -93,7 +93,7 @@ function serveGameAsset(req: IncomingMessage, res: ServerResponse): void {
     res.end('bad path');
     return;
   }
-  // 游戏目录枚举端点，供浏览器端自动发现 EXE（如 /game/.list?dir=ra2）。
+  // Game-directory enumeration endpoint for browser EXE discovery, such as /game/.list?dir=ra2.
   if (urlPath === '/.list') {
     const directory = new URLSearchParams(query).get('dir') ?? '';
     const target = resolveGameDirectory(directory);
@@ -113,7 +113,7 @@ function serveGameAsset(req: IncomingMessage, res: ServerResponse): void {
   }
   const resolved = resolveGameFile(urlPath);
   if (!resolved) {
-    // 必须在 /game 中终止；交给 Vite SPA fallback 会把 index.html 误当成游戏文件。
+    // Terminate within /game; passing to Vite's SPA fallback would mistake index.html for a game file.
     res.statusCode = 404;
     res.end('not found');
     return;
@@ -142,7 +142,7 @@ function serveGameAsset(req: IncomingMessage, res: ServerResponse): void {
   createReadStream(resolved).pipe(res);
 }
 
-/** resolveGameFile 的目录版：逐级大小写无关解析，最终必须是 GAME_DIR 内的目录。 */
+/** Directory counterpart of resolveGameFile: resolve each level case-insensitively; the result must be a directory within GAME_DIR. */
 function resolveGameDirectory(urlPath: string): string | null {
   if (!urlPath) return GAME_DIR;
   const parts = urlPath.replace(/\\/g, '/').split('/').filter(Boolean);
@@ -160,7 +160,7 @@ function resolveGameDirectory(urlPath: string): string | null {
   }
 }
 
-/** 原版目录和文件名大小写混乱，逐级做大小写无关解析。 */
+/** Original directory and file names use inconsistent casing; resolve each level case-insensitively. */
 function resolveGameFile(urlPath: string): string | null {
   const parts = urlPath.replace(/\\/g, '/').split('/').filter(Boolean);
   if (!parts.length || parts.some((part) => part === '.' || part === '..')) return null;
@@ -177,7 +177,7 @@ function resolveGameFile(urlPath: string): string | null {
   }
 }
 
-/** 跨平台判断解析后的路径仍位于 game 根目录内；Windows 使用反斜杠，不能硬编码 `/`。 */
+/** Cross-platform check that the resolved path remains within the game root; Windows uses backslashes, so do not hardcode '/'. */
 function isWithinGameDirectory(candidate: string): boolean {
   const relativePath = relative(resolve(GAME_DIR), resolve(candidate));
   return relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath));
@@ -185,8 +185,8 @@ function isWithinGameDirectory(candidate: string): boolean {
 
 export default defineConfig({
   plugins: [basicSsl(), gameAssetsPlugin(), ra2NetworkRelayPlugin()],
-  // hmr=false 的 VM 页面不能依赖重载消化二次预构建；提前登记 JSX 和 Worker 动态依赖，
-  // 避免懒加载页面拿到另一份 React。这里只生成开发缓存，不提前加载浏览器实验模块。
+  // VM pages with hmr=false cannot rely on reloads to handle a second prebundle. Register JSX and Worker dynamic dependencies
+  // up front to avoid a second React instance in lazy pages. This only builds development caches; browser experiments are not preloaded.
   optimizeDeps: {
     include: [
       'react',
@@ -201,21 +201,21 @@ export default defineConfig({
     ],
   },
   server: {
-    host: true, // 监听 0.0.0.0，局域网内其他设备可访问（终端会打印 Network 地址）
+    host: true, // Listen on 0.0.0.0 so other LAN devices can connect (the terminal prints the Network address)
     port: 15174,
     strictPort: true,
-    // VM 和长时间回归都是有状态的；代码变动不应重载页面或销毁测试中的 VM。
+    // VMs and long regressions are stateful; code changes must not reload pages or destroy VMs under test.
     hmr: false,
-    // 开发期禁缓存：模块热更新/硬刷新时避免浏览器复用旧模块（曾导致 map.ts 新旧混跑）
-    // （/game 资源中间件自行设置 max-age=86400，不受此影响）
+    // Disable caching in development to prevent stale modules during hot updates/hard reloads (previously mixed old and new map.ts code).
+    // The /game resource middleware sets its own max-age=86400 and is unaffected.
     headers: { 'Cache-Control': 'no-store' },
     fs: { allow: ['.'] },
   },
   preview: { port: 4174, strictPort: true },
   build: { target: 'es2022' },
   worker: {
-    // vmClient.ts 以 `new Worker(new URL('./vmWorker.ts', import.meta.url), { type: 'module' })`
-    // 起模块 worker；Vite 对代码分割 worker 要求 ES 输出（默认 iife 会报错）。
+    // vmClient.ts starts a module Worker with new Worker(new URL('./vmWorker.ts', import.meta.url), { type: 'module' }).
+    // Vite requires ES output for code-split Workers; the default iife format fails.
     format: 'es',
   },
 });

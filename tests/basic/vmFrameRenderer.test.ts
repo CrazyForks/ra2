@@ -1,3 +1,4 @@
+import '../helpers/chineseLocale';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createVmFrameRenderer } from '../../src/ui/pages/game/vmFrameRenderer';
 import { fsrUpscaleMode, spatialUpscaleEnabled } from '../../src/ui/pages/game/spatialUpscale';
@@ -90,7 +91,7 @@ class FakeWebGl {
   readonly uploads: unknown[][] = [];
 
   readonly loseContextCalls: string[] = [];
-  /** 只模拟 WEBGL_lose_context；其余扩展（如 debug_renderer_info）仍返回 null。 */
+  /** Mock only WEBGL_lose_context; other extensions such as debug_renderer_info still return null. */
   getExtension(name: string): object | null {
     if (name === 'WEBGL_lose_context') return { loseContext: () => this.loseContextCalls.push(name) };
     return null;
@@ -234,7 +235,7 @@ describe('VmFrameRenderer 生命周期', () => {
     expect(renderer.upscaleMode).toBe('off');
     expect(gl.deletedPrograms).toHaveLength(20);
     expect(gl.deletedTextures).toHaveLength(20);
-    // 每个 program 两个 shader：链接完成后句柄即回收，失败路径同样回收。
+    // Two shaders per program: release handles after linking, including on failure.
     expect(gl.deletedShaders).toHaveLength(40);
     expect(getContext).toHaveBeenCalledTimes(1);
   });
@@ -245,7 +246,7 @@ describe('VmFrameRenderer 生命周期', () => {
     const renderer = createVmFrameRenderer(canvas as unknown as HTMLCanvasElement);
     renderer.setUpscaleMode('bicubic');
     renderer.setUpscaleMode('off');
-    // 上下文被各后端共用：换档时释放会让新后端拿到已丢失的上下文。
+    // Backends share the context; releasing it during a mode switch would give the new backend a lost context.
     expect(gl.loseContextCalls).toHaveLength(0);
     renderer.destroy();
     expect(gl.loseContextCalls).toHaveLength(1);
@@ -422,9 +423,9 @@ describe('VmFrameRenderer 生命周期', () => {
     expect(renderer.upscaleMode).toBe('fsr-rcas');
     const frame = indexedFrame(4, 4);
     renderer.draw(frame, 8, 8);
-    // 构造 2 次（绑定/解绑）+ 每次放大绘制 2 次（进 FBO / 回画布）。
+    // Two calls during construction (bind/unbind) plus two per upscale draw (into the FBO/back to the canvas).
     expect(gl.calls.filter((call) => call === 'bindFramebuffer')).toHaveLength(4);
-    // 上传：中间纹理 1×1 占位 + 首帧按目标尺寸重分配 + 索引纹理 + 调色板。
+    // Uploads: 1x1 intermediate-texture placeholder, first-frame resize to target dimensions, indexed texture, and palette.
     expect(gl.calls.filter((call) => call === 'texImage2D')).toHaveLength(4);
     renderer.draw(frame, 8, 8);
     expect(gl.calls.filter((call) => call === 'texImage2D')).toHaveLength(4);
@@ -449,7 +450,7 @@ describe('VmFrameRenderer 生命周期', () => {
     const frame = indexedFrame(4, 4);
     renderer.draw(frame, 8, 8);
     expect(renderer.upscaleStatus).toContain('ScaleFX');
-    // 链：pass0..3 → 1× 中间纹理，pass4 → 3×，最终贴合 → 画布，共 6 次绘制。
+    // Chain: pass0..3 -> 1x intermediate textures, pass4 -> 3x, final fit -> canvas; six draws total.
     expect(gl.calls.filter((call) => call === 'drawArrays')).toHaveLength(6);
     expect(gl.calls.filter((call) => call.startsWith('uniform:outputSize:'))).toEqual(['uniform:outputSize:12,12']);
     renderer.draw(frame, 4, 4);

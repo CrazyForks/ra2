@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { loadCachedGameFiles, saveCachedGameFiles, restoreCachedFileProvider } from '../../src/adapter/cachedGameFiles';
 
-/** 仅模拟本模块使用的请求/游标；真实 IndexedDB 事务由浏览器刷新回归覆盖。 */
+/** Mock only requests/cursors used by this module; browser reload regressions cover real IndexedDB transactions. */
 function cache(initial = new Map<string, unknown>(), writeError?: DOMException) {
   const rows = initial;
   type Range = { lower: string; upper: string };
@@ -13,7 +13,7 @@ function cache(initial = new Map<string, unknown>(), writeError?: DOMException) 
       request.result = {
         close() {},
         transaction(_store: string, mode?: string) {
-          // 写事务提交前不改变持久化行，配额失败与真实 IDB 一样保留整个旧资源集。
+          // Do not change persisted rows before a write transaction commits; quota failures preserve the entire old resource set, as real IDB does.
           const transactionRows = mode === 'readwrite' ? new Map(rows) : rows;
           const transaction: any = {
             objectStore() {

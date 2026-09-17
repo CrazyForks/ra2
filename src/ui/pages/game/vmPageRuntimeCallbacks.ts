@@ -1,7 +1,7 @@
+import { t } from '../../shared/i18n/translate';
 /**
- * 运行时 VM 回调对象（拆分自 page.ts 的 startVmPage）：
- * 状态、调用与帧回调组合成 GameVmCallbacks，由 guardVmCallbacks 代次过滤。
- * 会随会话重赋值的局部状态一律经 getter/setter 传入，避免捕获过期值。
+ * VM runtime callback object extracted from page.ts startVmPage.
+ * Compose status, call, and frame callbacks into GameVmCallbacks, filtered by guardVmCallbacks generations. Pass session-reassigned local state through getters/setters to avoid capturing stale values.
  */
 import type { VmShell } from '../../../adapter/vmShell';
 import type { GameVmCallbacks } from '../../../app/session/runtimeEvents';
@@ -74,7 +74,7 @@ export function createVmRuntimeCallbacks(deps: VmPageRuntimeCallbackDeps): GameV
       networkStatus.set({
         phase: next.phase,
         text: formatNetworkStatus(next),
-        title: `虚拟 LAN：${next.room}。中继连接状态不代表游戏逻辑同步。`,
+        title: t('虚拟 LAN：{0}。中继连接状态不代表游戏逻辑同步。', next.room),
       });
     },
     onStatus(next) {
@@ -87,7 +87,7 @@ export function createVmRuntimeCallbacks(deps: VmPageRuntimeCallbackDeps): GameV
       toolbar.setMapsAvailable(next.phase === 'running' && getVm() !== null);
       onUpdateBootOverlay(next);
       onScheduleRender();
-      // 游戏运行态切换客户端外壳：running 时画面独占整窗，菜单态恢复内容页与导航条。
+      // Switch the client shell with game state: running fills the window with gameplay; menus restore the content page and navigation bar.
       gameRunning.set(next.phase === 'running');
       if (next.phase === 'exited') queueMicrotask(() => void onFinishExited(next.detail));
     },
@@ -101,7 +101,7 @@ export function createVmRuntimeCallbacks(deps: VmPageRuntimeCallbackDeps): GameV
       if (!getPanelCreated()) return;
       callHistogram.set(call.imported.key, (callHistogram.get(call.imported.key) ?? 0) + 1);
       onExposeRuntimeCallProbe();
-      // 初始化会有 10 万级调用；日志稀疏采样，DOM 更新交给 rAF 合并。
+      // Initialization can issue hundreds of thousands of calls; sample logs sparsely and coalesce DOM updates with rAF.
       if (ordinal <= 200 || ordinal % 256 === 0) {
         onAppendCall(calls, call, ordinal);
         onScheduleRender();
@@ -129,7 +129,7 @@ export function createVmRuntimeCallbacks(deps: VmPageRuntimeCallbackDeps): GameV
       }
     },
     onBlocked(call) {
-      if (getPanelCreated()) onAppendCall(calls, call, getCallCount(), '← 下一个迁移边界');
+      if (getPanelCreated()) onAppendCall(calls, call, getCallCount(), t('← 下一个迁移边界'));
       onScheduleRender();
     },
     onLogicFrame(count) {
@@ -146,8 +146,8 @@ export function createVmRuntimeCallbacks(deps: VmPageRuntimeCallbackDeps): GameV
       if (debugAutoOpen) {
         canvas.dataset.vmFrame = `${presenter.frameVersion}`;
         canvas.dataset.vmResolution = `${frame.width}x${frame.height}`;
-        // 哈希只用于低频 E2E 采样；不必跟 60fps 呈现逐帧计算。每四帧一次既能
-        // 捕捉 logo/视频变化，又不让探针本身抢占过场音频和页面响应。
+        // Hashes serve low-frequency E2E sampling, not every 60fps presentation frame. Sampling every fourth frame
+        // captures logo/video changes without the probe starving transition audio or page responsiveness.
         if ((presenter.frameVersion & 3) === 0) canvas.dataset.vmFrameSample = sampleVmFrameHash(frame);
         const battlefield = measureRa2BattlefieldFrame(frame);
         canvas.dataset.vmBattlefield = `${battlefield.rightEdgeRatio.toFixed(4)},${battlefield.fieldRatio.toFixed(4)}`;

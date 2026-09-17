@@ -2,7 +2,7 @@ import type { GuestMemory } from '../../vm86/win32';
 import { createFrameCounterReader } from '../shared/frameCounter';
 import { RA2_STARTUP_PAGE_HASH } from './startupPage';
 
-/** RA2 1.006：0x540676 读取帧计数，0x540681 INC EDX，0x540684 写回。 */
+/** RA2 1.006: read the frame counter at 0x540676, INC EDX at 0x540681, and write back at 0x540684. */
 export function createRa2FrameReader(memory: GuestMemory, hash: string) {
   return createFrameCounterReader(memory, hash, {
     hash: RA2_STARTUP_PAGE_HASH,

@@ -305,7 +305,7 @@ function createHarness(
   const clientAudio = new IntegrationAudio();
   let core: VmCore | null = null;
   let shim: IntegrationShim | null = null;
-  // 在最终构造边界替换重型 shim，保留 Worker → 游戏配置工厂的真实参数传递。
+  // Replace the heavy shim only at the final construction boundary, preserving real arguments from the Worker to the game-configuration factory.
   vi.spyOn(gameShim, 'Win32Shim').mockImplementation(function (_memory, shimOptions) {
     shim = new IntegrationShim(shimOptions ?? {});
     return shim as unknown as Win32Shim;
@@ -374,7 +374,7 @@ async function cleanupHarness(harness: IntegrationHarness): Promise<void> {
     try {
       await harness.core.destroy();
     } catch {
-      /* 测试故障路径本身可能让 flush 失败 */
+      /* Testing the failure path may itself make flush fail */
     }
   }
 }

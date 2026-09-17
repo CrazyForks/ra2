@@ -1,11 +1,11 @@
-/** 地图列表已由客体绘制；宿主呈现不能根据缓存的选择序号覆写这些像素。 */
+/** The guest already draws the map list; host presentation must not overwrite these pixels using a cached selection index. */
 import { describe, expect, it } from 'vitest';
 import type { SurfaceState, VmFrame } from '../../src/vm86/win32';
 import { callShim, createGuestMemory, createTestShim, readU32, writeAsciiZ, writeU32 } from '../helpers/guestMemory';
 
 const W = 800;
 const H = 600;
-// 列表控件几何：三行、行高 16，屏幕 y = LIST_Y..LIST_Y+48。
+// List geometry: three rows, each 16 pixels high, at screen y = LIST_Y..LIST_Y+48.
 const LIST_X = 100;
 const LIST_Y = 100;
 const LIST_W = 200;
@@ -14,17 +14,17 @@ const ROW_H = 16;
 
 type FakeMemory = ReturnType<typeof createGuestMemory>;
 
-/** 16bpp 565 像素写入。 */
+/** Write a 16bpp RGB565 pixel. */
 function write565(memory: FakeMemory, address: number, value: number): void {
   memory.write_memory([value & 0xff, value >>> 8], address);
 }
 
-/** 从 0xR,G,B 计算 RGB565 并写入。 */
+/** Convert 0xR,G,B to RGB565 and write it. */
 function seed565(memory: FakeMemory, address: number, r: number, g: number, b: number): void {
   write565(memory, address, ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
 }
 
-/** 填充主表面一块矩形区域为同一 565 值。 */
+/** Fill a rectangle in the primary surface with one RGB565 value. */
 function fillArea(
   memory: FakeMemory,
   surface: SurfaceState,
@@ -60,7 +60,7 @@ function setupPage(id: number): PageHarness {
   const shim = createTestShim(memory, { gameId: 'ra2', onFrame: (frame) => frames.push(frame) });
   (shim as unknown as { shellPageTitle: string }).shellPageTitle = 'choosemap';
 
-  // 地图和模式列表都通过客体窗口过程绘制。
+  // Both map and mode lists are drawn through the guest window procedure.
   writeAsciiZ(memory, 0x60_000, 'ListBox');
   const hwnd = callShim(shim, 'USER32.DLL!CreateWindowExA', [
     0,
@@ -86,7 +86,7 @@ function setupPage(id: number): PageHarness {
   send(0x0180, 0, 0x61_000);
   send(0x01a0, 0, ROW_H); // LB_SETITEMHEIGHT
 
-  // DirectDraw：primary + 全屏 caps=0 背景工作层。
+  // DirectDraw: primary + fullscreen caps=0 background working layer.
   callShim(shim, 'DDRAW.COM!IDirectDraw.SetDisplayMode', [0, W, H, 16]);
   const desc = 0x10_000;
   const out = 0x10_100;
@@ -121,11 +121,11 @@ function setupPage(id: number): PageHarness {
   };
 }
 
-/** 行内容用灰底 + 指定行放白字（模拟列表文字）。 */
+/** Use a gray background with white text on the specified row to simulate list text. */
 function paintRows(harness: PageHarness, textRow: number): void {
   const { memory, primary, bg } = harness;
-  fillArea(memory, bg, 0, 0, W, H, 0x001f); // 背景层：蓝
-  fillArea(memory, primary, 0, 0, W, H, 0x39e7); // 主表面：灰 60
+  fillArea(memory, bg, 0, 0, W, H, 0x001f); // Background layer: blue
+  fillArea(memory, primary, 0, 0, W, H, 0x39e7); // Primary surface: gray 60
   if (textRow >= 0) {
     seed565(
       memory,
@@ -145,7 +145,7 @@ describe('ChooseMap 客体画面保持', () => {
   it.each([1363, 1771])('列表 %i 重建、移动或更换选择时不覆写客体画面', (id) => {
     const page = setupPage(id);
     paintRows(page, 1);
-    // 客体可滚动列表，选中序号不等于屏幕行号；同时保留红色内容和白字。
+    // Guest lists can scroll, so the selection index differs from the screen row; preserve both red content and white text.
     fillArea(page.memory, page.primary, LIST_X, LIST_Y, LIST_X + LIST_W, LIST_Y + ROW_H, 0xf800);
     page.unlockPrimary();
     const before = page.frames.at(-1)!.rgba!.slice();

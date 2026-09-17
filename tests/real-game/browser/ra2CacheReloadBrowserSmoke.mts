@@ -1,4 +1,4 @@
-/** 本地 ZIP 首次导入后刷新，必须从持久化资源正常启动，不能只验证开发版。 */
+/** After the first local ZIP import, reload must boot normally from persisted resources; testing only development mode is insufficient. */
 import assert from 'node:assert/strict';
 import { chromium, expect } from '@playwright/test';
 const archive = process.env.RA2_BROWSER_ZIP;
@@ -7,8 +7,8 @@ const origin = process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15174';
 const game = process.env.RA2_BROWSER_GAME === 'yr' ? 'yr' : 'ra2';
 const browser = await chromium.launch({ args: ['--no-sandbox', '--enable-unsafe-swiftshader'] });
 try {
-  const context = await browser.newContext({ ignoreHTTPSErrors: true });
-  // 诊断对照：仅移除分层计划，保留原有完整解压路径；绝不替换资源或 EXE 字节。
+  const context = await browser.newContext({ locale: 'zh-CN', ignoreHTTPSErrors: true });
+  // Diagnostic comparison: remove only the layered plan and retain full extraction; never replace resource or EXE bytes.
   if (process.env.RA2_BROWSER_FULL_ARCHIVE === '1')
     await context.addInitScript(() => {
       const NativeWorker = Worker;
@@ -44,7 +44,7 @@ try {
     const session = await context.newCDPSession(page);
     await session.send('Storage.overrideQuotaForOrigin', { origin: new URL(origin).origin, quotaSize });
     console.log('storage-override', quotaSize);
-    // 配额覆盖依附于 CDP 会话，保留到 context.close；提前 detach 会撤销覆盖。
+    // The quota override is tied to the CDP session; keep it until context.close, as early detach removes the override.
     assert.equal((await page.evaluate(() => navigator.storage.estimate())).quota, quotaSize, '配额覆盖必须实际生效');
   }
 
@@ -92,8 +92,8 @@ try {
         assert.equal(await indicator.getAttribute('data-phase'), 'complete');
       }
     }
-    // 主菜单可能早于分层解压完成与保存事务创建。等待实际缓存提交，而不是假设
-    // 一次只读事务必然排在保存之后；只读键，避免全量读取带来额外内存峰值。
+    // The main menu may appear before layered extraction finishes and creates the save transaction. Wait for actual cache
+    // commit rather than assuming a read-only transaction runs after saving. Read only keys to avoid a full-read memory spike.
     const readCachedKeys = () =>
       page.evaluate(
         (game) =>

@@ -3,7 +3,7 @@ import { SessionGameFileProvider } from '../../src/platform/browser/files/sessio
 import { readGuestFileSearch } from '../../src/adapter/fileSearch';
 import { IndexedDbWriteCache } from '../../src/platform/browser/files/writeCache';
 
-/** 每次 get 都独立结构化克隆，模拟 IndexedDB 的读所有权；不模拟共享内存缓存。 */
+/** Each get independently structured-clones its result, modeling IndexedDB read ownership rather than a shared-memory cache. */
 function database(rows: Map<string, ArrayBuffer | Uint8Array>) {
   const returned: Array<ArrayBuffer | Uint8Array | undefined> = [];
   let failure: Error | null = null;

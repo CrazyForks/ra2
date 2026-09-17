@@ -30,7 +30,7 @@ export function isDownloadLanguageFilter(value: string): value is DownloadLangua
   return value === 'all' || value === 'zh-Hans' || value === 'zh-Hant' || value === 'en';
 }
 
-// 仅保留展示和语言筛选需要的数据；链接内容变化时重新核对语言。
+// Retain only data needed for display and language filtering; recheck the language when linked content changes.
 export const gameDownloadCatalog: readonly GameDownloadGroup[] = [
   {
     id: 'ra2',

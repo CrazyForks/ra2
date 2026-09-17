@@ -1,4 +1,4 @@
-/** 本地官方 ONNX → 真实 WebGPU Worker → 采样结果；不需要原版资源，不把模型放进仓库。 */
+/** Local official ONNX -> real WebGPU Worker -> sampled output; no original game assets required, and models stay outside the repository. */
 import { chromium, expect } from '@playwright/test';
 import { PROBE_MODELS } from '../../../src/ui/pages/game/experiments/modelProbe';
 const model = process.env.RA2_PROBE_MODEL;
@@ -14,7 +14,11 @@ const browser = await chromium.launch({
   ],
 });
 try {
-  const page = await browser.newPage({ ignoreHTTPSErrors: true, viewport: { width: 1440, height: 900 } });
+  const page = await browser.newPage({
+    locale: 'zh-CN',
+    ignoreHTTPSErrors: true,
+    viewport: { width: 1440, height: 900 },
+  });
   const errors: string[] = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto(process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15174');
@@ -26,7 +30,7 @@ try {
     )) as typeof import('../../../src/ui/pages/game/state/uiState');
     cancelSourceRequest();
     const current = toolbarState.getSnapshot()!;
-    // 只替换画面采样来源，模型校验/Worker/WebGPU/输出与 UI 全走正式实现。
+    // Replace only the frame-sampling source; model validation, Worker, WebGPU, output, and UI all use the production implementation.
     current.callbacks.onCaptureProbe = (size) => {
       const padded = size + 32;
       const rgba = new Uint8ClampedArray(padded ** 2 * 4);
@@ -68,7 +72,7 @@ try {
   const closed = Promise.all(
     activeWorkers.map((worker) => new Promise<void>((resolve) => worker.on('close', () => resolve()))),
   );
-  // 运行中关闭也必须释放 Worker；不能等慢推理结束后继续写入已关闭的 React 窗口。
+  // Closing during execution must release the Worker; slow inference must not later write into a closed React dialog.
   await dialog.getByRole('button', { name: '采样并推理' }).click();
   await dialog.getByRole('button', { name: '关闭并释放模型' }).click();
   await closed;

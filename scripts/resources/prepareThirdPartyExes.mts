@@ -1,13 +1,11 @@
 /**
- * 从第三方分享地址下载主程序（game.exe / gamemd.exe，URL 与 SHA-256 以
- * manifest 登记为准）到本地：
- *  - .tmp-third-party/（git 忽略）：开发启动与原始 EXE 回归的本地缓存；公共单测不依赖它；
- *  - game/<folder>/：目录存在时补齐缺失的 EXE（供 e2e/开发用；已有文件
- *    字节与登记值不同则保留原文件，不覆盖本地 mod/实验用二进制）。
- * 校验失败即退出码 1，不写入任何未校验字节。
+ * Download executables (game.exe / gamemd.exe) from third-party shared locations, using URLs and SHA-256 values registered in the manifest, to:
+ * - .tmp-third-party/ (gitignored): local cache for development startup and original EXE regressions; public unit tests do not depend on it.
+ * - game/<folder>/: fill in missing EXEs when the directory exists for e2e/development; preserve existing files whose bytes differ from the registered values to avoid overwriting local MOD/experimental binaries.
+ * Exit 1 on verification failure; never write unverified bytes.
  *
- * 用法：pnpm exec tsx scripts/resources/prepareThirdPartyExes.mts [--force]
- *   --force  忽略有效本地缓存，强制重新下载。
+ * Usage: pnpm exec tsx scripts/resources/prepareThirdPartyExes.mts [--force]
+ *   --force  Ignore valid local caches and force a fresh download.
  */
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -30,7 +28,9 @@ async function readIfMatches(path: string, expectedSha: string): Promise<Uint8Ar
   }
 }
 
-/** game/ 目录存在时把 EXE 补到位：缺失则写入，已有则校验；字节不同不覆盖。 */
+/**
+ * If game/ exists, fill in EXEs: write missing files, verify existing ones, and never overwrite differing bytes.
+ */
 async function ensureInGameDir(folder: string, name: string, expectedSha: string, bytes: Uint8Array): Promise<void> {
   const gameDir = join(REPO_ROOT, 'game', folder);
   if (!existsSync(gameDir)) return;

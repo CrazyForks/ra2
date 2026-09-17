@@ -1,7 +1,7 @@
 import type { GameFrameCounters, GamePerformanceSample } from '../games/performance';
 export type { GameFrameReader, GamePerformanceSample } from '../games/performance';
 
-/** 按需采样，不创建计时器；用宿主单调时间衡量真实推进速度，不使用客体时钟。 */
+/** Sample on demand without creating timers; measure actual progress against host monotonic time rather than the guest clock. */
 export class GamePerformanceMeter {
   private previous: { frame: number; at: number } | null = null;
   reset(): void {

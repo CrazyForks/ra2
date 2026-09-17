@@ -4,7 +4,7 @@ import { RA2_STARTUP_PAGE_HASH } from '../../src/games/ra2/startupPage';
 import { YR_STARTUP_PAGE_HASH } from '../../src/games/yr/startupPage';
 import { createGuestMemory } from '../helpers/guestMemory';
 
-// 来自受 SHA-256 校验的 YR 1.001，公共测试不依赖私有 EXE。
+// From SHA-256-verified YR 1.001; public tests do not depend on a private EXE.
 const fixtures = [
   [0x5b6546, [185, 5, 0, 0, 0, 59, 198, 137, 13, 84, 181, 168, 0]],
   [0x5baec5, [184, 5, 0, 0, 0, 137, 21, 96, 235, 168, 0, 139, 21, 76, 178, 168, 0, 59, 214, 163, 84, 181, 168, 0]],

@@ -11,8 +11,10 @@ export interface DeployQueueEntry {
   executed: boolean;
 }
 
-/** 显式诊断用：只读最近 128 个环槽，包含已出队但尚未覆盖的历史。
- * 不是完整事件日志；采样错过覆盖时不得把缺失记录解释为事件未发送。 */
+/**
+ * Explicit diagnostics: read only the latest 128 ring slots, including dequeued history not yet overwritten.
+ * This is not a complete event log; missing overwritten samples do not prove an event was never sent.
+ */
 export function createCommandQueueReader(
   memory: GuestMemory,
   hash: string,
@@ -54,10 +56,10 @@ export function createCommandQueueReader(
           const data = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
           for (let i = 0; i < slots; i++) {
             const offset = i * 111;
-            // 原版 DEPLOY=9；Frame 是原生事件字段，scheduled 队列中为计划执行帧。
+            // Native DEPLOY=9; Frame is the original event field and denotes the planned execution frame in scheduled queues.
             if (bytes[offset] !== 9 || bytes[offset + 2] === 255) continue;
-            // 两版发送路径只 AND 0xFE，执行路径只 OR 1；高7位可能保留栈内容。
-            // 不能按 C++ bool 的规范值 0/1 过滤，否则会遗漏真实本机事件。
+            // Both versions' send paths only AND 0xFE, and execution paths only OR 1; the high seven bits may retain stack data.
+            // Do not filter for canonical C++ bool values 0/1, which would miss real local events.
             const flags = bytes[offset + 1]!;
             result.push({
               queue,

@@ -1,6 +1,7 @@
+import { t } from '../../../shared/i18n/translate';
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 
-/** 遭遇战式窄红卷轴；内容仍由浏览器滚动，只同步位置，不模拟选项点击。 */
+/** Skirmish-style narrow red scrollbar; the browser still scrolls content. Synchronize position without simulating option clicks. */
 export function GameScrollbar({
   viewport,
   controls,
@@ -37,7 +38,7 @@ export function GameScrollbar({
     };
   }, [viewport]);
   if (metrics.max === 0) return null;
-  // 再扣除卷轴自身上下各 1px 边框，避免到底时把手压住向下箭头。
+  // Also subtract the scrollbar's own 1px top/bottom borders so the thumb cannot overlap the down arrow at the bottom.
   const travel = Math.max(1, metrics.height - 42 - 18);
   const thumbTop = (metrics.top / metrics.max) * travel;
   return (
@@ -48,7 +49,7 @@ export function GameScrollbar({
           type="button"
           tabIndex={-1}
           className={`game-scroll-arrow ${direction === -1 ? 'up' : 'down'}`}
-          aria-label={direction === -1 ? '向上滚动' : '向下滚动'}
+          aria-label={direction === -1 ? t('向上滚动') : t('向下滚动')}
           onPointerDown={(event) => {
             event.preventDefault();
             stop();
@@ -78,7 +79,7 @@ export function GameScrollbar({
         <div
           className="game-scroll-thumb"
           role="scrollbar"
-          aria-label="选项滚动条"
+          aria-label={t('选项滚动条')}
           aria-controls={controls}
           aria-orientation="vertical"
           aria-valuemin={0}

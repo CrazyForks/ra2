@@ -128,7 +128,7 @@ describe('桌面鼠标跟手性', () => {
     expect(vm.setCursorPosition).toHaveBeenLastCalledWith(407, 301);
     expect(vm.postMessage).toHaveBeenLastCalledWith(0x200, 0, (301 << 16) | 407);
     expect(vm.postMessage).toHaveBeenCalledTimes(2);
-    expect(present).toHaveBeenCalledTimes(2); // flush 不重复呈现或回退光标
+    expect(present).toHaveBeenCalledTimes(2); // flush neither presents twice nor rolls back the cursor
   });
 
   it('单次移动不在帧尾重复投递，下一帧的首个移动仍立即发送', () => {

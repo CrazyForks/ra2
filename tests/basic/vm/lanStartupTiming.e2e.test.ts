@@ -30,7 +30,7 @@ it('真实 x86 开局桩遵守所有房间档位，保存寄存器、标志和�
           0x9c,
           0x8f,
           0x05,
-          ...le32(dest + 24), // 保存 ZF/CF
+          ...le32(dest + 24), // Save ZF/CF
           ...call32(stub + variant * 128),
           0xa3,
           ...le32(dest),

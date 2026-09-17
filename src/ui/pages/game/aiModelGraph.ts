@@ -1,3 +1,4 @@
+import { t } from '../../shared/i18n/translate';
 import gan from './vendor/Anime4K_Upscale_GAN_x2_M.glsl?raw';
 
 export interface AiPass {
@@ -8,14 +9,15 @@ export interface AiPass {
   shader: string;
 }
 
-/** 只适配仓库内固定的 GAN 模型，不接受用户提供的 shader 或任意 mpv 指令。 */
+/** Support only the repository's fixed GAN model; do not accept user shaders or arbitrary mpv directives. */
 export function anime4kGanPasses(): AiPass[] {
   const blocks = gan.split('//!DESC ').slice(1);
-  if (blocks.length !== 23) throw new Error('GAN 模型层数不符');
+  if (blocks.length !== 23) throw new Error(t('GAN 模型层数不符'));
   return blocks.map((block, index) => {
     const inputs = [...block.matchAll(/^\/\/!BIND (\w+)$/gm)].map((m) => m[1]!);
     const name = block.match(/^\/\/!SAVE (\w+)$/m)?.[1];
-    if (!name || !inputs.length || inputs.length > 8 || !block.includes('#define')) throw new Error('GAN 模型绑定不符');
+    if (!name || !inputs.length || inputs.length > 8 || !block.includes('#define'))
+      throw new Error(t('GAN 模型绑定不符'));
     const uniforms = inputs.map((input) => `tex_${input}`);
     const final = index === blocks.length - 1;
     const samplers = inputs
@@ -28,7 +30,7 @@ export function anime4kGanPasses(): AiPass[] {
           ? `#define ${input}_tex(p) texture(${uniforms[i]}, p)`
           : `#define ${input}_tex(p) texelFetch(${uniforms[i]}, clamp(ivec2((p) * vec2(textureSize(${uniforms[i]}, 0))), ivec2(0), textureSize(${uniforms[i]}, 0)-1), 0)`
       }
-      // 模型偏移按图像顶行递增，FBO 从底行递增；最终层的半像素偏移不能取整。
+      // Model offsets increase from the image's top row; FBO offsets increase from the bottom. Do not round the final layer's half-pixel offsets.
       ${
         final
           ? `#define ${input}_texOff(p) ${input}_tex(uv + (p) * vec2(1.0, -1.0) / vec2(textureSize(${uniforms[i]}, 0)))`
@@ -54,7 +56,7 @@ export function anime4kGanPasses(): AiPass[] {
   });
 }
 
-/** 分支残差网络不能用简单双缓冲：按最后一次使用复用纹理，避免覆盖仍需读取的特征。 */
+/** A branched residual network cannot use simple double buffering; reuse textures after their last use to preserve still-needed features. */
 export function planAiSurfaces(passes: readonly AiPass[]) {
   const lastUse = new Map<string, number>();
   passes.forEach((pass, index) => pass.inputs.forEach((name) => lastUse.set(name, index)));
@@ -66,12 +68,12 @@ export function planAiSurfaces(passes: readonly AiPass[]) {
     inputs.push(
       pass.inputs.map((name) => {
         const slot = slots.get(name);
-        if (slot === undefined) throw new Error(`AI 依赖尚未产生：${name}`);
+        if (slot === undefined) throw new Error(t('AI 依赖尚未产生：{0}', name));
         return slot;
       }),
     );
     if (pass.scale === 2) {
-      if (index !== passes.length - 1) throw new Error('仅支持最后一层放大');
+      if (index !== passes.length - 1) throw new Error(t('仅支持最后一层放大'));
       outputs.push(-1);
       return;
     }
@@ -82,7 +84,7 @@ export function planAiSurfaces(passes: readonly AiPass[]) {
     slots.set(pass.name, slot + 1);
   });
   const output = aliveUntil.length + 1;
-  if (outputs.at(-1) !== -1) throw new Error('AI 模型缺少输出层');
+  if (outputs.at(-1) !== -1) throw new Error(t('AI 模型缺少输出层'));
   outputs[outputs.length - 1] = output;
   return { inputs, outputs, featureCount: aliveUntil.length, output };
 }

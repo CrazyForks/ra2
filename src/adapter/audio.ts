@@ -1,8 +1,7 @@
 /**
- * DirectSound 客体 PCM buffer 的 WebAudio 输出层。
+ * WebAudio output layer for DirectSound guest PCM buffers.
  *
- * 这个模块不依赖 Win32 shim：shim 只需把 CreateSoundBuffer/Lock/Unlock/Play
- * 等调用转换成同名操作，客体内存仍由 shim 自己管理。
+ * This module does not depend on the Win32 shim: the shim translates CreateSoundBuffer/Lock/Unlock/Play and similar calls into the corresponding operations while retaining ownership of guest memory.
  */
 import { DEFAULT_PCM_FORMAT, normalizePcmWaveFormat, type PcmPlayOptions, type PcmWaveFormat } from '../vm86/audio';
 export { DEFAULT_PCM_FORMAT, normalizePcmWaveFormat, parsePcmWaveFormatEx } from '../vm86/audio';
@@ -10,15 +9,16 @@ export type { PcmPlayOptions, PcmWaveFormat } from '../vm86/audio';
 
 export type PcmBufferId = number | string;
 
-/** 实时环形流（ScriptProcessor 回退路径）每个输出量子的帧数：4096 ≈ 85-93ms 缓冲。
- *  该回调跑在主线程；正常路径走 AudioWorklet（音频线程渲染，见 pcmStreamWorklet.js），
- *  只有不支持 AudioWorklet 的浏览器才落到这条回退路径。 */
+/**
+ * Frames per output quantum for the live ring stream's ScriptProcessor fallback: 4096 gives about 85-93ms of buffering.
+ * This callback runs on the main thread; the normal path uses AudioWorklet on the audio thread (see pcmStreamWorklet.js). Only browsers lacking AudioWorklet use this fallback.
+ */
 const STREAM_PROCESSOR_FRAMES = 4_096;
 
-/** pcmStreamWorklet.js 的注册名。 */
+/** Registration name used by pcmStreamWorklet.js. */
 const PCM_STREAM_WORKLET_NAME = 'ra2-pcm-stream';
 
-/** AudioWorklet 模块加载缓存：一次 addModule 全 context 复用；失败后允许重试。 */
+/** AudioWorklet module cache: share one addModule call per context and allow retries after failure. */
 let workletModulePromise: Promise<void> | null = null;
 function loadPcmStreamWorklet(context: AudioContext): Promise<void> {
   workletModulePromise ??= context.audioWorklet
@@ -35,19 +35,19 @@ export interface PcmBufferSnapshot {
   positionBytes: number;
   playing: boolean;
   loop: boolean;
-  /** DirectSound 百分之一 dB，-10000..0。 */
+  /** DirectSound volume in hundredths of a dB, -10000..0. */
   volume: number;
-  /** DirectSound 声像，-10000..10000。 */
+  /** DirectSound pan, -10000..10000. */
   pan: number;
-  /** 实际请求的播放频率，Hz。 */
+  /** Actual requested playback frequency in Hz. */
   frequency: number;
   format: PcmWaveFormat;
 }
 
 export interface WebAudioPcmSinkOptions {
-  /** 便于测试或把输出接入已有 AudioContext。 */
+  /** Supports tests or output into an existing AudioContext. */
   contextFactory?: () => AudioContext;
-  /** 默认连到 context.destination。 */
+  /** Connect to context.destination by default. */
   destination?: (context: AudioContext) => AudioNode;
   onError?: (error: unknown) => void;
 }
@@ -57,12 +57,12 @@ interface PcmBufferState {
   pcm: Uint8Array;
   decoded: AudioBuffer | null;
   source: AudioBufferSourceNode | null;
-  /** 播放中仍会被 Lock/Unlock 覆写的 DirectSound 环形流（回退路径）。 */
+  /** DirectSound ring stream that Lock/Unlock may overwrite during playback (fallback path). */
   stream: ScriptProcessorNode | null;
-  /** 实时流首选路径：音频线程渲染的 AudioWorklet。 */
+  /** Preferred live-stream path: AudioWorklet rendering on the audio thread. */
   worklet: AudioWorkletNode | null;
   streamFrame: number;
-  /** 最近一次 worklet position 回发的 context 时刻（游标外推基准）。 */
+  /** Context time of the latest worklet position message, used as the cursor extrapolation baseline. */
   workletPositionAt: number;
   gain: GainNode | null;
   panner: StereoPannerNode | null;
@@ -76,27 +76,27 @@ interface PcmBufferState {
   frequency: number;
 }
 
-/** DirectSound 音量（百分之一 dB）转 WebAudio 线性 gain。 */
+/** Convert DirectSound volume in hundredths of a dB to linear WebAudio gain. */
 export function directSoundVolumeToGain(volume: number): number {
   const clamped = clamp(Math.trunc(volume), -10_000, 0);
   return clamped === -10_000 ? 0 : 10 ** (clamped / 2_000);
 }
 
-/** DirectSound 声像转 StereoPannerNode 的 -1..1。 */
+/** Convert DirectSound pan to StereoPannerNode's -1..1 range. */
 export function directSoundPanToStereo(pan: number): number {
   return clamp(Math.trunc(pan), -10_000, 10_000) / 10_000;
 }
 
 /**
- * 将 DirectSound 静态 buffer 播放到 WebAudio。
+ * Play static DirectSound buffers through WebAudio.
  *
- * AudioContext 延迟创建。可在页面启动时调用 installUserGestureUnlock，
- * 先于用户手势到达的 Play 会保留 playing 状态，解锁后自动出声。
+ * AudioContext is created lazily. Call installUserGestureUnlock at page startup; Play calls preceding a user gesture retain their playing state and become audible after unlocking.
  */
-/** 主音量初始线性增益：50% 滑杆 → (0.5)^2 平方增益。滑杆百分比与线性增益由这两个
- *  常量互相推导；页面层、工具栏与 worker 配置不再各写一份字面量。 */
+/**
+ * Initial linear master gain: a 50% slider gives squared gain (0.5)^2. These two constants derive slider percentage and linear gain from one another, avoiding duplicate literals in the page, toolbar, and Worker configuration.
+ */
 export const DEFAULT_MASTER_VOLUME = 0.25;
-/** 与 DEFAULT_MASTER_VOLUME 等价的滑杆百分比（0..100）。 */
+/** Slider percentage (0..100) equivalent to DEFAULT_MASTER_VOLUME. */
 export const DEFAULT_VOLUME_PERCENT = Math.round(Math.sqrt(DEFAULT_MASTER_VOLUME) * 100);
 
 export class WebAudioPcmSink {
@@ -104,7 +104,7 @@ export class WebAudioPcmSink {
   private context: AudioContext | null = null;
   private destroyed = false;
   private masterGain: GainNode | null = null;
-  /** 主音量线性增益 0..1，作用于所有 buffer 之后、destination 之前。 */
+  /** Linear master gain 0..1, applied after all buffers and before the destination. */
   private masterVolume = DEFAULT_MASTER_VOLUME;
 
   constructor(private readonly options: WebAudioPcmSinkOptions = {}) {}
@@ -162,7 +162,7 @@ export class WebAudioPcmSink {
     return true;
   }
 
-  /** 把 Unlock 取得的客体 PCM 快照写回镜像 buffer。 */
+  /** Write the guest PCM snapshot obtained by Unlock into the mirrored buffer. */
   writeBuffer(id: PcmBufferId, offset: number, bytes: Uint8Array): number {
     const state = this.buffers.get(id);
     if (!state || bytes.byteLength === 0) return 0;
@@ -170,15 +170,15 @@ export class WebAudioPcmSink {
     const length = Math.min(bytes.byteLength, state.pcm.byteLength - start);
     if (length <= 0) return 0;
 
-    // RA2/Bink 会在 DSBPLAY_LOOPING 播放期间持续覆写 DirectSound 环形缓冲。
-    // AudioBufferSourceNode 只能播放创建时的快照；过去每次 Unlock 都重建 source，
-    // 会反复回卷、堆积 WebAudio 节点，最终还可能拖垮 renderer。首次动态覆写时
-    // 切到单一实时环形播放器，之后只更新 PCM 镜像，播放游标不再重置。
+    // RA2/Bink continually overwrites the DirectSound ring buffer during DSBPLAY_LOOPING playback.
+    // AudioBufferSourceNode plays only its creation-time snapshot; rebuilding the source on every Unlock
+    // repeatedly rewound playback and accumulated WebAudio nodes, potentially overwhelming the renderer. On the first dynamic overwrite,
+    // switch to one live ring player; subsequent writes update only the PCM mirror without resetting the playback cursor.
     const switchToLiveStream = state.playing && state.loop && state.source !== null;
     state.pcm.set(bytes.subarray(0, length), start);
     state.decoded = null;
     if (switchToLiveStream) this.startLiveStream(state);
-    // worklet 路径：把写入区间实时同步给音频线程的渲染器。
+    // Worklet path: synchronize the written range with the audio-thread renderer immediately.
     if (state.worklet && state.playing) {
       this.postWorkletUpdate(state, state.worklet, start, bytes.subarray(0, length));
     }
@@ -190,10 +190,10 @@ export class WebAudioPcmSink {
     if (!state) return false;
     state.loop = options.loop ?? false;
     if ((state.source || state.stream || state.worklet) && options.fromByte === undefined) {
-      // IDirectSoundBuffer::Play 对已在播放的 buffer 不会从头触发一遍。
+      // IDirectSoundBuffer::Play does not restart an already playing buffer from the beginning.
       if (state.source) state.source.loop = state.loop;
       if (state.worklet) {
-        // 非循环流播到末尾会停在 worklet 内部；再次 Play 应恢复出声。
+        // A non-looping stream stops internally at its end; another Play must resume audible playback.
         this.postWorkletMessage(state, { kind: 'play' });
         this.postWorkletMessage(state, { kind: 'set-loop', loop: state.loop });
       }
@@ -252,7 +252,7 @@ export class WebAudioPcmSink {
     return true;
   }
 
-  /** 主音量：整个 sink 输出的线性增益（0=静音，1=满）。先于用户手势时也可调用，节点惰性创建后生效。 */
+  /** Master volume: linear gain for the entire sink (0=mute, 1=full). May be set before a user gesture; takes effect when nodes are created lazily. */
   setMasterVolume(linear: number): void {
     this.masterVolume = clamp(linear, 0, 1);
     if (this.masterGain && this.context) {
@@ -312,7 +312,7 @@ export class WebAudioPcmSink {
     }
   }
 
-  /** 必须从 pointerdown/keydown 等用户手势调用。 */
+  /** Must be called from a user gesture such as pointerdown/keydown. */
   async unlock(): Promise<boolean> {
     if (this.destroyed) return false;
     const context = this.ensureContext();
@@ -331,11 +331,8 @@ export class WebAudioPcmSink {
   }
 
   /**
-   * 安装常驻的浏览器自动播放解锁钩子，返回手动解绑函数。
-   * 首次成功之后不再自卸载：iOS/Android 把标签页切后台会挂起 AudioContext，
-   * 恢复前台时 visibilitychange 里的 resume 可能因无用户手势被拒——常驻手势监听
-   * 在用户下一次点击（也是游戏内第一次点击）时兜底恢复。running 状态下 unlock()
-   * 是廉价 no-op（缓存 context + 一次 state 判断），常驻无实际开销。
+   * Install persistent browser autoplay-unlock hooks and return a manual cleanup function.
+   * Do not remove them after the first success: iOS/Android suspend AudioContext in background tabs, and resume from visibilitychange may be denied without a user gesture. Persistent listeners resume it on the next click, including the first in-game click. While running, unlock() is a cheap no-op (cached context plus one state check), so retaining the listeners adds no material overhead.
    */
   installUserGestureUnlock(target?: EventTarget): () => void {
     const eventTarget = target ?? (typeof document === 'undefined' ? null : document);
@@ -383,11 +380,8 @@ export class WebAudioPcmSink {
   }
 
   /**
-   * 把正在循环的静态快照无缝切换成一个长期存活的实时 PCM 读取器。
-   * 首选 AudioWorklet（pcmStreamWorklet.js，渲染在音频线程，主线程忙帧不卡音）；
-   * 不支持时回退 ScriptProcessor（旧 WebAudio API，回调跑在主线程）。两者都比
-   * 为每次 DirectSound Unlock 新建 AudioBufferSourceNode 更符合环形缓冲语义，
-   * 也把 Bink/音乐流的整块重复解码降为每个输出量子的线性读取。
+   * Seamlessly replace a looping static snapshot with a long-lived live PCM reader.
+   * Prefer AudioWorklet (pcmStreamWorklet.js) on the audio thread so busy main-thread frames do not interrupt sound; fall back to ScriptProcessor, whose legacy WebAudio callback runs on the main thread. Both match ring-buffer semantics better than creating an AudioBufferSourceNode for every DirectSound Unlock, and replace repeated whole-buffer Bink/music decoding with linear reads per output quantum.
    */
   private startLiveStream(state: PcmBufferState): void {
     const context = this.context;
@@ -395,7 +389,7 @@ export class WebAudioPcmSink {
     if (typeof AudioWorkletNode !== 'undefined' && context.audioWorklet) {
       void this.startWorkletStream(state, context).catch((error) => {
         this.report(error);
-        // 模块加载失败等异常：回退主线程 ScriptProcessor（源仍在播，条件仍成立）。
+        // On module-load failure or similar errors, fall back to main-thread ScriptProcessor; the source is still playing and the condition still holds.
         if (state.source && !state.stream && !state.worklet) this.startScriptProcessorStream(state, context);
       });
       return;
@@ -404,15 +398,13 @@ export class WebAudioPcmSink {
   }
 
   /**
-   * AudioWorklet 路径：等模块就绪后创建节点，整块同步当前 PCM 镜像并从
-   * 旧 source 的当前位置续播，然后拆除旧 source。加载期间旧 source 继续播
-   * 旧快照，切换无缝隙。
+   * AudioWorklet path: once the module is ready, create a node, synchronize the full PCM mirror, and resume from the old source's current position before removing it. The old source keeps playing its snapshot during loading, making the switch gapless.
    */
   private async startWorkletStream(state: PcmBufferState, context: AudioContext): Promise<void> {
     const oldSource = state.source;
     if (!oldSource) return;
     await loadPcmStreamWorklet(context);
-    // 等待期间可能被替换/停止/重启：只有源没变才接管。
+    // The source may have been replaced, stopped, or restarted while waiting; take over only if it is unchanged.
     if (state.worklet || !state.playing || state.source !== oldSource) return;
 
     const current = this.currentPosition(state);
@@ -437,7 +429,7 @@ export class WebAudioPcmSink {
       loop: state.loop,
       frame,
     });
-    // 初始全量同步：现有镜像一次性转成交织 Float32 送进 worklet。
+    // Initial full synchronization: convert the existing mirror to interleaved Float32 and send it to the worklet once.
     this.postWorkletUpdate(state, worklet, 0, state.pcm);
 
     const oldGain = state.gain;
@@ -454,14 +446,14 @@ export class WebAudioPcmSink {
     try {
       oldSource.stop();
     } catch {
-      /* 已自然结束。 */
+      /* Already ended naturally. */
     }
     oldSource.disconnect();
     oldGain?.disconnect();
     oldPanner?.disconnect();
   }
 
-  /** worklet 回发消息：目前只有按约 100ms 节奏的播放游标。 */
+  /** Worklet messages: currently only the playback cursor, reported approximately every 100ms. */
   private onWorkletMessage(
     state: PcmBufferState,
     worklet: AudioWorkletNode,
@@ -477,7 +469,7 @@ export class WebAudioPcmSink {
     state.worklet.port.postMessage(message);
   }
 
-  /** 把一段 16/8 位 PCM 转成交织 Float32 并 transfer 进 worklet。 */
+  /** Convert a 16/8-bit PCM range to interleaved Float32 and transfer it to the worklet. */
   private postWorkletUpdate(state: PcmBufferState, worklet: AudioWorkletNode, offset: number, bytes: Uint8Array): void {
     const channels = Math.max(1, state.format.nChannels);
     const blockAlign = Math.max(1, state.format.nBlockAlign);
@@ -498,7 +490,7 @@ export class WebAudioPcmSink {
     worklet.port.postMessage({ kind: 'update', offsetFrames: Math.floor(offset / blockAlign), data }, [data.buffer]);
   }
 
-  /** ScriptProcessor 回退路径：主线程 onaudioprocess 逐量子渲染。 */
+  /** ScriptProcessor fallback: render each quantum on the main thread in onaudioprocess. */
   private startScriptProcessorStream(state: PcmBufferState, context: AudioContext): void {
     if (state.stream || !state.source || !state.playing) return;
     const createProcessor = context.createScriptProcessor?.bind(context);
@@ -528,7 +520,7 @@ export class WebAudioPcmSink {
       try {
         oldSource.stop();
       } catch {
-        /* 已自然结束。 */
+        /* Already ended naturally. */
       }
       oldSource.disconnect();
       oldGain?.disconnect();
@@ -547,8 +539,8 @@ export class WebAudioPcmSink {
     if (totalFrames <= 0) return;
     const outputRate = output.sampleRate || this.context?.sampleRate || state.format.nSamplesPerSec;
     const step = state.frequency / Math.max(1, outputRate);
-    // 16 位 PCM（主流）走整块 Int16Array 视图，免逐样本 DataView 分支；
-    // 其余位宽回退逐样本读取。
+    // Use a whole-buffer Int16Array view for common 16-bit PCM, avoiding per-sample DataView branches;
+    // fall back to individual sample reads for other bit depths.
     const samples16 =
       state.format.wBitsPerSample === 16
         ? new Int16Array(state.pcm.buffer, state.pcm.byteOffset, state.pcm.byteLength >> 1)
@@ -642,7 +634,7 @@ export class WebAudioPcmSink {
     if (state.stream || state.worklet) {
       const totalFrames = Math.floor(state.pcm.byteLength / state.format.nBlockAlign);
       if (totalFrames <= 0) return 0;
-      // worklet 游标 = 最近回发帧 + 按频率外推（回发节奏约 100ms）。
+      // Worklet cursor = last reported frame + frequency-based extrapolation; reports arrive about every 100ms.
       const advanced =
         state.worklet && this.context && state.playing
           ? Math.floor((this.context.currentTime - state.workletPositionAt) * state.frequency)
@@ -681,7 +673,7 @@ export class WebAudioPcmSink {
       try {
         source.stop();
       } catch {
-        // AudioBufferSourceNode 已经自然结束。
+        // AudioBufferSourceNode has already ended naturally.
       }
       source.disconnect();
     }
@@ -708,7 +700,7 @@ export class WebAudioPcmSink {
         if (typeof AudioContext === 'undefined') return null;
         this.context = new AudioContext();
       }
-      // 新 context 需要重建主增益节点（旧节点随旧 context 一起销毁）。
+      // A new context needs a new master gain node; the old node is destroyed with its context.
       this.masterGain = null;
       return this.context;
     } catch (error) {
@@ -717,7 +709,7 @@ export class WebAudioPcmSink {
     }
   }
 
-  /** 惰性创建的主增益节点：所有 buffer 汇聚后统一过音量，再进 destination。 */
+  /** Lazily created master gain node: combine all buffers, apply volume once, then connect to the destination. */
   private masterDestination(context: AudioContext): AudioNode {
     if (!this.masterGain) {
       this.masterGain = context.createGain();

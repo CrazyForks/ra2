@@ -1,6 +1,6 @@
 import type { GamePerformanceSample } from '../../src/games/performance';
 
-/** 窗口帧率分布，不是逐帧耗时百分位；停滞时长只累计完整零推进窗口。 */
+/** Windowed FPS distribution, not per-frame timing percentiles; stalled duration counts only complete windows with zero progress. */
 export function summarizeGamePerformance(samples: readonly GamePerformanceSample[], warmupMs = 0) {
   if (samples.length < 2) return null;
   const start = samples.findIndex((sample) => sample.sampledAtMs >= samples[0]!.sampledAtMs + warmupMs);

@@ -2,7 +2,7 @@ import type { GuestMemory } from '../../vm86/win32';
 import { installBattleStartup } from '../shared/battleStartup';
 import { YR_STARTUP_PAGE_HASH, installYrSkirmishStartup } from './startupPage';
 
-/** YR 1.001：设置页返回点在 0x6ae34e，原生开局处理器在 0x6acee0。 */
+/** YR 1.001: setup-page return point at 0x6ae34e; native game-start handler at 0x6acee0. */
 const YR_BATTLE = {
   label: 'YR 战场直达',
   expectedHash: YR_STARTUP_PAGE_HASH,
@@ -11,7 +11,7 @@ const YR_BATTLE = {
   navigate: installYrSkirmishStartup,
 } as const;
 
-/** 单人测试入口；不发送输入事件，也不绕过选项校验与场景加载。 */
+/** Single-player test entry point; neither sends input events nor bypasses option validation or scenario loading. */
 export function installYrBattleStartup(memory: GuestMemory, reserve: (size: number) => number, hash: string): number {
   return installBattleStartup(memory, reserve, hash, YR_BATTLE);
 }

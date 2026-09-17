@@ -2,13 +2,15 @@ import { ARCHIVE_WANTED_NAMES, GAME_MANIFESTS } from './manifest';
 import type { SupportedGameId } from './catalog';
 import type { ArchiveDirectoryRule } from '../utils/archive/archiveExtractor';
 
-/** 部分 RA2/YR 安装器把嘲讽语音平铺，沿用原版 taunts 目录归位约定。 */
+/** Some RA2/YR installers flatten taunt audio; restore it using the original taunts-directory convention. */
 export const GAME_ARCHIVE_DIRECTORY_RULES: readonly ArchiveDirectoryRule[] = [
   { directory: 'taunts/', basenamePattern: '^tau[a-z]{2}\\d{2}\\.wav$' },
 ];
 
-/** 两层而非按页面细分：必需数据和 MOD 覆盖优先，地图/影片/音乐/嘲讽延后。
- * 可选不是可晚发现：全部目录必须先公布，MOD 不得在原版规则初始化后才出现。 */
+/**
+ * Use two layers rather than per-page partitions: required data and MOD overrides first, maps/movies/music/taunts later.
+ * Optional does not mean discoverable later: publish the entire directory first, and never introduce MODs after original rules initialize.
+ */
 export function gameArchiveLayers(gameId?: SupportedGameId): {
   required: string[];
   startup: string[];
@@ -16,7 +18,7 @@ export function gameArchiveLayers(gameId?: SupportedGameId): {
 } {
   if (!gameId) {
     const all = Object.keys(GAME_MANIFESTS).map((id) => gameArchiveLayers(id as SupportedGameId));
-    // 未选游戏时先公布完整目录，启动层取并集；只提取包内实际存在的文件。
+    // Without a selected game, publish the complete directory and use the union for startup; extract only files actually in the package.
     return {
       required: [],
       startup: [...new Set(all.flatMap((layer) => layer.startup))],
@@ -27,8 +29,8 @@ export function gameArchiveLayers(gameId?: SupportedGameId): {
   const required = manifest.playerRequired.map((file) => file.name.toLowerCase());
   const other = /^(?:maps\w*\.mix|movies\d+\.mix|movmd\d+\.mix|theme(?:md)?\.mix|subtitle(?:md)?\.txt|taunts\/)$/;
   const optional = manifest.playerOptional.map((file) => file.name.toLowerCase());
-  // 保留原有归档白名单，不能因分层悄悄丢弃包内资源；YR 安装目录可能仍依赖
-  // RA2 主数据，存在时一起优先准备，但不扩大现有必需清单。
+  // Preserve the archive allowlist so layering cannot silently discard resources; YR installations may still depend on
+  // RA2 base data, so prepare it first when present without expanding the existing required manifest.
   const base = gameId === 'yr' ? GAME_MANIFESTS.ra2.playerRequired.map((file) => file.name.toLowerCase()) : [];
   return {
     required,

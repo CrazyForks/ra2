@@ -1,3 +1,4 @@
+import { t } from '../../shared/i18n/translate';
 import type { VmShell } from '../../../adapter/runtime';
 import { keyLParam, normalizePointerButton, rescaleLogicalPointer, virtualKey, win32CharacterCode } from './input';
 import { calculateCanvasFit } from './canvasFit';
@@ -8,12 +9,16 @@ let canvasDprQuery: MediaQueryList | null = null;
 let canvasDprFitListener: (() => void) | null = null;
 let canvasFullscreenFitListener: (() => void) | null = null;
 
-/** 页面级快捷键：这些按键不注入游戏（installGameInput 的 keydown/keyup 直接放行），
- *  由本页统一消费。数字/字母键留给原版游戏热键，不占用。 */
+/**
+ * Page shortcuts bypass game injection in installGameInput keydown/keyup and are handled centrally here.
+ * Leave number/letter keys available for native game hotkeys.
+ */
 const UI_SHORTCUT_KEYS = new Set(['`', 'F11', '?', '[', ']']);
 
-/** canvas CSS 盒缓存：installCanvasFit 在每次 fit 后（含全屏切换）刷新。
- *  mousemove 高频读取不再逐次 getBoundingClientRect（布局读取）。 */
+/**
+ * Canvas CSS-box cache refreshed by installCanvasFit after every fit, including fullscreen changes.
+ * Frequent mousemove reads no longer call getBoundingClientRect each time.
+ */
 let canvasRectCache: { left: number; top: number; width: number; height: number } | null = null;
 
 function refreshCanvasRect(canvas: HTMLCanvasElement): { left: number; top: number; width: number; height: number } {
@@ -26,7 +31,7 @@ function currentCanvasRect(canvas: HTMLCanvasElement): { left: number; top: numb
   return canvasRectCache ?? refreshCanvasRect(canvas);
 }
 
-/** 全屏画面及其锁定提示，不包含工具栏/调试层；键盘锁由输入生命周期管理。 */
+/** Fullscreen frame and lock hints, excluding toolbar/debug layers; input lifecycle owns keyboard locking. */
 export async function toggleImmersiveFullscreen(canvas: HTMLCanvasElement): Promise<void> {
   if (document.fullscreenElement) {
     await document.exitFullscreen();
@@ -34,28 +39,20 @@ export async function toggleImmersiveFullscreen(canvas: HTMLCanvasElement): Prom
     try {
       await (canvas.parentElement ?? canvas).requestFullscreen({ navigationUI: 'hide' });
     } catch (error) {
-      console.warn('[VM UI] 全屏请求被拒绝', error);
+      console.warn(t('[VM UI] 全屏请求被拒绝'), error);
     }
   }
 }
 
 import { controlsCollapsed } from './state/uiState';
 
-/** 输入只发布折叠意图，工具栏的 class 与按钮文字由 React 管理。 */
+/** Input publishes only collapse intent; React owns toolbar classes and button text. */
 export function setControlsCollapsed(collapsed: boolean): void {
   controlsCollapsed.set(collapsed);
 }
 
 /**
- * 画布视觉上放大到窗口允许的最大等比尺寸：CSS 盒按实际窗口精确填满，
- * 物理 backing 一律取整数档（≥1× 向上取整、上限 2×，<1× 按精确比例缩小）——
- * 光栅管线只有三种形态：1:1 直放、整数 N× 最近邻单趟、缩小单趟双线性，
- * 每帧最多一趟画布重采样。分数倍率全部交给浏览器合成器（backing→CSS 盒，
- * Skia 缩放，GPU 上近乎免费；向上取整=超采样，合成器缩小比放大更锐利）——
- * 分数 backing 会走两趟重采样，软渲染下 1920×1080 主菜单实测只有 32fps
- * （1.8× 中间缓冲爆量），整数档同窗口 60fps。上限 2×：更大倍率在软渲染下
- * 最近邻也要 25ms+。
- * 指针坐标按 getBoundingClientRect 比例映射回当前客体帧逻辑坐标。
+ * Visually scale the canvas to the largest aspect-preserving size allowed by the window. The CSS box fits exactly; physical backing uses integer scales (round up at >=1x, cap at 2x; use exact downscaling below 1x). The raster pipeline therefore has only direct 1:1, one-pass integer Nx nearest-neighbor, and one-pass bilinear downscaling, with at most one canvas resample per frame. Delegate fractional backing-to-CSS scaling to the browser compositor (Skia scaling is almost free on GPU; rounding up supersamples, and compositor downscaling is sharper than upscaling). Fractional backing causes two resamples: software-rendered 1920x1080 menus measured 32fps with a large 1.8x intermediate buffer versus 60fps at integer scales in the same window. Cap at 2x because larger nearest-neighbor scales also take 25ms+ in software rendering. Map pointer coordinates through getBoundingClientRect to current guest-frame logical coordinates.
  */
 export interface GameFrameSize {
   width: number;
@@ -69,7 +66,7 @@ export function installCanvasFit(
   getFrameSize: GameFrameSizeProvider,
   onResized?: () => void,
 ): ((frameWidth?: number, frameHeight?: number) => void) & { destroy(): void } {
-  // 首次 fit() 发生在页面初始化时（此时渲染循环尚未就绪）：静默执行不回调。
+  // The first fit() runs during page initialization before the render loop exists; run silently without callbacks.
   let ready = false;
   const initialFrame = getFrameSize();
   let activeFrameWidth = initialFrame.width;
@@ -82,13 +79,13 @@ export function installCanvasFit(
       nextFrameHeight <= 0
     )
       return;
-    // 先保存帧尺寸，再读取舞台几何。这样首帧恰好在舞台完成布局前到达时，
-    // 下一次 ResizeObserver 回调仍会使用最新比例，而不是继续使用 800×600。
+    // Store frame dimensions before reading stage geometry so a first frame arriving before stage layout completes
+    // still gives the next ResizeObserver callback the latest aspect ratio instead of stale 800x600.
     activeFrameWidth = nextFrameWidth;
     activeFrameHeight = nextFrameHeight;
-    // 缩放基准：常规布局是 #stage（flex 撑满可用区，rect 即允许的最大面积）；
-    // 沉浸式全屏时画面容器被浏览器撑到视口，以视口尺寸为准。
-    // #screen-frame 只是包裹 canvas 供指针锁定特效定位，不能当基准。
+    // Scaling reference: #stage in normal layout, where flex fills available space and rect is the maximum area;
+    // in immersive fullscreen the browser expands the frame container to the viewport, so use viewport dimensions.
+    // #screen-frame only wraps the canvas to position pointer-lock effects; it is not the scaling reference.
     const stage = canvas.closest('#stage');
     const isCanvasFullscreen = !!document.fullscreenElement?.contains(canvas);
     if (!stage && !isCanvasFullscreen) return;
@@ -122,22 +119,22 @@ export function installCanvasFit(
     }
     if (aspectChanged) canvas.style.aspectRatio = aspectRatio;
     if (!backingChanged && !cssChanged && !aspectChanged) {
-      // 尺寸未变（全屏进出后回到同一倍率等）：跳过重设——给 canvas.width 赋相同值
-      // 也会清空位图，无谓闪一帧。只刷新位置可能变化的 rect 缓存。
+      // Skip resetting unchanged dimensions, such as returning to the same scale after fullscreen; even assigning the same canvas.width
+      // clears its bitmap and needlessly flashes a frame. Refresh only the potentially moved rect cache.
       refreshCanvasRect(canvas);
       return;
     }
-    // 同步刷新 rect 缓存（mousePosition 高频读取，见 currentCanvasRect）：
-    // 这里是 canvas 布局盒的唯一变化点（含全屏进出）。
+    // Refresh the rect cache synchronously for frequent mousePosition reads; see currentCanvasRect.
+    // This is the only canvas-layout-box mutation point, including fullscreen transitions.
     refreshCanvasRect(canvas);
-    // 仅 backing 重设会清空位图，需要立刻重绘当前帧；纯 CSS 缩放不清位图。
+    // Only backing resets clear the bitmap and require immediate redraw; CSS-only scaling preserves it.
     if (backingChanged && ready) onResized?.();
   };
   canvasFitObserver?.disconnect();
   canvasFitObserver = new ResizeObserver(() => fit());
   const stage = canvas.closest('#stage');
   if (stage) canvasFitObserver.observe(stage);
-  // 跨屏拖动或浏览器缩放会改变 devicePixelRatio 而 stage CSS 尺寸不变；跟随分辨率查询。
+  // Moving between displays or browser zoom can change devicePixelRatio without changing stage CSS size; track the resolution media query.
   const fitEnvironmentChange = () => fit();
   if (canvasDprQuery && canvasDprFitListener) {
     canvasDprQuery.removeEventListener('change', canvasDprFitListener);
@@ -145,7 +142,7 @@ export function installCanvasFit(
   canvasDprQuery = matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
   canvasDprQuery.addEventListener('change', fitEnvironmentChange);
   canvasDprFitListener = fitEnvironmentChange;
-  // 沉浸式全屏进出：全屏盒的尺寸与常规布局无关，需重新适配。
+  // Refit on immersive fullscreen transitions because fullscreen-box dimensions are independent of normal layout.
   if (canvasFullscreenFitListener) document.removeEventListener('fullscreenchange', canvasFullscreenFitListener);
   document.addEventListener('fullscreenchange', fitEnvironmentChange);
   canvasFullscreenFitListener = fitEnvironmentChange;
@@ -181,10 +178,10 @@ export function installGameInput(
   onCursorPresentation?: (x: number, y: number, visible: boolean) => void,
   getFrameSize: GameFrameSizeProvider = () => ({ width: 800, height: 600 }),
 ): InstalledGameInput {
-  // 默认沿用系统鼠标加速/速度手感；原始计数不是系统光标的屏幕位移。
-  // 仅显式 ?raw-mouse=1 请求绕过系统调整，不再按 Windows 平台自动开启。
+  // Retain system mouse acceleration/speed by default; raw counts are not the system cursor's screen displacement.
+  // Only explicit ?raw-mouse=1 bypasses system adjustment; never enable it automatically on Windows.
   const rawMouse = new URLSearchParams(window.location.search).get('raw-mouse') === '1';
-  // 允许点击后接收键盘，但不让浏览器用 Tab 把焦点框画在游戏画面上。
+  // Accept keyboard focus after clicks without letting Tab draw a browser focus outline over the game.
   canvas.tabIndex = -1;
   canvas.style.outline = 'none';
   canvas.style.touchAction = 'none';
@@ -212,28 +209,28 @@ export function installGameInput(
   let pointerLockPending = false;
   let desktopMoveFrame: number | null = null;
   let pendingDesktopMove: { x: number; y: number; lParam: number; wParam: number } | null = null;
-  // 首次桌面点击必须在同一种（绝对坐标）模式下完整投递 DOWN/UP。
-  // 若在 pointerdown 中立刻锁定，部分 Chromium/Windows 组合会在两者之间
-  // 切换到相对坐标，甚至取消 pointerup，导致依赖 WM_LBUTTONUP 的菜单无响应。
+  // Deliver the first desktop click's complete DOWN/UP pair in the same absolute-coordinate mode.
+  // Locking immediately in pointerdown makes some Chromium/Windows combinations switch to relative coordinates
+  // between the events or cancel pointerup, breaking menus that rely on WM_LBUTTONUP.
   let lockAfterPointerUp = false;
   let lastCtrlPrimaryDispatch: { at: number; lParam: number } | null = null;
   let compatibilityCtrlPrimaryActive = false;
   const hostPlatform = `${navigator.platform ?? ''} ${navigator.userAgent ?? ''}`;
   const normalizedPointerButtons = new Map<number, number>();
   const heldKeys = new Map<string, { vk: number; system: boolean }>();
-  // 修饰键可能在画布取得焦点前已按下；pointerdown 时补齐给客体的按下沿，
-  // keyup/blur 再按正常路径释放，避免 RA2 自己的键态表与浏览器物理状态脱节。
+  // Modifiers may already be held before the canvas gains focus; synthesize their missing down edges on pointerdown,
+  // then release normally on keyup/blur to keep RA2's key-state table aligned with browser physical state.
   const reconciledModifiers = new Map<number, string>();
 
-  // ---- 触屏手势状态机 ----
-  // touch 指针的 DOWN 被推迟到手势确定（tap / 拖动 / 长按右键）才发送，保证：
-  // 1) 长按 400ms = 右键；2) 双 tap 保留两次完整物理点击；
-  // 3) 拖动以按下起点补发左键 DOWN。双击消息由 USER32 根据窗口类样式生成。
-  // 双指（触控板语义）：轻点 = 右键；拖拽 = 按住右键跟手平移——原版右键拖动
-  // 卷动地图，光标始终跟随主手指，地图 1:1 跟手（松开后光标留在抬起点）。
-  // 第二指落下即撤销单指的长按/单击意图；单指已进入拖拽/右键阶段后，第二指只被忽略。
+  // ---- Touch gesture state machine ----
+  // Delay touch DOWN until the gesture is identified as tap, drag, or long-press right-click, ensuring:
+  // 1) 400ms long press means right-click; 2) double taps retain two complete physical clicks;
+  // 3) drag sends left DOWN at the original contact point. USER32 generates double-click messages from window-class styles.
+  // Two-finger trackpad semantics: tap means right-click; drag holds right-click for native map panning.
+  // The cursor always follows the primary finger and the map pans 1:1, leaving the cursor at the release point.
+  // A second finger cancels pending single-finger long-press/tap intent; ignore it once the first finger is already dragging/right-clicking.
   const TOUCH_LONG_PRESS_MS = 400;
-  // 拖动判定阈值见 handleTouchPointerMove：按游戏像素换算，随画布缩放自适应。
+  // See handleTouchPointerMove for the drag threshold, expressed in game pixels and adapted to canvas scaling.
   interface TouchGesture {
     pointerId: number;
     phase: 'pending' | 'drag' | 'right' | 'two-pending' | 'two-drag';
@@ -242,7 +239,7 @@ export function installGameInput(
     downLParam: number;
     downClientX: number;
     downClientY: number;
-    /** 进入双指时主手指的 client 位置：双指拖动判定的锚点。 */
+    /** Primary finger's client position when entering two-finger mode; anchor for detecting two-finger drags. */
     twoClientX: number;
     twoClientY: number;
     modifiers: number;
@@ -250,9 +247,10 @@ export function installGameInput(
   }
   let touchGesture: TouchGesture | null = null;
   const activeTouches = new Set<number>();
-  /** Shift+左键：连点 ×10（首对立即投递，后续每 50ms 一对 WM_LBUTTONDOWN/UP）。
-   *  连点携带的修饰符去掉 Shift 位——游戏收到的是 10 次普通左键；连点期间
-   *  物理 up 被吞掉（每对自带 up），连点结束后的物理 up 照常投递（补发无害）。 */
+  /**
+   * Shift+left-click repeats 10 times: dispatch the first pair immediately, then WM_LBUTTONDOWN/UP pairs every 50ms.
+   * Remove Shift from repeated-click modifiers so the game receives 10 ordinary clicks. Swallow physical up while repetition runs because each pair supplies its own; physical up after completion is delivered normally and is harmless.
+   */
   const SHIFT_CLICK_COUNT = 10;
   const SHIFT_CLICK_INTERVAL_MS = 50;
   let shiftBurstTimer: number | null = null;
@@ -271,7 +269,7 @@ export function installGameInput(
       vm.postMessage(0x0201, mods | 0x0001, lParam); // WM_LBUTTONDOWN
       vm.setKeyState(0x01, false);
       vm.postMessage(0x0202, mods, lParam); // WM_LBUTTONUP
-      // 点击序列采集：与普通左键同一格式，联机冒烟回放可复现连点。
+      // Capture click sequences in the ordinary left-click format so multiplayer smoke replay can reproduce repeated clicks.
       console.log(`[click-seq] ${lParam & 0xffff},${(lParam >>> 16) & 0xffff}`);
       remaining -= 1;
       shiftBurstTimer = remaining > 0 ? window.setTimeout(step, SHIFT_CLICK_INTERVAL_MS) : null;
@@ -279,7 +277,7 @@ export function installGameInput(
     step();
   };
 
-  /** 按光标形态分派点按：攻击/移动目的地 → 右键，其余（空地/友军/界面）→ 左键。 */
+  /** Dispatch taps by cursor shape: attack/move destinations use right-click; empty ground, friendly units, and UI use left-click. */
   const dispatchTapClick = (downLParam: number, modifiers: number, right: boolean) => {
     if (right) {
       mouseFlags |= 0x0002;
@@ -295,12 +293,12 @@ export function installGameInput(
       mouseFlags &= ~0x0001;
       vm.setKeyState(0x01, false);
       vm.postMessage(0x0202, modifiers, downLParam); // WM_LBUTTONUP
-      // 点击序列采集：本地联机冒烟回放用（建房/加入路线一次采集后全自动化）。
+      // Capture local multiplayer smoke click sequences so recorded host/join paths can replay automatically.
       console.log(`[click-seq] ${downLParam & 0xffff},${(downLParam >>> 16) & 0xffff}`);
     }
   };
 
-  /** 触屏点按映射为普通左键；右键由长按/双指手势显式产生。 */
+  /** Map touch taps to ordinary left-click; long presses/two-finger gestures explicitly generate right-click. */
   const scheduleTapClick = (downLParam: number, modifiers: number) => {
     dispatchTapClick(downLParam, modifiers, false);
   };
@@ -333,17 +331,17 @@ export function installGameInput(
       const x = Math.floor(logicalMouseX);
       const y = Math.floor(logicalMouseY);
       lastMouseLParam = (((y & 0xffff) << 16) | (x & 0xffff)) >>> 0;
-      // 不等下一次物理 mousemove：SetDisplayMode 后立刻把按比例换算的新坐标
-      // 同步给客体及宿主光标层，避免锁定光标仍被旧 800×600 边界钳制。
+      // Do not wait for the next physical mousemove: after SetDisplayMode immediately synchronize rescaled coordinates
+      // to the guest and host cursor layer so the locked cursor is not clamped to old 800x600 bounds.
       vm.setCursorPosition(x, y);
       onCursorPresentation?.(x, y, document.pointerLockElement === canvas);
     }
   };
 
   const updateMousePosition = (event: MouseEvent): [number, number] => {
-    // rect 走缓存（installCanvasFit 维护），避免每个 mousemove 触发布局读取。
+    // Use the rect cache maintained by installCanvasFit to avoid layout reads on every mousemove.
     const rect = currentCanvasRect(canvas);
-    // 映射到客体逻辑坐标，与 backing store 物理尺寸无关。
+    // Map to guest logical coordinates independently of backing-store physical dimensions.
     const frame = getFrameSize();
     const width = frame.width;
     const height = frame.height;
@@ -383,9 +381,9 @@ export function installGameInput(
     return false;
   };
   const modifierFlags = (event: MouseEvent): number => {
-    // Pointer Lock 下部分浏览器的 PointerEvent.ctrlKey/shiftKey 会短暂丢失；
-    // 键盘监听维护的 heldKeys 才是同一输入序列的权威状态。两者取并集，
-    // 保证 Ctrl+点击以 MK_CONTROL 到达原版（强制攻击依赖该位）。
+    // Some browsers briefly lose PointerEvent.ctrlKey/shiftKey during Pointer Lock;
+    // heldKeys maintained by keyboard listeners is authoritative for the same input sequence. Take their union
+    // so Ctrl+click reaches the original game with MK_CONTROL, required for force attack.
     return (
       mouseFlags |
       (event.shiftKey || heldModifier(0x10) ? 0x0004 : 0) |
@@ -393,8 +391,8 @@ export function installGameInput(
     );
   };
 
-  // 首次移动立即投递，避免客体输入额外等待一帧；同帧后续高频事件合并到帧尾。
-  // 相对位移仍逐事件累计，DOWN/UP/WHEEL 前冲刷尾部 MOVE，不能丢距离或倒序。
+  // Dispatch the first movement immediately to avoid an extra input frame of latency; coalesce subsequent high-frequency events at frame end.
+  // Still accumulate relative movement per event; flush pending MOVE before DOWN/UP/WHEEL to preserve distance and order.
   const flushDesktopMove = () => {
     if (desktopMoveFrame !== null) cancelAnimationFrame(desktopMoveFrame);
     desktopMoveFrame = null;
@@ -408,8 +406,8 @@ export function installGameInput(
     const [x, y] = updateMousePosition(event);
     const lParam = (((y & 0xffff) << 16) | (x & 0xffff)) >>> 0;
     lastMouseLParam = lParam;
-    // 本地光标立即跟随输入，不能等 VM 消息的 rAF 合并窗口。
-    // 客体使用首尾合并，避免高轮询率鼠标堆积 Worker 消息。
+    // The local cursor follows input immediately, without waiting for the VM-message rAF coalescing window.
+    // Send leading/trailing movements to the guest to avoid Worker-message buildup with high-polling-rate mice.
     onCursorPresentation?.(x, y, document.pointerLockElement === canvas);
     pendingDesktopMove = {
       x,
@@ -500,7 +498,7 @@ export function installGameInput(
     if (touchGesture) window.clearTimeout(touchGesture.timer);
   };
 
-  /** 触屏手势所有取消路径的统一收口：按当前相位补发 UP，绝不留无手指触发的定时器。 */
+  /** Unified cleanup for all touch cancellation paths: send UP as required by the current phase and leave no fingerless timers running. */
   const cancelTouchGesture = (lParam = lastMouseLParam) => {
     const state = touchGesture;
     if (!state) return;
@@ -515,7 +513,7 @@ export function installGameInput(
       vm.setKeyState(0x02, false);
       vm.postMessage(0x0205, state.modifiers, lParam);
     }
-    // pending / two-pending 相位未按过键，无需补发。
+    // pending / two-pending phases have sent no button down and need no compensating up.
   };
 
   const touchHoldTimer = () => {
@@ -529,13 +527,13 @@ export function installGameInput(
   };
 
   const handleTouchPointerDown = (event: PointerEvent) => {
-    // 混合设备上控制栏可能展开着遮住左侧触控区：一碰到画面就自动收起。
+    // On hybrid devices the expanded controls may cover the left touch area; collapse them on contact with the game.
     setControlsCollapsed(true);
     canvas.focus({ preventScroll: true });
     activeTouches.add(event.pointerId);
     const state = touchGesture;
     if (!state) {
-      // 第一根手指：开始单指手势（其余手指都抬起后才允许新手势，防残指干扰）。
+      // First finger starts a single-finger gesture; require all other fingers released before starting another to avoid residual contacts.
       if (activeTouches.size !== 1) {
         event.preventDefault();
         return;
@@ -557,17 +555,17 @@ export function installGameInput(
         timer: window.setTimeout(touchHoldTimer, TOUCH_LONG_PRESS_MS),
       };
     } else if (state.phase === 'pending') {
-      // 第二根手指落下：撤销长按与单击意图，升级为双指手势。
+      // Second finger: cancel long-press/tap intent and upgrade to a two-finger gesture.
       clearTouchTimer();
       state.phase = 'two-pending';
       state.twoClientX = state.downClientX;
       state.twoClientY = state.downClientY;
     }
-    // 单指已进入 drag/right、或双指阶段再有手指落下：忽略。
+    // Ignore extra fingers after single-finger drag/right or during two-finger phases.
     try {
       canvas.setPointerCapture(event.pointerId);
     } catch {
-      // 指针可能在事件送达前已被浏览器取消；pointercancel 会统一清理。
+      // The browser may have canceled the pointer before delivery; pointercancel performs unified cleanup.
     }
     event.preventDefault();
   };
@@ -581,10 +579,10 @@ export function installGameInput(
       if (event.pointerId !== state.pointerId) return;
       const dx = event.clientX - state.downClientX;
       const dy = event.clientY - state.downClientY;
-      // 阈值按游戏像素换算（≈5px），不随画布 CSS 缩放变化：放大时不误判拖动、
-      // 缩小/手机上也不迟钝。
+      // Express the threshold in game pixels, about 5px, independently of canvas CSS scale; avoid false drags when enlarged
+      // and sluggish gestures when reduced or on phones.
       if (dx * dx + dy * dy <= slopCss * slopCss) return;
-      // 超过拖动阈值：以按下起点补发左键 DOWN；本条 WM_MOUSEMOVE 已由通用路径先行发送。
+      // Beyond the drag threshold, send left DOWN at the contact origin; the common path has already sent this WM_MOUSEMOVE.
       clearTouchTimer();
       state.phase = 'drag';
       mouseFlags |= 0x0001;
@@ -593,8 +591,8 @@ export function installGameInput(
       return;
     }
     if (state.phase === 'two-pending') {
-      // 任一手指移动超过阈值：按下右键进入跟手平移。光标此刻在主手指处
-      // （通用路径持续跟随），后续移动即原版右键拖动卷地图。
+      // If either finger exceeds the movement threshold, press right to begin panning. The cursor is already at the primary finger
+      // through the common path; subsequent movement invokes native right-drag map scrolling.
       const dx = event.clientX - state.twoClientX;
       const dy = event.clientY - state.twoClientY;
       if (dx * dx + dy * dy <= slopCss * slopCss) return;
@@ -606,7 +604,7 @@ export function installGameInput(
       if (typeof navigator.vibrate === 'function') navigator.vibrate(20);
       return;
     }
-    // drag/right/two-drag 相位：光标与按键均由通用路径与收口逻辑处理。
+    // In drag/right/two-drag phases, the common path and cleanup logic handle cursor and button state.
   };
 
   const handleTouchPointerUp = (event: PointerEvent) => {
@@ -617,17 +615,17 @@ export function installGameInput(
     if (single) {
       if (event.pointerId !== state.pointerId) return;
       clearTouchTimer();
-      // 先清状态再释放 capture：lostpointercapture 的指针守卫发现空手势，不会重复收口。
+      // Clear state before releasing capture; lostpointercapture then sees an empty gesture and cannot clean up twice.
       touchGesture = null;
       const upLParam = mouseLParam(event);
       const modifiers = modifierFlags(event);
       if (state.phase === 'pending') {
-        // 点按序列与桌面鼠标一致：MOVE/DOWN/UP 全部用按下点。手指微移几个
-        // 像素不该把点击变成拖动（否则游戏按「起点≠终点」判定为拖拽，
-        // 只动光标不响应点击）。双击序列同理，仍发送第二次完整物理点击。
-        vm.postMessage(0x0200, modifiers, state.downLParam); // 光标回到按下点
-        // 移动端适配：先移动指针到目标点，读内存确认光标形态再按键——
-        // 攻击/移动目的地 → 右键，其余（空地/友军/界面）→ 左键。
+        // Match desktop click sequences: MOVE/DOWN/UP all use the contact origin. Small finger movement must not
+        // turn a tap into a drag; otherwise the game sees different start/end positions,
+        // moves only the cursor, and ignores the click. Double taps likewise send a complete second physical click.
+        vm.postMessage(0x0200, modifiers, state.downLParam); // Return the cursor to the contact origin.
+        // Mobile adaptation: move to the target, read memory to confirm cursor shape, then press the button;
+        // attack/move destinations use right-click, while empty ground, friendly units, and UI use left-click.
         scheduleTapClick(state.downLParam, modifiers);
       } else if (state.phase === 'drag') {
         mouseFlags &= ~0x0001;
@@ -639,17 +637,17 @@ export function installGameInput(
         vm.postMessage(0x0205, modifiers, upLParam);
       }
     } else {
-      // 双指阶段：任一手指导起即收口。
+      // In two-finger mode, release either finger to finish.
       clearTouchTimer();
       touchGesture = null;
       if (state.phase === 'two-pending') {
-        // 双指轻点 = 右键：MOVE/RDOWN/RUP 同用主手指按下点（触控板语义）。
+        // Two-finger tap means right-click: MOVE/RDOWN/RUP all use the primary contact origin, matching trackpads.
         const modifiers = modifierFlags(event);
         vm.postMessage(0x0200, modifiers, state.downLParam);
         vm.postMessage(0x0204, modifiers | 0x0002, state.downLParam);
         vm.postMessage(0x0205, modifiers, state.downLParam);
       } else {
-        // two-drag：平移结束——松开右键，光标留在主手指处（抬起的可能是副手指）。
+        // two-drag ends panning: release right-click and leave the cursor at the primary finger, even if the secondary finger was released.
         const modifiers = modifierFlags(event);
         const upLParam = (((logicalMouseY & 0xffff) << 16) | (logicalMouseX & 0xffff)) >>> 0;
         vm.postMessage(0x0200, modifiers, upLParam);
@@ -677,10 +675,10 @@ export function installGameInput(
     if (pointerLockPending || document.pointerLockElement === canvas) return;
     pointerLockPending = true;
     try {
-      // Windows Chromium 不允许同一指针同时处于 Pointer Capture 与 Pointer Lock。
-      // 获锁首击会在 pointerup 前释放 capture；锁定后事件本身继续定向 canvas。
-      // 显式启用原始计数时请求 unadjustedMovement；平台无法兑现时拒绝请求，
-      // 回退重试无选项请求（指针锁定本身仍可用）。
+      // Windows Chromium does not allow the same pointer in Pointer Capture and Pointer Lock simultaneously.
+      // The initial locking click releases capture before pointerup; locked events remain directed to the canvas.
+      // Request unadjustedMovement only when raw counts are explicitly enabled; if the platform rejects it,
+      // retry without options because ordinary pointer locking remains available.
       try {
         await canvas.requestPointerLock(rawMouse ? { unadjustedMovement: true } : undefined);
       } catch (error) {
@@ -688,7 +686,7 @@ export function installGameInput(
         await canvas.requestPointerLock();
       }
     } catch (error) {
-      console.warn('[VM input] 浏览器拒绝鼠标锁定', error);
+      console.warn(t('[VM input] 浏览器拒绝鼠标锁定'), error);
     } finally {
       pointerLockPending = false;
     }
@@ -699,8 +697,8 @@ export function installGameInput(
     if (!desktopMouse || mouseFlags || !lockAfterPointerUp) return;
     lockAfterPointerUp = false;
     if (document.pointerLockElement === canvas) return;
-    // releasePointerCapture 必须先于 Pointer Lock；调用仍处于可信 pointerup
-    // 用户手势内，因此 Chromium 允许获取锁定。
+    // releasePointerCapture must precede Pointer Lock; the call is still inside the trusted pointerup
+    // user gesture, so Chromium permits acquiring the lock.
     void requestMouseLock();
   };
 
@@ -709,10 +707,10 @@ export function installGameInput(
     'pointermove',
     (event) => {
       if (event.pointerType === 'touch') {
-        // 每根手指都进手势机（双指拖动由任一手指触发）；仅主手指经通用路径
-        // 发送 WM_MOUSEMOVE（光标跟随主手指）。双指平移时改由边缘光标定时器
-        // 驱动位置，这里不跟手，否则会与平移方向打架。
-        // 光标始终跟随主手指：双指拖拽时右键已按下，地图随光标跟手平移。
+        // Every finger enters the gesture machine, since either may trigger a two-finger drag; only the primary finger uses the common path
+        // to send WM_MOUSEMOVE. During two-finger panning, the edge-cursor timer instead
+        // drives position here, avoiding movement that conflicts with the panning direction.
+        // The cursor always follows the primary finger; two-finger drags hold right-click so the map pans with it.
         if (event.isPrimary) vm.postMessage(0x0200, modifierFlags(event), mouseLParam(event));
         handleTouchPointerMove(event);
         event.preventDefault();
@@ -728,7 +726,7 @@ export function installGameInput(
     canvas,
     'pointerdown',
     (event) => {
-      // 触屏的每根手指都进手势机（第二指升级为双指手势）。
+      // Every touch finger enters the gesture machine; the second upgrades to a two-finger gesture.
       if (event.pointerType === 'touch') {
         handleTouchPointerDown(event);
         return;
@@ -755,13 +753,13 @@ export function installGameInput(
       } else {
         vm.postMessage(info.down, modifierFlags(event), lParam);
       }
-      // 尚未锁定时一律 Capture，保证首击的 pointerup 在获取 Pointer Lock 前
-      // 回到同一画布；已经锁定后事件本身会继续定向 canvas。
+      // Always capture before locking so the initial pointerup returns to the same canvas before Pointer Lock;
+      // after locking, events already remain directed to the canvas.
       if (!desktopMouse || document.pointerLockElement !== canvas) {
         try {
           canvas.setPointerCapture(event.pointerId);
         } catch {
-          // 指针可能在事件送达前已被浏览器取消；后面的 pointercancel 会统一释放状态。
+          // The browser may have canceled the pointer before delivery; later pointercancel releases state consistently.
         }
       }
       event.preventDefault();
@@ -772,7 +770,7 @@ export function installGameInput(
     canvas,
     'pointerup',
     (event) => {
-      // 触屏的每根手指都要进手势机（双指手势由副手指收口）。
+      // Every touch finger must enter the gesture machine; the secondary finger may finish a two-finger gesture.
       if (event.pointerType === 'touch') {
         handleTouchPointerUp(event);
         return;
@@ -787,7 +785,7 @@ export function installGameInput(
       flushDesktopMove();
       const desktopMouse = event.pointerType === 'mouse';
       if (info.vk === 0x01 && shiftBurstTimer !== null) {
-        // Shift 连点进行中：每对 down/up 已由连点器投递，物理 up 只清理状态不再补发。
+        // During Shift-repeat, the repeater already sends each down/up pair; physical up only clears state without another event.
         mouseFlags &= ~info.flag;
         vm.setKeyState(info.vk, false);
         finishDesktopPointerUp(event, desktopMouse);
@@ -795,23 +793,23 @@ export function installGameInput(
         return;
       }
       const lParam = mouseLParam(event);
-      // blur/releaseInput 可能已经补发过 UP；只有仍记录为按下的按钮才再投递。
+      // blur/releaseInput may already have sent UP; dispatch only for buttons still recorded as held.
       if ((mouseFlags & info.flag) !== 0) {
         mouseFlags &= ~info.flag;
         vm.setKeyState(info.vk, false);
         vm.postMessage(info.up, modifierFlags(event), lParam);
       }
-      // Pointer Events 对多键鼠标只保证首个 pointerdown 与最后一个 pointerup；
-      // 最后抬起的 event.button 可能不是最初记录的按钮，用 buttons=0 统一收口。
+      // With multiple mouse buttons, Pointer Events guarantee only the first pointerdown and final pointerup;
+      // the last released event.button may differ from the initially recorded button, so use buttons=0 for unified cleanup.
       if (event.buttons === 0) releaseMouseButtons(lParam);
       finishDesktopPointerUp(event, desktopMouse);
       event.preventDefault();
     },
     { passive: false },
   );
-  // macOS Edge 可能把 Ctrl+主键完全降级为兼容 MouseEvent，网页收不到对应
-  // PointerEvent。正常 PointerEvent 路径会先登记 lastCtrlPrimaryDispatch，因此
-  // 这里仅在其缺席时补投，避免其他浏览器产生双份 DOWN/UP。
+  // macOS Edge may downgrade Ctrl+primary entirely to compatibility MouseEvents, with no corresponding
+  // PointerEvent. Normal PointerEvent handling records lastCtrlPrimaryDispatch first,
+  // so supplement only when absent to avoid duplicate DOWN/UP on other browsers.
   on(canvas, 'mousedown', (event) => {
     const controlDown = event.ctrlKey || heldModifier(0x11);
     if (!controlDown || normalizePointerButton(event.button, controlDown, hostPlatform, event.buttons) !== 0) return;
@@ -868,13 +866,13 @@ export function installGameInput(
     { passive: false },
   );
   on(canvas, 'lostpointercapture', (event) => {
-    // 触屏手势若处于 pending，必须在此杀掉定时器，否则无手指时也会触发右键。
+    // Cancel pending touch timers here, or a right-click could fire after every finger has left.
     if (touchGesture && event.pointerId === touchGesture.pointerId) cancelTouchGesture();
-    // Pointer Lock 会主动结束 capture；这不代表玩家已松开按键。
+    // Pointer Lock actively ends capture; this does not mean the player released the button.
     if (document.pointerLockElement !== canvas) releaseMouseButtons();
   });
   on(canvas, 'dblclick', (event) => {
-    // USER32 已依据两次物理点击及窗口类样式生成 Win32 双击；这里只压住浏览器默认动作。
+    // USER32 already generates Win32 double-clicks from two physical clicks and class styles; suppress only browser defaults here.
     event.preventDefault();
   });
   on(
@@ -892,8 +890,8 @@ export function installGameInput(
   );
   on(canvas, 'contextmenu', (event) => {
     event.preventDefault();
-    // macOS/WebKit 可能把 Ctrl+主键直接升级为 contextmenu，未产生可用的
-    // 左键 pointerdown。正常 pointer 路径已经投递时按坐标和时间去重。
+    // macOS/WebKit may promote Ctrl+primary directly to contextmenu without a usable
+    // left pointerdown. Deduplicate by position/time when the normal pointer path already dispatched it.
     if (!event.ctrlKey || normalizePointerButton(2, true, hostPlatform) !== 0) return;
     const lParam = mouseLParam(event);
     if (
@@ -901,8 +899,8 @@ export function installGameInput(
       performance.now() - lastCtrlPrimaryDispatch.at < 1_000 &&
       lastCtrlPrimaryDispatch.lParam === lParam
     ) {
-      // Edge/macOS 在 DOWN 后弹 contextmenu 时可能不再给网页 pointerup。
-      // 立即补齐 UP；若真实 pointerup 随后到达，会因 mouseFlags 已清而跳过。
+      // Edge/macOS may omit pointerup after showing contextmenu following DOWN.
+      // Send the missing UP immediately; a later physical pointerup is skipped because mouseFlags is already cleared.
       if ((mouseFlags & 0x0001) !== 0) {
         mouseFlags &= ~0x0001;
         vm.setKeyState(0x01, false);
@@ -929,7 +927,7 @@ export function installGameInput(
     window,
     'keydown',
     (event) => {
-      // 页面级快捷键（` 调试 / [ ] 速度 / F11 全屏 / ? 帮助）不注入游戏。
+      // Page shortcuts (` debug / [ ] speed / F11 fullscreen / ? help) are not injected into the game.
       if (UI_SHORTCUT_KEYS.has(event.key)) return;
       if (document.activeElement !== canvas || event.isComposing) return;
       const vk = virtualKey(event);
@@ -985,9 +983,9 @@ export function installGameInput(
   document.addEventListener('visibilitychange', visibilityChanged);
   removers.push(() => document.removeEventListener('visibilitychange', visibilityChanged));
 
-  // 指针锁定特效：锁定期间屏幕外圈琥珀描边 + 四角取景框呼吸闪烁
-  // （#screen-frame.pointer-locked），顶部浮出「按 Esc 解锁」胶囊提示，
-  // 几秒后自行淡出——浏览器把光标藏掉，边框与角标是持续存在的提示。
+  // Pointer-lock effect: an amber outer border and four viewfinder corners pulse while locked
+  // (#screen-frame.pointer-locked), with a temporary top hint to press Esc to unlock.
+  // The hint fades after a few seconds; the border/corners remain because the browser hides the cursor.
   const lockHint = document.createElement('div');
   lockHint.className = 'pointer-lock-hint';
   canvas.parentElement?.appendChild(lockHint);
@@ -996,14 +994,14 @@ export function installGameInput(
   const showLockHint = () => {
     lockHint.textContent =
       keyboardLockState === 'active'
-        ? 'Esc 已交给游戏 · 长按 Esc 退出锁定 · F11 退出全屏'
+        ? t('Esc 已交给游戏 · 长按 Esc 退出锁定 · F11 退出全屏')
         : keyboardLockState === 'pending'
-          ? '正在申请 Esc 捕获权限…'
+          ? t('正在申请 Esc 捕获权限…')
           : keyboardLockState === 'unavailable'
-            ? '浏览器不支持 Esc 捕获，Esc 仍由浏览器优先处理'
+            ? t('浏览器不支持 Esc 捕获，Esc 仍由浏览器优先处理')
             : keyboardLockState === 'denied'
-              ? 'Esc 捕获未获授权，Esc 仍由浏览器优先处理'
-              : '鼠标已锁定 · Esc 解锁 · 全屏可申请将 Esc 交给游戏';
+              ? t('Esc 捕获未获授权，Esc 仍由浏览器优先处理')
+              : t('鼠标已锁定 · Esc 解锁 · 全屏可申请将 Esc 交给游戏');
     lockHint.classList.remove('show');
     void lockHint.offsetWidth;
     lockHint.classList.add('show');
@@ -1018,9 +1016,9 @@ export function installGameInput(
 
   const pointerLockChanged = () => {
     if (document.pointerLockElement === canvas) {
-      // 控制栏折叠、分辨率切换和画布 fit 可能发生在没有 stage ResizeObserver
-      // 回调的同一布局拍。Pointer Lock 从绝对坐标切到相对坐标前强制读一次真实
-      // CSS 盒，避免继续用旧 800×600/旧高度比例，导致越靠边移动越慢且到不了边界。
+      // Toolbar collapse, resolution changes, and canvas fitting may occur in one layout cycle without a stage ResizeObserver
+      // callback. Read the actual CSS box before Pointer Lock switches from absolute to relative coordinates,
+      // avoiding stale 800x600/height ratios that slow edge movement and prevent reaching the boundary.
       refreshCanvasRect(canvas);
       lockAfterPointerUp = false;
       onCursorPresentation?.(Math.floor(logicalMouseX), Math.floor(logicalMouseY), true);
@@ -1033,8 +1031,8 @@ export function installGameInput(
       releaseMouseButtons();
       canvas.parentElement?.classList.remove('pointer-locked');
       lockHint.classList.remove('show');
-      // 切标签、失焦、脚本退出都会解除 Pointer Lock，不能推断为用户按了 Esc。
-      // 游戏按键只来自真实 keyboard 事件；全屏 Keyboard Lock 负责捕获 Esc。
+      // Tab switching, blur, and script exits also release Pointer Lock; never infer that the user pressed Esc.
+      // Game keystrokes come only from real keyboard events; fullscreen Keyboard Lock captures Esc.
     }
   };
   document.addEventListener('pointerlockchange', pointerLockChanged);

@@ -12,9 +12,9 @@ import {
 } from './networkWire';
 import type { Ra2NetworkWire } from './networkWire';
 
-/** BroadcastChannel 频道前缀；房间 id 直接拼在后面（开发链路不做鉴权）。 */
+/** BroadcastChannel prefix; append the room ID directly. This development transport has no authentication. */
 export const RA2NET_BROADCAST_CHANNEL_PREFIX = 'ra2-winsock-lan:';
-/** WebSocket 中继的默认路径（与资源 /game/*、DirectPlay /game 升级区分开）。 */
+/** Default WebSocket relay path, distinct from resource /game/* and DirectPlay /game upgrades. */
 export const RA2NET_WEBSOCKET_PATH = '/ra2';
 
 export interface Ra2NetworkPeer {
@@ -29,7 +29,7 @@ export interface Ra2NetworkConfig {
   relayUrl?: string;
 }
 
-/** 红警页面与 Worker 共用确定性规则，不发起 WSS/WS 探测或 DNS 查询。 */
+/** Deterministic rules shared by the RA2 page and Worker; no WSS/WS probes or DNS queries. */
 export function parseRa2RelayUrl(value: string | null): string | undefined {
   if (!value?.trim()) return undefined;
   const normalized = normalizeRelayAddress(value, 'ra2');
@@ -41,7 +41,7 @@ export function parseRa2RelayUrl(value: string | null): string | undefined {
   const port = authority.match(/:(\d+)$/)?.[1];
   if (port && Number(port) === 0) throw new Error('relay 必须使用 1–65535 的端口');
   url.protocol = isLocalRelayHost(url.hostname) ? 'ws:' : 'wss:';
-  // 改协议不能把显式 :80 / :443 变成新协议的默认端口。
+  // Changing protocol must not replace explicit :80 / :443 with the new protocol's default port.
   if (port) url.port = port;
   return url.href;
 }
@@ -61,7 +61,7 @@ function isLocalRelayHost(host: string): boolean {
   if (literal === '::1') return true;
   const first = Number.parseInt(literal.split(':')[0] || '0', 16);
   if ((first & 0xfe00) === 0xfc00 || (first & 0xffc0) === 0xfe80) return true;
-  // URL 将 IPv4-mapped IPv6 规范化为十六进制，按其内嵌 IPv4 判断。
+  // URL normalizes IPv4-mapped IPv6 to hexadecimal; classify it by the embedded IPv4 address.
   const mapped = literal.match(/^::ffff:([0-9a-f]+):([0-9a-f]+)$/);
   if (!mapped) return false;
   const high = Number.parseInt(mapped[1]!, 16),
@@ -70,21 +70,21 @@ function isLocalRelayHost(host: string): boolean {
 }
 
 export interface Ra2NetworkTransportHandlers {
-  /** 房间握手完成：拿到自己的虚拟地址与当前成员快照。 */
+  /** Room handshake complete: the client's virtual address and current member snapshot are available. */
   onReady(self: Ra2NetworkPeer, peers: Ra2NetworkPeer[]): void;
   onPeerJoin(peer: Ra2NetworkPeer): void;
   onPeerLeave(id: string, addr: number): void;
-  /** 中继已按连接覆写源地址；BroadcastChannel 链路是对端自报（仅开发用）。 */
+  /** The relay overwrites source addresses by connection; development-only BroadcastChannel peers self-report them. */
   onDatagram(srcAddr: number, srcPort: number, destPort: number, payload: Uint8Array): void;
   onClose?(reason: string): void;
   onError?(error: unknown): void;
-  /** 浏览器到中继的应用层往返耗时，不代表玩家间 RTT 或游戏逻辑进度。 */
+  /** Browser-to-relay application RTT; measures neither inter-player RTT nor game-logic progress. */
   onLatency?(rttMs: number): void;
 }
 
 export interface Ra2NetworkTransport {
   readonly clientId: string;
-  /** 握手完成、拿到虚拟地址后才为 true；此前的出站数据报按 UDP 语义丢弃。 */
+  /** True only after handshake and virtual-address assignment; earlier outbound datagrams are dropped with UDP semantics. */
   readonly ready: boolean;
   readonly selfAddr: number;
   sendDatagram(destAddr: number, destPort: number, srcPort: number, payload: Uint8Array): boolean;
@@ -112,8 +112,10 @@ function report(handlers: Ra2NetworkTransportHandlers, error: unknown): void {
   handlers.onError?.(error);
 }
 
-/** 自分配虚拟地址（BroadcastChannel 无中继）：clientId 散列进 10.247.x.y。
- *  主机号范围与中继分配共用 relay 包的同一组边界，两端不再各写一份 1/254。 */
+/**
+ * Self-allocate virtual addresses without a BroadcastChannel relay: hash clientId into 10.247.x.y.
+ * Share host-number bounds from the relay package instead of duplicating 1/254 on both sides.
+ */
 export function selfAssignAddress(clientId: string): number {
   let hash = 0x811c_9dc5;
   for (let i = 0; i < clientId.length; i++) {
@@ -146,8 +148,8 @@ function copyStructuredPayload(message: Ra2NetworkWire): Ra2NetworkWire {
 }
 
 /**
- * 同源多标签页/Node 冒烟传输：无中继，地址自分配，成员靠 peer-join 互答收敛。
- * 只覆盖同源同浏览器配置文件的页面，是开发与自动回归链路，不代表真实局域网。
+ * Same-origin multi-tab/Node smoke transport: no relay, self-assigned addresses, and member discovery through mutual peer-join replies.
+ * Limited to same-origin pages in one browser profile; this development/regression transport does not represent a real LAN.
  */
 export class Ra2BroadcastChannelTransport implements Ra2NetworkTransport {
   readonly clientId: string;
@@ -174,7 +176,7 @@ export class Ra2BroadcastChannelTransport implements Ra2NetworkTransport {
     this.exeHash = join.exeHash;
     channel.onmessage = (event: MessageEvent<unknown>) => this.receive(event.data);
     channel.onmessageerror = (event: MessageEvent<unknown>) => report(handlers, event);
-    // 先就绪再广播：onReady 之后 shim 才会发包，peer-join 必须让对端看到完整状态。
+    // Become ready before broadcasting: the shim sends only after onReady, and peer-join must expose complete state to peers.
     globalThis.queueMicrotask(() => {
       if (this.closed) return;
       handlers.onReady({ id: this.clientId, addr: this.selfAddr, name: this.name.slice() }, []);
@@ -215,7 +217,7 @@ export class Ra2BroadcastChannelTransport implements Ra2NetworkTransport {
         const known = this.peers.has(data.peer);
         this.peers.set(data.peer, { id: data.peer, addr: data.addr, name: data.n });
         if (!known) {
-          // 新成员入场：回播自己，让加入方收敛出完整成员表。
+          // A new member arrived: rebroadcast self so the newcomer can discover the full member list.
           this.post({ t: 'peer-join', peer: this.clientId, addr: this.selfAddr, exe: this.exeHash, n: this.name });
           this.handlers.onPeerJoin({ id: data.peer, addr: data.addr, name: data.n });
         }
@@ -226,7 +228,7 @@ export class Ra2BroadcastChannelTransport implements Ra2NetworkTransport {
         return;
       }
       case 'datagram': {
-        if (data.src === this.selfAddr) return; // 不回声自己的包（BroadcastChannel 本不回声，防御中继混接）
+        if (data.src === this.selfAddr) return; // Do not echo our own packets; BroadcastChannel already avoids echoes, but guard against mixed relay wiring.
         if (data.dest !== this.selfAddr && !isRa2BroadcastAddress(data.dest)) return;
         this.handlers.onDatagram(data.src, data.sport, data.dport, data.a);
         return;
@@ -283,9 +285,8 @@ function websocketUrl(clientId: string, suppliedUrl?: string): string {
 }
 
 /**
- * WebSocket 房间中继传输：连接后先送 hello，等 welcome 分配虚拟地址。
- * 断线按 UDP 语义处理——不自动重连进旧房间（旧 epoch 的帧会污染新对局），
- * 由 shim 把掉线映射为玩家离开。
+ * WebSocket room relay: send hello after connecting, then await welcome and virtual-address assignment.
+ * Handle disconnects with UDP semantics: never automatically rejoin the old room, since old-epoch frames could contaminate new games. The shim maps disconnects to player departures.
  */
 export class Ra2WebSocketTransport extends RelayClient implements Ra2NetworkTransport {
   constructor(handlers: Ra2NetworkTransportHandlers, join: Ra2NetworkJoin, options: Ra2WebSocketTransportOptions = {}) {
@@ -327,7 +328,7 @@ export function createRa2WebSocketTransport(
   return new Ra2WebSocketTransport(handlers, join, options);
 }
 
-/** 浏览器默认 WebSocket 中继；Node 冒烟显式注入 BroadcastChannel 工厂。 */
+/** Browsers default to WebSocket relay; Node smoke tests explicitly inject a BroadcastChannel factory. */
 export function createDefaultRa2NetworkTransport(
   handlers: Ra2NetworkTransportHandlers,
   join: Ra2NetworkJoin,

@@ -1,11 +1,13 @@
-/** 从真实首页验证：未选游戏就请求两个 EXE，下载未结束也能显示选包界面。 */
+/**
+ * Verify on the real home page that both EXEs are requested before game selection and the package picker appears before downloads finish.
+ */
 import { chromium, expect } from '@playwright/test';
 import { GAME_MANIFESTS } from '../../../src/games/manifest';
 const origin = process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15174';
 const browser = await chromium.launch({ args: ['--no-sandbox'] });
 try {
-  const context = await browser.newContext({ ignoreHTTPSErrors: true });
-  // 此用例测无缓存时的并行下载，不受开发者本地 .tmp-third-party 内容影响。
+  const context = await browser.newContext({ locale: 'zh-CN', ignoreHTTPSErrors: true });
+  // Test parallel downloads without cache, independent of the developer's local .tmp-third-party contents.
   await context.route('**/__third-party/*', (route) => route.fulfill({ status: 404, body: '' }));
   const urls = Object.values(GAME_MANIFESTS).flatMap((manifest) => manifest.thirdParty.map((file) => file.url));
   const requests: string[] = [];
@@ -17,7 +19,7 @@ try {
     await context.route(url, async (route) => {
       requests.push(route.request().url());
       await gate;
-      await route.abort(); // 验证启动时机和非阻塞性，不下载游戏资源或关闭 CDN TLS 校验。
+      await route.abort(); // Verify startup timing and nonblocking behavior without downloading game assets or disabling CDN TLS validation.
     });
   const page = await context.newPage();
   await page.goto(origin, { waitUntil: 'domcontentloaded' });

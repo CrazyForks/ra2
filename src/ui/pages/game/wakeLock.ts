@@ -1,7 +1,7 @@
 /**
- * VM 运行期间的屏幕常亮（Android Chrome；iOS 仅主屏 PWA）。
- * 标签页切后台时浏览器自动释放，恢复可见时重新请求。
- * 桌面 Chrome 无 wakeLock，直接 no-op。
+ * Keep the screen awake while the VM runs: Android Chrome, and iOS home-screen PWA only.
+ * The browser releases the lock in background tabs; request it again when visible.
+ * Desktop Chrome without wakeLock is a no-op.
  */
 export function installWakeLock(): () => void {
   if (!('wakeLock' in navigator)) return () => {};
@@ -23,7 +23,7 @@ export function installWakeLock(): () => void {
         });
       })
       .catch(() => {
-        // 页面非激活或浏览器策略拒绝；下次 visibilitychange 会重试。
+        // The page is inactive or browser policy denied the request; retry on the next visibilitychange.
       });
   };
   const onVisibility = (): void => {

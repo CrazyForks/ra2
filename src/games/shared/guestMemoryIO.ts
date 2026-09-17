@@ -1,7 +1,8 @@
 import type { GuestMemory } from '../../vm86/win32';
 
-/** 客体内存的定宽小端读写。调用方负责先确认地址范围可读，
- *  越界会由 GuestMemory 自己抛出，这里不吞异常。 */
+/**
+ * Fixed-width little-endian guest-memory access. The caller verifies readability first; GuestMemory throws on out-of-bounds access, and this layer does not swallow errors.
+ */
 export function readU32(memory: GuestMemory, address: number): number {
   const bytes = memory.read_memory(address, 4);
   return new DataView(bytes.buffer, bytes.byteOffset, 4).getUint32(0, true);

@@ -1,5 +1,5 @@
-// 查找对 IAT 条目的 call/jmp [addr] 调用点。
-// 用法：tsx ra2FindCalls.mts <exe> <iatVaHex> [...]
+// Find call/jmp [addr] sites targeting IAT entries.
+// Usage: tsx ra2FindCalls.mts <exe> <iatVaHex> [...]
 import { readFileSync } from 'node:fs';
 
 const [, , exePath, ...addrs] = process.argv;

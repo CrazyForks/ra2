@@ -1,6 +1,6 @@
 /**
- * 客体窄字符串解码：Win9x 中文环境用 GBK（cp936）。ASCII 无损；
- * 环境缺 TextDecoder（极老浏览器）时退化为 latin1 逐字节。
+ * Decode narrow guest strings with GBK (cp936) for Chinese Win9x; ASCII is lossless.
+ * If TextDecoder is unavailable in very old browsers, fall back to bytewise latin1.
  */
 const guestNarrowDecoder: { decode(bytes: Uint8Array): string } | null =
   typeof TextDecoder === 'function' ? new TextDecoder('gbk') : null;
@@ -14,7 +14,7 @@ export function decodeGuestNarrow(bytes: Uint8Array): string {
   }
 }
 
-/** MessageBox 没有宿主 UI 时选择 Win32 默认按钮，而不是对所有类型伪造 IDOK。 */
+/** Without host UI, MessageBox selects the Win32 default button instead of fabricating IDOK for every type. */
 export function defaultMessageBoxResult(type: number): number {
   const buttons = (() => {
     switch (type & 0x0f) {
@@ -38,7 +38,7 @@ export function defaultMessageBoxResult(type: number): number {
   return buttons[defaultIndex] ?? 1;
 }
 
-/** 小端四字节标签（RIFF/LIST chunk id）。 */
+/** Little-endian four-byte tag for RIFF/LIST chunk IDs. */
 export function fourCc(value: string): number {
   return (
     (value.charCodeAt(0) & 0xff) |
@@ -48,12 +48,12 @@ export function fourCc(value: string): number {
   );
 }
 
-/** Uint8Array 小端 u32。 */
+/** Little-endian u32 from Uint8Array. */
 export function readBytesU32(bytes: Uint8Array, offset: number): number {
   return (bytes[offset]! | (bytes[offset + 1]! << 8) | (bytes[offset + 2]! << 16) | (bytes[offset + 3]! << 24)) >>> 0;
 }
 
-/** 客体内存里的 ANSI/系统区域设置文本（繁体中文游戏用 Big5）。 */
+/** ANSI/system-locale text in guest memory; Traditional Chinese games use Big5. */
 export function decodeAnsi(bytes: Uint8Array): string {
   try {
     return new TextDecoder('big5').decode(bytes);
@@ -62,7 +62,7 @@ export function decodeAnsi(bytes: Uint8Array): string {
   }
 }
 
-/** Win32 DLL 数值分派标签：装载时算一次，运行时 dispatch 零字符串操作。 */
+/** Numeric Win32 DLL dispatch tags computed once at load time, eliminating runtime string operations. */
 export const WIN32_KERNEL32 = 0;
 export const WIN32_USER32 = 1;
 export const WIN32_GDI32 = 2;
@@ -78,7 +78,7 @@ export const WIN32_DPLAYX = 11;
 export const WIN32_DPLAYX_COM = 12;
 export const WIN32_WSOCK32 = 13;
 
-/** DLL 名字 → 数值标签；COM 命名空间（DDRAW.COM/DSOUND.COM）单独成类。 */
+/** Map DLL names to numeric tags; COM namespaces DDRAW.COM/DSOUND.COM form separate categories. */
 export function win32ModuleOf(dll: string): number {
   const key = dll.toUpperCase();
   if (key.startsWith('DDRAW.COM')) return WIN32_DDRAW_COM;

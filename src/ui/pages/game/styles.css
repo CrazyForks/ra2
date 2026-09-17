@@ -3,7 +3,7 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --safe-right: env(safe-area-inset-right, 0px);
-  /* 红警式工业 HUD：氧化钢、警戒红与琥珀状态灯。保留旧变量名供组件复用。 */
+  /* Red Alert industrial HUD: oxidized steel, warning red, and amber status lights. Retain existing variable names for component reuse. */
   --alert: #d83a30;
   --alert-bright: #ff5a47;
   --warning: #e7a52b;
@@ -41,7 +41,7 @@ body {
     radial-gradient(circle at 50% 35%, rgba(135, 33, 28, 0.16), transparent 42%),
     repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.012) 0 1px, transparent 1px 5px), #090b0c;
 }
-/* 布局：stage 与调试侧边栏并排，调试面板占流内空间、不遮游戏画面 */
+/* Layout: stage and debug sidebar sit side by side; the panel occupies layout space without covering the game. */
 #app-layout {
   position: fixed;
   inset: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left);
@@ -67,12 +67,11 @@ canvas {
   -webkit-tap-highlight-color: transparent;
   -webkit-touch-callout: none;
 }
-/* 指针锁定：浏览器会把光标藏掉，屏幕外圈琥珀描边 + 四角取景框是持续存在的锁定提示
-         （轻微呼吸闪烁，不遮挡画面）；锁定瞬间顶部另浮出「按 Esc 解锁」胶囊，几秒自淡出。 */
+/* Pointer Lock hides the browser cursor. An amber outer border and four corner brackets provide a persistent, gently pulsing lock indicator without obscuring the frame. A top pill briefly says to press Esc to unlock, then fades after a few seconds. */
 #screen-frame {
   position: relative;
 }
-/* 属于全屏容器且不接收鼠标，状态提示不会影响游戏点击或锁定。 */
+/* Inside the fullscreen container and ignoring mouse input, status hints do not affect game clicks or pointer locking. */
 #vm-upscale-status {
   position: absolute;
   top: 8px;
@@ -92,7 +91,7 @@ canvas {
 #vm-upscale-status[hidden] {
   display: none;
 }
-/* 全屏容器包含 Esc 权限提示，避免 canvas 全屏时兄弟提示被浏览器遮住。 */
+/* Include the Esc permission hint in the fullscreen container so browser fullscreen does not hide a sibling hint behind the canvas. */
 #screen-frame:fullscreen {
   display: flex;
   align-items: center;
@@ -152,7 +151,7 @@ canvas {
     opacity: 0.3;
   }
 }
-/* 启动覆盖层：游戏图标 + 阶段 + 详情 + 取消；running 或首个帧到达后淡出。 */
+/* Startup overlay: game icon, phase, details, and cancel; fade out on running state or the first frame. */
 #vm-boot {
   position: absolute;
   inset: 0;
@@ -172,7 +171,7 @@ canvas {
   padding: 16px;
   transition: opacity 0.35s ease;
 }
-/* React 使用原生 hidden；显式覆盖启动遮罩的 display:flex。 */
+/* React uses native hidden; explicitly override the startup overlay's display:flex. */
 #vm-boot[hidden] {
   display: none;
 }
@@ -288,7 +287,7 @@ canvas {
   box-shadow: none;
   transform: none;
 }
-/* 调试面板文本块各自成卡：状态摘要 / 调用日志，块间距与描边保证不粘连 */
+/* Separate debug status and call-log blocks into cards; spacing and outlines keep them distinct. */
 #vm-debug .vm-debug-tabs {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -430,7 +429,7 @@ canvas {
   }
 }
 @media (max-width: 860px) {
-  /* 窄屏：侧边栏会把游戏挤没，退化为右缘悬浮层（调试完按 ` 收起即复原） */
+  /* On narrow screens, use a right-edge overlay so the sidebar does not squeeze out the game; collapse it with the backtick key after debugging. */
   #vm-debug {
     position: fixed;
     top: var(--safe-top);
@@ -449,7 +448,7 @@ canvas {
 #ui > * {
   pointer-events: auto;
 }
-/* 卷轴：RA2 原版对话框风格——暗钢轨道 + 红边 + CSS 脊纹拇指砖 + 上下箭头。 */
+/* Native RA2 dialog scrollbars: dark steel tracks, red borders, CSS-ridged thumbs, and up/down arrows. */
 :where(.panel, #vm-debug *) {
   scrollbar-width: auto;
   scrollbar-color: #3a4145 #101315;
@@ -468,7 +467,7 @@ canvas {
   border: 1px solid #8f1d1a;
   border-radius: 0;
 }
-/* 横向滚动条不适用纵向卷轴件：纯色钢拇指 + 红边，隐藏按钮。 */
+/* Horizontal scrollbars use solid steel thumbs with red borders and hidden buttons instead of vertical-scrollbar parts. */
 :where(.panel, #vm-debug *)::-webkit-scrollbar-thumb:horizontal {
   background: #3a4145;
 }
@@ -574,8 +573,7 @@ canvas {
   cursor: wait;
   opacity: 0.55;
 }
-/* Westwood 对话框风格（参照 Chrono Divide 的 message-box）：查找原版游戏文件面板。
-         半透明白底 + 外凸灰边 + 黄色命令字体，红色命令按钮即红警对话框原貌。 */
+/* Westwood dialog styling for the original-game-file finder, referencing Chrono Divide's message-box: translucent white background, raised gray border, yellow command text, and red command buttons matching RA2 dialogs. */
 .message-box.game-folder-panel {
   background: rgba(255, 255, 255, 0.1);
   border: 2px outset #8d8d8d;
@@ -609,8 +607,7 @@ canvas {
   gap: 8px;
   align-items: center;
 }
-/* 推荐下载（左右两栏带游戏图标，同旧在线包卡片布局）：外部站点取得
-         原版资源后经「选择文件…」导入。两栏等高对齐（stretch 默认值）。 */
+/* Recommended downloads: equal-height columns with game icons, matching the old online-package cards. Obtain original resources from external sites, then import through Select files. Columns align with the default stretch behavior. */
 .message-box .picker-games {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -620,7 +617,7 @@ canvas {
   .message-box .picker-games {
     grid-template-columns: 1fr;
   }
-  /* 窄屏选资源时让出下载入口；面板移除后自动恢复游戏工具栏，不改玩家收起偏好。 */
+  /* During narrow-screen resource selection, leave room for download entries; restore the toolbar when the panel is removed without changing the player's collapse preference. */
   body:has(.game-folder-panel) #vm-controls {
     display: none;
   }
@@ -737,7 +734,7 @@ canvas {
   margin-top: 8px;
   font-weight: 700;
 }
-/* 保留原生链接行为，同时提供清晰的点击区域与键盘焦点。 */
+/* Preserve native link behavior while providing clear click targets and keyboard focus. */
 .message-box .game-download-link {
   display: flex;
   align-items: center;
@@ -826,7 +823,7 @@ canvas {
   cursor: wait;
   opacity: 0.55;
 }
-/* 本地压缩包导入的文件清单：✓ 已加载（绿）/ ✗ 缺失（红）/ 可选（灰）。 */
+/* Local-archive file manifest: loaded (green check), missing (red cross), or optional (gray). */
 .manifest-checklist {
   display: flex;
   flex-direction: column;
@@ -853,11 +850,11 @@ canvas {
   color: #8f8f8f;
   font-weight: 400;
 }
-/* BadPage.htm 式错误页：粗体正文呼应红色大标题。 */
+/* BadPage.htm-style error page: bold body text echoes the large red heading. */
 .bad-page pre {
   font-weight: 700;
 }
-/* 游戏选择卡片：图标为主、标题为副。图标 96px 源图按 2× 整数缩到 48px，hidpi 下 1:1。 */
+/* Game-selection cards prioritize icons over titles. Downscale 96px icons by an integer factor of 2 to 48px, rendering 1:1 on HiDPI displays. */
 .game-icon-button {
   display: flex;
   flex-direction: column;
@@ -892,7 +889,7 @@ canvas {
   font-size: 12px;
   line-height: 1.2;
 }
-/* 版本区块内的导入按钮行（每块一份「选择文件…/选择文件夹…」）。 */
+/* Import-button row in each version section, with Select files / Select folder controls. */
 .message-box .game-package-picks {
   display: flex;
   flex-wrap: wrap;
@@ -902,7 +899,7 @@ canvas {
 .mono {
   font-family: Consolas, monospace;
 }
-/* 控制与状态放左侧（4:3 画面的黑边比顶栏宽裕得多，不占游戏高度），面板随内容收拢。 */
+/* Place controls/status on the left: 4:3 side margins offer more space than a top bar and preserve game height. Fit panels to content. */
 #vm-controls {
   position: fixed;
   z-index: 15;
@@ -931,8 +928,7 @@ canvas {
 #vm-controls > * {
   pointer-events: auto;
 }
-/* 控制面禁止文本选中：游戏交互中的拖拽/双击不会在按钮与状态文字上产生高亮
-         （调试面板 #vm-debug 刻意保留可选中，方便复制 hypercall 日志） */
+/* Disable text selection on controls so in-game dragging/double-clicking does not highlight buttons or status text. Keep #vm-debug selectable for copying hypercall logs. */
 #vm-controls,
 #ui .panel {
   user-select: none;
@@ -999,7 +995,7 @@ canvas {
 .resolution-controls .label {
   margin-right: 2px;
 }
-/* Chrono Divide 式 slider-item：label + range + 只读数值框（见其 style.css）。 */
+/* Chrono Divide-style slider-item: label + range + read-only value box (see its style.css). */
 .slider-item .slider-fields {
   display: inline-flex;
   align-items: center;
@@ -1019,7 +1015,7 @@ canvas {
   color: #cfc8ae;
   font-variant-numeric: tabular-nums;
 }
-/* Chrono Divide 式 select：.select > .select-value（当前值）+ .select-options（弹出列表）。 */
+/* Chrono Divide-style select: .select > .select-value (current value) + .select-options (popup list). */
 .resolution-controls .select {
   position: relative;
   flex: 1;
@@ -1076,7 +1072,7 @@ canvas {
     0 2px 8px rgba(216, 58, 48, 0.35);
   text-shadow: 0 1px 0 rgba(255, 255, 255, 0.25);
 }
-:where(button, select, input):not(#vm-touch-joystick):focus-visible {
+:where(button, select, input, a):not(#vm-touch-joystick):focus-visible {
   outline: 2px solid var(--gold-bright);
   outline-offset: 2px;
 }
@@ -1084,7 +1080,7 @@ canvas {
   justify-content: space-between;
   color: var(--ink-dim);
 }
-/* 金色滑杆：全站 range（音量/阈值/浓度/基线）统一质感 */
+/* Gold sliders: consistent range styling for volume, threshold, concentration, and baseline throughout the site. */
 input[type='range'] {
   -webkit-appearance: none;
   appearance: none;
@@ -1323,8 +1319,7 @@ input[type='range']::-moz-range-thumb {
     padding-right: 10px;
   }
 }
-/* 微信交流群二维码弹窗：样式与 #vm-cheat-dialog 同族；
-   二维码由 groupQr.ts 的文本在本地生成，此处只约束方形码图的宽度。 */
+/* WeChat group QR dialog shares #vm-cheat-dialog styling. Generate the QR code locally from groupQr.ts text; only constrain its square image width here. */
 .join-group-dialog {
   box-sizing: border-box;
   width: min(340px, calc(100vw - 24px));
@@ -1447,7 +1442,7 @@ input[type='range']::-moz-range-thumb {
 #vm-touch-controls.collapsed .touch-key:not(.touch-collapse) {
   display: none;
 }
-/* 十字键位：上 / 左·右 / 下 */
+/* Directional pad: up / left-right / down */
 #vm-touch-controls .touch-dpad {
   display: grid;
   grid-template-columns: repeat(3, 44px);
@@ -1470,7 +1465,7 @@ input[type='range']::-moz-range-thumb {
   grid-column: 2;
   grid-row: 3;
 }
-/* 摇杆：透明悬浮层，不占布局、不挤游戏画面 */
+/* Joystick: transparent floating overlay, occupying no layout space and leaving the game area intact */
 #vm-touch-joystick {
   position: fixed;
   z-index: 24;
@@ -1523,17 +1518,17 @@ input[type='range']::-moz-range-thumb {
     border-left: 1px solid var(--panel-border);
     align-content: center;
   }
-  /* 横屏窄高：方向键让位给摇杆悬浮层 */
+  /* Short landscape viewport: replace directional buttons with the joystick overlay */
   #vm-touch-controls .touch-dpad {
     display: none;
   }
 }
 
-/* Chrono Divide / RA2 客户端式外壳：平面黑灰控制台、亮灰 bevel、纯黄字，
-         只让主要动作保留警戒红。只重绘网页 UI，不在游戏 canvas 上覆盖纹理或滤镜。 */
+/* Chrono Divide / RA2 client shell: flat black-gray console, light-gray bevels, and pure yellow text; reserve warning red for primary actions. Restyle only web UI, without textures or filters over the game canvas. */
 :root {
-  --ra2-yellow: #fff600;
+  --ra2-yellow: var(--ra2-button-text);
   --ra2-yellow-dim: #c9c500;
+  --ra2-button-text: #d8cf00;
   --ra2-red: #bd0803;
   --ra2-red-hot: #ed160d;
   --ra2-red-dark: #690300;
@@ -1543,7 +1538,7 @@ input[type='range']::-moz-range-thumb {
   --ra2-edge-mid: #565656;
   --ra2-edge-lo: #050505;
   --ra2-button-red-edge: #ff0800;
-  --ra2-button-red-hot: #ff2222;
+  --ra2-button-red-hot: #e00000;
   --ra2-button-red-mid: #d40000;
   --ra2-button-red-deep: #6b0000;
   --ra2-button-red-shadow: #180000;
@@ -1628,7 +1623,7 @@ dialog {
 }
 .game-folder-panel {
   color: var(--ra2-yellow);
-  /* 临时项目背景压暗铺满；两角保留原版警示闪烁灯。 */
+  /* Darken and fill with the temporary project background; retain original flashing warning lights in both corners. */
   background:
     repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 3px),
     linear-gradient(rgba(10, 10, 10, 0.8), rgba(10, 10, 10, 0.8)),
@@ -1928,7 +1923,7 @@ input[type='range']::-webkit-slider-thumb {
     inset 1px 1px 0 #000,
     inset -1px -1px 0 #303030;
 }
-/* 卷轴沿用 RA2 原版对话框风格，使用 CSS 绘制。 */
+/* Draw scrollbars with CSS in the native RA2 dialog style. */
 :where(.panel, #vm-debug *) {
   scrollbar-color: #3a4145 #101315;
 }
@@ -1948,7 +1943,7 @@ input[type='range']::-webkit-slider-thumb {
 
 #vm-boot {
   color: #eee;
-  /* 临时项目背景压暗后作启动遮罩背景。 */
+  /* Use the darkened temporary project background for the startup overlay. */
   background:
     repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.015) 0 1px, transparent 1px 3px),
     linear-gradient(rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0.72)),
@@ -1958,7 +1953,7 @@ input[type='range']::-webkit-slider-thumb {
 #vm-boot .vm-boot-phase {
   color: var(--ra2-yellow);
 }
-/* CSS 加载条替代原版位图动画。 */
+/* Replace the original bitmap loading animation with a CSS progress bar. */
 #vm-boot .vm-boot-loading {
   display: block;
   margin: 2px auto;
@@ -1976,8 +1971,7 @@ input[type='range']::-webkit-slider-thumb {
     filter: brightness(1.35);
   }
 }
-/* —— 客户端窗口外壳：菜单态 800×560 内容页（Frame/BadPage.htm）——
-         #screen-frame 与画布同尺寸，背景页按画布等比缩放。 */
+/* Client window shell: 800x560 menu content page (Frame/BadPage.htm). Match #screen-frame to canvas dimensions and scale the background page proportionally. */
 #client-page {
   position: absolute;
   inset: 0;
@@ -1995,11 +1989,11 @@ input[type='range']::-webkit-slider-thumb {
   aspect-ratio: 350 / 107;
   object-fit: contain;
 }
-/* 游戏运行态：画面独占整窗，外壳退场。 */
+/* While the game runs, its frame fills the window and the shell disappears. */
 .game-running #client-page {
   display: none;
 }
-/* —— 侧边栏补全：控制栏按钮使用 CSS 红色三态按钮，状态读数黄字 —— */
+/* Sidebar completion: CSS red three-state toolbar buttons and yellow status readings. */
 #vm-controls output {
   color: var(--ra2-yellow);
   font-variant-numeric: tabular-nums;
@@ -2011,10 +2005,10 @@ input[type='range']::-webkit-slider-thumb {
   height: 25px;
   min-height: 25px;
   padding: 0;
-  color: #ff0;
+  color: var(--ra2-button-text);
   font-weight: 700;
   background:
-    linear-gradient(180deg, rgba(255, 32, 25, 0.95) 0, transparent 19%, transparent 81%, rgba(255, 32, 25, 0.95) 100%),
+    linear-gradient(180deg, rgba(224, 0, 0, 0.62) 0, transparent 19%, transparent 81%, rgba(224, 0, 0, 0.62) 100%),
     radial-gradient(
       ellipse at center,
       var(--ra2-button-red-hot) 0,
@@ -2025,7 +2019,7 @@ input[type='range']::-webkit-slider-thumb {
   border: 2px solid var(--ra2-button-red-edge);
   box-shadow:
     inset 0 0 0 1px #430000,
-    inset 0 0 9px rgba(255, 0, 0, 0.85),
+    inset 0 0 7px rgba(255, 0, 0, 0.45),
     0 0 0 1px #260000,
     0 2px 0 #080000;
   text-shadow: 1px 1px 0 #4a0000;
@@ -2033,6 +2027,7 @@ input[type='range']::-webkit-slider-thumb {
 }
 #vm-controls .toolbar-button:hover,
 #vm-controls .rate-button:hover {
+  color: var(--ra2-button-text);
   background:
     linear-gradient(180deg, rgba(255, 196, 68, 0.95) 0, transparent 19%, transparent 81%, rgba(255, 128, 0, 0.95) 100%),
     radial-gradient(
@@ -2051,6 +2046,7 @@ input[type='range']::-webkit-slider-thumb {
 }
 #vm-controls .toolbar-button:active,
 #vm-controls .rate-button:active {
+  color: var(--ra2-button-text);
   background:
     linear-gradient(180deg, rgba(184, 0, 0, 0.9), transparent 25%, transparent 75%, rgba(190, 0, 0, 0.9) 100%),
     radial-gradient(ellipse at center, #d00000 0, #820000 45%, #2a0000 100%);
@@ -2058,7 +2054,15 @@ input[type='range']::-webkit-slider-thumb {
   border-style: inset;
   box-shadow: inset 0 0 7px #120000;
 }
-/* 已按下的速率键：常驻按下帧。 */
+/* The open-source link reuses the toolbar look; anchors default to inline content-box sizing, so center its text, drop the underline, and match the border-box buttons beside it. */
+#vm-controls a.toolbar-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  text-decoration: none;
+}
+/* Pressed speed key: retain its pressed frame. */
 #vm-controls .rate-button[aria-pressed='true'] {
   background:
     linear-gradient(180deg, rgba(184, 0, 0, 0.9), transparent 25%, transparent 75%, rgba(190, 0, 0, 0.9) 100%),
@@ -2080,8 +2084,7 @@ input[type='range']::-webkit-slider-thumb {
   color: #000;
   cursor: default;
 }
-/* 时钟倍率暂隐：后续按 Chrono Divide 的 slider-item 样式重做
-         （label + range 滑条，见其 style.css .slider-item）。 */
+/* Temporarily hide clock speed; later restyle as Chrono Divide's slider-item (label + range; see .slider-item in its style.css). */
 #vm-controls .vm-clock-controls {
   display: none;
 }
@@ -2146,7 +2149,7 @@ input[type='range']::-webkit-slider-thumb {
 .resolution-controls .select.disabled .select-value:hover {
   color: #686800;
 }
-/* 下拉框不用固定宽度的按钮精灵；两行共用标签列，选择区域自然填满余宽。 */
+/* Dropdowns avoid fixed-width button sprites; both rows share a label column, and selection fills the remaining width. */
 #vm-controls .resolution-controls > .label {
   flex: 0 0 36px;
   margin: 0;
@@ -2171,7 +2174,7 @@ input[type='range']::-webkit-slider-thumb {
   min-height: 24px;
 }
 @media (max-height: 560px) {
-  /* 全屏按钮移到底部后，横屏矮窗口必须能滚动到它，不能被视口裁掉。 */
+  /* After moving fullscreen to the bottom, short landscape windows must allow scrolling to it instead of clipping it outside the viewport. */
   #vm-controls {
     max-height: calc(100dvh - var(--safe-top) - var(--safe-bottom) - 20px);
     overflow-y: auto;
@@ -2197,7 +2200,7 @@ input[type='range']::-webkit-slider-thumb {
   }
 }
 
-/* 后处理状态独占下一行，窄控制栏仍保留完整的效果下拉。 */
+/* Postprocessing status occupies its own next row, preserving the full effects dropdown in narrow control bars. */
 #vm-controls .reshade-controls {
   flex-wrap: wrap;
 }
@@ -2209,4 +2212,12 @@ input[type='range']::-webkit-slider-thumb {
   flex-basis: 100%;
   font-size: 11px;
   line-height: 1.5;
+}
+
+/* English labels need a wider shared column while keeping dropdowns aligned. */
+:lang(en) #vm-controls:not(.collapsed) {
+  width: 216px;
+}
+:lang(en) #vm-controls .resolution-controls > .label {
+  flex-basis: 64px;
 }

@@ -26,7 +26,7 @@ jobs:
         with:
           node-version: '*'
 
-      # pnpm 11 本身要求 Node >=22.13，不能先用 runner 的未知默认 Node 启动。
+      # pnpm 11 itself requires Node >=22.13; do not start it using the runner's unknown default Node.
       - name: Set up pinned pnpm
         uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
 
@@ -71,7 +71,7 @@ jobs:
   yr:
     name: Real game YR
     needs: [basic, ra2]
-    # RA2 失败后仍验收 YR；取消流水线或 Basic 失败则停止。
+    # Still test YR after RA2 fails; stop if the workflow is canceled or Basic fails.
     if: always() && !cancelled() && needs.basic.result == 'success' && github.event_name != 'pull_request' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 65

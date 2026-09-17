@@ -85,14 +85,14 @@ describe('RA2 Westwood Gadget 消息路径', () => {
     const app = createWindow(shim, memory, 'Red Alert 2', 0x1000_0000, [0, 0, 800, 600]);
     const dialog = createWindow(shim, memory, '#32770', 0x5000_0040, [0, 0, 800, 600], app);
     createWindow(shim, memory, 'Static', 0x5000_0007, [30, 20, 300, 100], dialog, 1770);
-    // 对话框挂上客体 WndProc，便于观察同步分派的 WM_NCHITTEST。
+    // Attach a guest WndProc to the dialog to observe synchronously dispatched WM_NCHITTEST.
     callShim(shim, 'USER32.DLL!SetWindowLongA', [dialog, -4, 0x40_0000]);
     (shim as unknown as { shellPageTitle: string }).shellPageTitle = 'GUI:CampaignMenu';
     while (peek(shim)) {
-      /* 排空初始窗口消息 */
+      /* Drain initial window messages */
     }
 
-    // 进入徽标：先同步分派 WM_NCHITTEST（屏幕坐标），下一拍父 Gadget 取得普通 move。
+    // Enter the insignia: synchronously dispatch WM_NCHITTEST (screen coordinates), then deliver a normal move to the parent Gadget on the next tick.
     shim.setCursorPosition(100, 50);
     shim.postMessage(0x0200, 0, (50 << 16) | 100);
     expect(peek(shim)).toBe(0);
@@ -103,13 +103,13 @@ describe('RA2 Westwood Gadget 消息路径', () => {
     expect(readU32(memory, MSG + 12)).toBe((50 << 16) | 100);
     expect(shim.inspectPointerState().campaignHoverDispatches).toBe(1);
 
-    // 同一阵营内部继续移动不再合成 NCHITTEST，只走父 Gadget。
+    // Further movement within the same faction no longer synthesizes NCHITTEST; it only reaches the parent Gadget.
     shim.setCursorPosition(110, 55);
     shim.postMessage(0x0200, 0, (55 << 16) | 110);
     expect(peek(shim)).toBe(1);
     expect(readU32(memory, MSG)).toBe(dialog);
 
-    // 移出徽标：子窗口边沿变化，再合成一次 NCHITTEST（对话框据此停止动画）。
+    // Leave the insignia: the child-window boundary changes, synthesizing another NCHITTEST so the dialog stops the animation.
     shim.setCursorPosition(700, 500);
     shim.postMessage(0x0200, 0, (500 << 16) | 700);
     expect(peek(shim)).toBe(0);
@@ -117,7 +117,7 @@ describe('RA2 Westwood Gadget 消息路径', () => {
     expect(peek(shim)).toBe(1);
     expect(shim.inspectPointerState().campaignHoverDispatches).toBe(1);
 
-    // 再次进入才产生下一次徽标 enter-edge。
+    // Only re-entry produces the next insignia enter edge.
     shim.setCursorPosition(100, 50);
     shim.postMessage(0x0200, 0, (50 << 16) | 100);
     expect(peek(shim)).toBe(0);
@@ -142,7 +142,7 @@ describe('RA2 Westwood Gadget 消息路径', () => {
     callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0153, -1, 19]); // selection = 19px
     callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0153, 0, 23]); // item = 23px
     callShim(shim, 'USER32.DLL!MoveWindow', [combo, 53, 44, 151, 121, 0]);
-    // 二次只把控件对齐到闭合行；展开高度仍应是 121。
+    // The second layout only aligns the control to its collapsed row; expanded height should remain 121.
     callShim(shim, 'USER32.DLL!MoveWindow', [combo, 133, 104, 151, 23, 0]);
     expect(callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0152, 0, droppedRect]).eax).toBe(1);
     expect([
@@ -152,25 +152,25 @@ describe('RA2 Westwood Gadget 消息路径', () => {
       readU32(memory, droppedRect + 12),
     ]).toEqual([133, 104, 284, 225]);
 
-    // 常驻 HWND 仍只占一行，命中不能遮住下方控件。
+    // The persistent HWND still occupies one row, so hit testing must not obscure controls below.
     expect(callShim(shim, 'USER32.DLL!GetWindowRect', [combo, windowRect]).eax).toBe(1);
     expect(readU32(memory, windowRect + 12) - readU32(memory, windowRect + 4)).toBe(23);
 
-    // 新的完整高度会更新 extent，随后的闭合 SetWindowPos 也不得清掉它。
+    // A new full height updates the extent; subsequent collapsed SetWindowPos calls must not clear it.
     callShim(shim, 'USER32.DLL!SetWindowPos', [combo, 0, 140, 120, 151, 92, 0]);
     callShim(shim, 'USER32.DLL!SetWindowPos', [combo, 0, 140, 120, 151, 23, 0]);
     callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0152, 0, droppedRect]);
     expect(readU32(memory, droppedRect + 12) - readU32(memory, droppedRect + 4)).toBe(92);
 
-    // 即使布局器请求比闭合行更小的高度，窗口仍保持选择框高度，
-    // 且不得破坏先前建立的展开高度（Wine/Win32 test_changesize 语义）。
+    // Even if the layout requests less than the collapsed-row height, the window retains the selection-box height
+    // and preserves the established expanded height (Wine/Win32 test_changesize semantics).
     callShim(shim, 'USER32.DLL!MoveWindow', [combo, 160, 130, 151, 10, 0]);
     callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0152, 0, droppedRect]);
     expect(readU32(memory, droppedRect + 12) - readU32(memory, droppedRect + 4)).toBe(92);
     callShim(shim, 'USER32.DLL!GetWindowRect', [combo, windowRect]);
     expect(readU32(memory, windowRect + 12) - readU32(memory, windowRect + 4)).toBe(23);
 
-    // SWP_NOSIZE 完全不修改两种高度。
+    // SWP_NOSIZE changes neither height.
     callShim(shim, 'USER32.DLL!SetWindowPos', [combo, 0, 160, 130, 0, 1, 0x0001]);
     callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0152, 0, droppedRect]);
     expect(readU32(memory, droppedRect + 12) - readU32(memory, droppedRect + 4)).toBe(92);
@@ -192,11 +192,38 @@ describe('RA2 Westwood Gadget 消息路径', () => {
     callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0153, -1, 19]);
     callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0153, 0, 23]);
 
-    callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0202, 0, (5 << 16) | 5]);
+    callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0202, 0, (5 << 16) | 145]);
     expect(callShim(shim, 'USER32.DLL!GetCapture').eax).toBe(combo);
     callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0202, 0, (50 << 16) | 5]);
     expect(callShim(shim, 'USER32.DLL!GetCapture').eax).toBe(0);
     expect(callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0147, 0, 0]).eax).toBe(1);
+  });
+
+  it('RA2 下拉列表点击文字不展开，点击右侧三角才展开', () => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory, { gameId: 'ra2' });
+    const root = createWindow(shim, memory, '#32770', 0x1000_0040, [0, 0, 800, 600]);
+    const combo = createWindow(shim, memory, 'ComboBox', 0x5000_0213, [133, 104, 151, 23], root, 0x4321);
+    while (peek(shim)) {
+      /* 排空初始窗口消息 */
+    }
+
+    const click = (x: number, y: number) => {
+      const point = (y << 16) | (x & 0xffff);
+      shim.setCursorPosition(x, y);
+      shim.postMessage(0x0201, 1, point);
+      expect(callShim(shim, 'USER32.DLL!PeekMessageA', [MSG, 0, 0x0201, 0x0201, 1]).eax).toBe(1);
+      callShim(shim, 'USER32.DLL!DispatchMessageA', [MSG]);
+      shim.postMessage(0x0202, 0, point);
+      expect(callShim(shim, 'USER32.DLL!PeekMessageA', [MSG, 0, 0x0202, 0x0202, 1]).eax).toBe(1);
+      callShim(shim, 'USER32.DLL!DispatchMessageA', [MSG]);
+    };
+
+    click(160, 115); // 文字区
+    expect(callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0157, 0, 0]).eax).toBe(0);
+
+    click(279, 115); // 右侧三角区
+    expect(callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0157, 0, 0]).eax).toBe(1);
   });
 
   it('ComboBox 再次点击收起时清除下拉高亮残影且不反转选择', () => {
@@ -212,6 +239,10 @@ describe('RA2 Westwood Gadget 消息路径', () => {
     writeU32(memory, desc + 104, 0x200); // DDSCAPS_PRIMARYSURFACE
     callShim(shim, 'DDRAW.COM!IDirectDraw.CreateSurface', [0, desc, out, 0]);
     const primary = readU32(memory, out);
+    writeU32(memory, desc + 104, 0); // 当前 shell 的静态背景层
+    const backgroundOut = 0x32_200;
+    callShim(shim, 'DDRAW.COM!IDirectDraw.CreateSurface', [0, desc, backgroundOut, 0]);
+    const background = readU32(memory, backgroundOut);
 
     const root = createWindow(shim, memory, '#32770', 0x1000_0040, [0, 0, 800, 600]);
     const combo = createWindow(shim, memory, 'ComboBox', 0x5000_0213, [133, 104, 151, 69], root, 0x4321);
@@ -225,16 +256,18 @@ describe('RA2 Westwood Gadget 消息路径', () => {
     callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0143, 0, easy]);
     callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x014e, 1, 0]);
 
-    callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0202, 0, (5 << 16) | 5]);
+    callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0202, 0, (5 << 16) | 145]);
     expect(callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0157, 0, 0]).eax).toBe(1);
     const pitch = readU32(memory, primary + 24);
     const staleHighlight = readU32(memory, primary + 44) + 127 * pitch + 133 * 2;
+    const backgroundPixel = readU32(memory, background + 44) + 127 * readU32(memory, background + 24) + 133 * 2;
+    memory.write_memory([0x78, 0x56], backgroundPixel);
     memory.write_memory([0x34, 0x12], staleHighlight);
 
-    callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0202, 0, (5 << 16) | 5]);
+    callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0202, 0, (5 << 16) | 145]);
     expect(callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0157, 0, 0]).eax).toBe(0);
     expect(callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0147, 0, 0]).eax).toBe(1);
-    expect(memory.read_memory(staleHighlight, 2)).toEqual(new Uint8Array([0, 0]));
+    expect(memory.read_memory(staleHighlight, 2)).toEqual(new Uint8Array([0x78, 0x56]));
   });
 
   it('EnableWindow 同步通知自绘控件并收口禁用子树的 capture/focus', () => {
@@ -259,8 +292,8 @@ describe('RA2 Westwood Gadget 消息路径', () => {
       message: 0x000a,
     });
 
-    // 再直接禁用 ComboBox，确认 custom trampoline 中依次包含
-    // WM_CANCELMODE 与 WM_ENABLE。
+    // Then disable the ComboBox directly and verify that the custom trampoline contains
+    // WM_CANCELMODE followed by WM_ENABLE.
     callShim(shim, 'USER32.DLL!EnableWindow', [root, 1]);
     writeU32(memory, stack, 0x1234_5678);
     callShim(shim, 'USER32.DLL!EnableWindow', [combo, 0], stack);
@@ -296,7 +329,7 @@ describe('RA2 Westwood Gadget 消息路径', () => {
 
     const callback = shim.inspectCallbackState();
     const createStruct = 0x22_0000 + 4096 - 48;
-    expect(result.eax).toBe(0); // 客体回调返回后 trampoline 才给 API 返回 HWND
+    expect(result.eax).toBe(0); // The trampoline returns the HWND to the API only after the guest callback returns
     expect(callback).toMatchObject({ hwnd: 0x2000, message: 0x0001, callback: 0x5e_ad20 });
     expect(readU32(memory, createStruct)).toBe(0x201d); // lpCreateParams
     expect(readU32(memory, createStruct + 12)).toBe(0x2018); // hwndParent
@@ -306,7 +339,7 @@ describe('RA2 Westwood Gadget 消息路径', () => {
     expect(readU32(memory, createStruct + 40)).toBe(className); // lpszClass
   });
 
-  it('RA2 ComboBox 仅在显示且启用时命中，隐藏或禁用时交给 Gadget', () => {
+  it('RA2 ComboBox 仅在显示且启用时命中，隐藏文字区不展开且禁用控件交给 Gadget', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory, { gameId: 'ra2' });
     const app = createWindow(shim, memory, 'Red Alert 2', 0x1000_0000, [10, 20, 800, 600]);
@@ -315,17 +348,17 @@ describe('RA2 Westwood Gadget 消息路径', () => {
     const hiddenCombo = createWindow(shim, memory, 'ComboBox', 0x4000_0213, [133, 104, 151, 23], layout, 0x7abb);
     createWindow(shim, memory, 'ComboBox', 0x5800_0213, [133, 150, 151, 23], layout, 0x7abc);
     while (peek(shim)) {
-      /* 排空初始 WM_MOVE/WM_SIZE/WM_ACTIVATEAPP */
+      /* Drain initial WM_MOVE/WM_SIZE/WM_ACTIVATEAPP */
     }
 
     expect(callShim(shim, 'USER32.DLL!IsWindowVisible', [hiddenCombo]).eax).toBe(0);
     shim.postMessage(0x0201, 1, (146 << 16) | 218);
     expect(peek(shim)).toBe(1);
-    expect(readU32(memory, MSG)).toBe(shell);
+    expect(readU32(memory, MSG)).toBe(hiddenCombo);
 
     callShim(shim, 'USER32.DLL!ShowWindow', [hiddenCombo, 5]);
     while (peek(shim)) {
-      /* 排空显示产生的重绘消息 */
+      /* Drain repaint messages generated by showing the window */
     }
     shim.postMessage(0x0201, 1, (146 << 16) | 218);
     expect(peek(shim)).toBe(1);
@@ -349,7 +382,7 @@ describe('RA2 Westwood Gadget 消息路径', () => {
     const playerName = createWindow(shim, memory, 'ListBox', 0x5000_0110, [134, 79, 149, 19], layout, 1696);
     (shim as unknown as { shellPageTitle: string }).shellPageTitle = 'Any Shell Page';
     while (peek(shim)) {
-      /* 排空初始消息 */
+      /* Drain initial messages */
     }
 
     shim.postMessage(0x0201, 1, (88 << 16) | 208);
@@ -372,10 +405,16 @@ describe('RA2 Westwood Gadget 消息路径', () => {
     const shim = createTestShim(memory, { gameId: 'ra2' });
     const root = createWindow(shim, memory, '#32770', 0x1000_0040, [0, 0, 800, 600]);
     const layout = createWindow(shim, memory, '#32770', 0x5000_0040, [0, 0, 800, 600], root);
+    const combo = createWindow(shim, memory, 'ComboBox', 0x5000_0000, [350, 150, 118, 23], layout);
     const popup = createWindow(shim, memory, 'ComboDropWin', 0x5000_0000, [350, 102, 118, 161], layout);
     (shim as unknown as { shellPageTitle: string }).shellPageTitle = 'Any Shell Page';
     while (peek(shim)) {
-      /* 排空初始消息 */
+      /* Drain initial messages */
+    }
+    callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x014f, 1, 0]);
+    callShim(shim, 'USER32.DLL!SetCapture', [combo]);
+    while (peek(shim)) {
+      /* 排空展开组合框产生的 WM_PAINT，下面只检查鼠标消息目标 */
     }
 
     shim.postMessage(0x0201, 1, (159 << 16) | 409);
@@ -392,7 +431,7 @@ describe('RA2 Westwood Gadget 消息路径', () => {
     const combo = createWindow(shim, memory, 'ComboBox', 0x5000_0000, [350, 150, 118, 23], root);
     const popup = createWindow(shim, memory, 'ComboDropWin', 0x5000_0000, [350, 102, 118, 161], root);
     while (peek(shim)) {
-      /* 鎺掔┖鍒濆 WM_MOVE/WM_SIZE/WM_ACTIVATEAPP */
+      /* Drain initial WM_MOVE/WM_SIZE/WM_ACTIVATEAPP */
     }
 
     const point = (159 << 16) | 409;
@@ -411,6 +450,125 @@ describe('RA2 Westwood Gadget 消息路径', () => {
     expect(callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0157, 0, 0]).eax).toBe(0);
   });
 
+  it('顶层 ComboDropWin 使用屏幕坐标并覆盖下方 ComboBox', () => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory, { gameId: 'ra2' });
+    const app = createWindow(shim, memory, 'Red Alert 2', 0x1000_0000, [20, 30, 800, 600]);
+    const combo = createWindow(shim, memory, 'ComboBox', 0x5000_0000, [350, 150, 118, 23], app);
+    const popup = createWindow(shim, memory, 'ComboDropWin', 0x9000_0000, [350, 102, 118, 161], app);
+    while (peek(shim)) {
+      /* 排空初始消息 */
+    }
+    callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x014f, 1, 0]);
+    callShim(shim, 'USER32.DLL!SetCapture', [combo]);
+    while (peek(shim)) {
+      /* 排空展开组合框产生的 WM_PAINT */
+    }
+
+    const windowRect = 0x31_000;
+    callShim(shim, 'USER32.DLL!GetWindowRect', [popup, windowRect]);
+    expect([
+      readU32(memory, windowRect),
+      readU32(memory, windowRect + 4),
+      readU32(memory, windowRect + 8),
+      readU32(memory, windowRect + 12),
+    ]).toEqual([350, 102, 468, 263]);
+
+    const point = (159 << 16) | 409;
+    shim.setCursorPosition(409, 159);
+    shim.postMessage(0x0201, 1, point);
+
+    expect(shim.inspectHostInputTrace().at(-1)?.hwnd).toBe(popup);
+    expect(peek(shim)).toBe(1);
+    expect(readU32(memory, MSG)).toBe(popup);
+    expect(readU32(memory, MSG + 12)).toBe((57 << 16) | 59);
+  });
+
+  it('ComboBox 按下后弹层出现时，抬起仍投给原 ComboBox', () => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory, { gameId: 'ra2' });
+    const root = createWindow(shim, memory, '#32770', 0x1000_0040, [0, 0, 800, 600]);
+    const combo = createWindow(shim, memory, 'ComboBox', 0x5000_0000, [350, 150, 118, 23], root);
+    const popup = createWindow(shim, memory, 'ComboDropWin', 0x4000_0000, [350, 102, 118, 161], root);
+    (shim as unknown as { shellPageTitle: string }).shellPageTitle = 'Any Shell Page';
+    while (peek(shim)) {
+      /* 排空初始消息 */
+    }
+
+    const point = (159 << 16) | 409;
+    shim.setCursorPosition(409, 159);
+    shim.postMessage(0x0201, 1, point);
+    expect(shim.inspectHostInputTrace().at(-1)?.hwnd).toBe(combo);
+
+    // 模拟 ComboBox 按下处理期间游戏显示真实弹层。
+    callShim(shim, 'USER32.DLL!ShowWindow', [popup, 1]);
+    while (peek(shim)) {
+      /* 排空弹层显示产生的 WM_PAINT */
+    }
+    shim.postMessage(0x0202, 0, point);
+
+    expect(shim.inspectHostInputTrace().at(-1)?.hwnd).toBe(combo);
+    expect(callShim(shim, 'USER32.DLL!PeekMessageA', [MSG, 0, 0x0202, 0x0202, 1]).eax).toBe(1);
+    expect(readU32(memory, MSG)).toBe(combo);
+    expect(readU32(memory, MSG + 12)).toBe((9 << 16) | 59);
+  });
+
+  it('隐藏自绘 ComboBox 按下后弹层出现时，抬起仍投给原 shell 页', () => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory, { gameId: 'ra2' });
+    const root = createWindow(shim, memory, '#32770', 0x1000_0040, [0, 0, 800, 600]);
+    const layout = createWindow(shim, memory, '#32770', 0x5000_0040, [0, 0, 800, 600], root);
+    createWindow(shim, memory, 'ComboBox', 0x4000_0213, [350, 150, 118, 23], layout);
+    const popup = createWindow(shim, memory, 'ComboDropWin', 0x4000_0000, [350, 102, 118, 161], root);
+    (shim as unknown as { shellPageTitle: string }).shellPageTitle = 'Any Shell Page';
+    while (peek(shim)) {
+      /* 排空初始消息 */
+    }
+
+    // 三角区仍由 shell Gadget 处理；即使按下后弹层马上出现，抬起也不能改投弹层。
+    const point = (159 << 16) | 459;
+    shim.setCursorPosition(459, 159);
+    shim.postMessage(0x0201, 1, point);
+    expect(shim.inspectHostInputTrace().at(-1)?.hwnd).toBe(layout);
+
+    callShim(shim, 'USER32.DLL!ShowWindow', [popup, 1]);
+    while (peek(shim)) {
+      /* 排空弹层显示产生的 WM_PAINT */
+    }
+    shim.postMessage(0x0202, 0, point);
+
+    expect(shim.inspectHostInputTrace().at(-1)?.hwnd).toBe(layout);
+    expect(callShim(shim, 'USER32.DLL!PeekMessageA', [MSG, 0, 0x0202, 0x0202, 1]).eax).toBe(1);
+    expect(readU32(memory, MSG)).toBe(layout);
+    expect(readU32(memory, MSG + 12)).toBe((159 << 16) | 459);
+  });
+
+  it('隐藏自绘 ComboBox 点击文字区不交给 Gadget 展开', () => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory, { gameId: 'ra2' });
+    const root = createWindow(shim, memory, '#32770', 0x1000_0040, [0, 0, 800, 600]);
+    const layout = createWindow(shim, memory, '#32770', 0x5000_0040, [0, 0, 800, 600], root);
+    const combo = createWindow(shim, memory, 'ComboBox', 0x4000_0213, [350, 150, 118, 23], layout);
+    createWindow(shim, memory, 'ComboDropWin', 0x4000_0000, [350, 102, 118, 161], root);
+    (shim as unknown as { shellPageTitle: string }).shellPageTitle = 'Any Shell Page';
+    while (peek(shim)) {
+      /* 排空初始消息 */
+    }
+
+    const point = (159 << 16) | 370;
+    shim.setCursorPosition(370, 159);
+    shim.postMessage(0x0201, 1, point);
+    expect(shim.inspectHostInputTrace().at(-1)?.hwnd).toBe(combo);
+    expect(peek(shim)).toBe(1);
+    callShim(shim, 'USER32.DLL!DispatchMessageA', [MSG]);
+
+    shim.postMessage(0x0202, 0, point);
+    expect(shim.inspectHostInputTrace().at(-1)?.hwnd).toBe(combo);
+    expect(peek(shim)).toBe(1);
+    callShim(shim, 'USER32.DLL!DispatchMessageA', [MSG]);
+    expect(callShim(shim, 'USER32.DLL!SendMessageA', [combo, 0x0157, 0, 0]).eax).toBe(0);
+  });
+
   it('ComboDropWin destruction before mouseup does not fall through', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory, { gameId: 'ra2' });
@@ -418,7 +576,7 @@ describe('RA2 Westwood Gadget 消息路径', () => {
     const combo = createWindow(shim, memory, 'ComboBox', 0x5000_0000, [350, 150, 118, 23], root);
     const popup = createWindow(shim, memory, 'ComboDropWin', 0x5000_0000, [350, 102, 118, 161], root);
     while (peek(shim)) {
-      /* 鎺掔┖鍒濆 WM_MOVE/WM_SIZE/WM_ACTIVATEAPP */
+      /* Drain initial WM_MOVE/WM_SIZE/WM_ACTIVATEAPP */
     }
 
     const point = (159 << 16) | 409;
