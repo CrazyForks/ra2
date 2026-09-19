@@ -294,7 +294,7 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
           // Modeless dialogs created by CreateDialogIndirectParam are HWNDs too.
           // RA2 parses main-menu controls itself and initializes them through later message pumping;
           // retain the dialog procedure so DispatchMessageA can enter the native dialog proc.
-          const hwnd = this.nextWindow++;
+          const hwnd = this.allocateWindowHandle();
           const callback = a[3] ?? 0;
           this.windows.set(hwnd, callback);
           this.placeWindow(hwnd, 0);
@@ -310,7 +310,7 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
           const resource = this.findPeResource(a[0] ?? 0, a[1] ?? 0, 5); // RT_DIALOG
           if (!resource) return { eax: 0 };
           this.loadedResources.set(resource.handle, resource);
-          const hwnd = this.nextWindow++;
+          const hwnd = this.allocateWindowHandle();
           const callback = a[3] ?? 0;
           this.windows.set(hwnd, callback);
           this.placeWindow(hwnd, 0);

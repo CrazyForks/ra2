@@ -26,6 +26,7 @@ import {
   GUEST_WINDOW_ID,
   GUEST_WINDOW_PARENT,
   GUEST_WINDOW_STYLE,
+  GUEST_WINDOW_OWNER,
   GUEST_WINDOW_TABLE,
   GUEST_WINDOW_TABLE_MAX,
   GUEST_WINDOW_USERDATA,
@@ -958,13 +959,11 @@ function emitWindowEntryPreamble(code: number[]): number[] {
   };
   const patches: number[] = [];
   code.push(0x8b, 0x4c, 0x24, 0x04); // mov ecx, [esp + 4]（hwnd）
+  code.push(0x8b, 0xc1); // mov eax, ecx（保留 hwnd 供属主校验）
   code.push(0x81, 0xe9);
   emit32(0x2000); // sub ecx, 0x2000
-  code.push(0x81, 0xf9);
-  emit32(GUEST_WINDOW_TABLE_MAX); // cmp ecx, MAX
-  code.push(0x0f, 0x83);
-  patches.push(code.length);
-  emit32(0); // jae fallback
+  code.push(0x81, 0xe1);
+  emit32(GUEST_WINDOW_TABLE_MAX - 1); // and ecx, MAX-1（表按 2 的幂环绕）
   code.push(0xc1, 0xe1, 0x06); // shl ecx, 6（×GUEST_WINDOW_ENTRY_BYTES=64）
   code.push(0x81, 0xc1);
   emit32(GUEST_WINDOW_TABLE); // add ecx, TABLE
@@ -972,6 +971,10 @@ function emitWindowEntryPreamble(code: number[]): number[] {
   code.push(0x0f, 0x84);
   patches.push(code.length);
   emit32(0); // je fallback
+  code.push(0x39, 0x41, GUEST_WINDOW_OWNER); // cmp [ecx + OWNER], eax
+  code.push(0x0f, 0x85);
+  patches.push(code.length);
+  emit32(0); // jne fallback（环绕碰撞时回退到完整 hypercall）
   return patches;
 }
 

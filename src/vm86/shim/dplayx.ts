@@ -234,6 +234,9 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
     /** Received-message queue consumed by Receive; data lives in the shim heap. */
     protected dplayQueue: Array<{ from: number; to: number; data: number; size: number }> = [];
     /** Cached remote sessions for EnumSessions, refreshed by announce heartbeats. */
+    /** Guest staging from the current and previous EnumSessions; freed one generation late so lobby polling does not leak heap. */
+    private enumSessionsScratch: number[] = [];
+    private enumSessionsRetired: number[] = [];
     private dplayRemoteSessions = new Map<
       string,
       {
@@ -1081,6 +1084,11 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
           }
           case 'EnumSessions': {
             // Build session lists from cached host announcements; discard after 30s.
+            // Release staging two enumerations old: the game polls this while the lobby is on screen, and one
+            // generation of slack keeps buffers alive for a callback that the PIT preempted mid-read.
+            for (const pointer of this.enumSessionsRetired) this.freeAllocation(pointer);
+            this.enumSessionsRetired = this.enumSessionsScratch;
+            this.enumSessionsScratch = [];
             const callback = a[3] ?? 0;
             const context = a[4] ?? 0;
             if (!callback) return { eax: 0x8000_4003 };
@@ -1115,6 +1123,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
               }
               const name = this.bytesToGuest(s.nameBytes);
               const desc = this.alloc(80, true);
+              this.enumSessionsScratch.push(name, desc);
               this.memory.write_memory(new Uint8Array(80), desc);
               this.writeU32(desc, 80); // dwSize
               this.writeU32(desc + 4, s.sessionFlags); // dwFlags: host session flags.
@@ -1124,6 +1133,7 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
               this.writeU32(desc + 44, s.currentPlayers); // dwCurrentPlayers
               this.writeU32(desc + 48, name); // lpszSessionNameA
               const timeout = this.alloc(4, true);
+              this.enumSessionsScratch.push(timeout);
               this.writeU32(timeout, a[2] ?? 0); // Return the enumeration timeout supplied by the game.
               // LPDPENUMSESSIONSCALLBACK2(DPSESSIONDESC2*, DWORD*, flags, context);
               // see game-registered enumSessionsCallbackFlags for values and rationale.

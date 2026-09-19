@@ -22,6 +22,9 @@ import {
   GUEST_THREAD_CONTEXT_LAST_ERROR,
   GUEST_THREAD_CONTEXT_SEH,
   GUEST_THREAD_CONTEXT_STACK_BOTTOM,
+  GUEST_THREAD_FPU_CONTEXT_BYTES,
+  GUEST_THREAD_FPU_CONTEXTS,
+  GUEST_THREAD_CRITICAL_DEPTH,
   GUEST_THREAD_CONTEXT_STACK_TOP,
   GUEST_THREAD_LIMIT,
 } from '../pe';
@@ -629,7 +632,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
           return { eax: 1 };
         case 'KERNEL32.DLL!CloseHandle': {
           const handle = a[0] ?? 0;
-          if (!this.closeGuestSyncHandle(handle)) this.closeFile(handle);
+          if (!this.closeGuestThreadHandle(handle) && !this.closeGuestSyncHandle(handle)) this.closeFile(handle);
           return { eax: 1 };
         }
         case 'KERNEL32.DLL!FlushFileBuffers': {
@@ -926,6 +929,43 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
     private readI32From(data: Uint8Array, offset: number): number {
       return data[offset]! | (data[offset + 1]! << 8) | (data[offset + 2]! << 16) | (data[offset + 3]! << 24) | 0;
     }
+    /**
+     * Drop the guest's last reference to a thread. The id becomes reusable once the thread has also exited;
+     * until then its state stays so waits and exit codes on other handles keep working.
+     */
+    protected closeGuestThreadHandle(handle: number): boolean {
+      const id = this.guestThreadHandles.get(handle);
+      if (id === undefined) return false;
+      const thread = this.guestThreads.get(id);
+      if (!thread) {
+        this.guestThreadHandles.delete(handle);
+        return true;
+      }
+      // Keep the handle resolvable until the thread is reclaimed: another thread may already be blocked on it, and
+      // Windows keeps the object alive for that waiter. Handle numbers are never reused, so this cannot alias.
+      thread.handleClosed = true;
+      return true;
+    }
+
+    /**
+     * Release exited threads' stacks and recycle their ids. Called from CreateThread, never from the exit path
+     * itself: the exiting thread is still executing on its own stack when ExitThread reaches the shim.
+     */
+    protected reclaimExitedGuestThreads(): void {
+      const current = this.readU32(HYPERCALL_THREAD_CURRENT);
+      for (const thread of [...this.guestThreads.values()]) {
+        if (!thread.terminated || thread.id === current || thread.id === 0) continue;
+        if (thread.stackBase) {
+          this.freeAllocation(thread.stackBase);
+          thread.stackBase = undefined;
+        }
+        if (!thread.handleClosed) continue;
+        this.guestThreads.delete(thread.id);
+        this.guestThreadHandles.delete(thread.handle);
+        this.freeThreadIds.push(thread.id);
+      }
+    }
+
     protected createGuestThread(
       stackBytes: number,
       start: number,
@@ -933,17 +973,23 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       flags: number,
       tidPtr: number,
     ): number {
-      if (!start || this.nextThreadId >= GUEST_THREAD_LIMIT) {
+      // Reclaim first: without it, a session that churns threads exhausts the 64 ids and leaks every stack.
+      this.reclaimExitedGuestThreads();
+      if (!start || (this.freeThreadIds.length === 0 && this.nextThreadId >= GUEST_THREAD_LIMIT)) {
         this.lastError = 8;
         return 0;
       }
-      const id = this.nextThreadId++;
+      const id = this.freeThreadIds.pop() ?? this.nextThreadId++;
       const handle = this.nextThreadHandle++;
       if (shimTraceEnabled('VM_TRACE_THREAD'))
         console.log(`🧵 CreateThread id=${id} 入口=0x${start.toString(16)} 参数=0x${parameter.toString(16)}`);
       const reserve = Math.max(64 * 1024, Math.min(stackBytes || 64 * 1024, 1024 * 1024));
       const base = this.alloc(reserve, true);
-      if (!base) return 0;
+      if (!base) {
+        this.freeThreadIds.push(id);
+        this.lastError = 8;
+        return 0;
+      }
       if (!this.threadExitStub) {
         this.threadExitStub = this.registerDynamicWin32Import('KERNEL32.DLL', 'ExitThread', 4);
         this.threadReturnTrampoline = this.allocateDynamicCode([
@@ -970,12 +1016,20 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       this.writeU32(GUEST_THREAD_CONTEXT_STACK_BOTTOM + id * 4, base);
       this.writeU32(GUEST_THREAD_CONTEXT_LAST_ERROR + id * 4, 0);
       this.zero(FAST_TLS_TABLE + id * FAST_TLS_THREAD_BYTES, FAST_TLS_THREAD_BYTES);
+      // A reused id must not inherit the previous thread's compat lock depth (its import tails would skip STI and
+      // starve the scheduler) or its saved x87 state, which boot.asm restores with FRSTOR on the first switch.
+      this.writeU32(GUEST_THREAD_CRITICAL_DEPTH + id * 4, 0);
+      const fpu = GUEST_THREAD_FPU_CONTEXTS + id * GUEST_THREAD_FPU_CONTEXT_BYTES;
+      this.zero(fpu, GUEST_THREAD_FPU_CONTEXT_BYTES);
+      this.writeU32(fpu, 0x037f); // Default x87 control word.
+      this.writeU32(fpu + 8, 0xffff); // Tag word marking every register empty.
       this.guestThreads.set(id, {
         id,
         handle,
         runnable: (flags & 0x4) === 0,
         terminated: false,
         wakeAt: 0,
+        stackBase: base,
       });
       this.writeU32(GUEST_THREAD_RUN_STATES + id * 4, (flags & 0x4) === 0 ? 1 : 0);
       this.writeU32(HYPERCALL_THREAD_COUNT, this.nextThreadId);

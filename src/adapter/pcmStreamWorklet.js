@@ -23,6 +23,12 @@ class Ra2PcmStreamProcessor extends AudioWorkletProcessor {
     /** @type {{ channels: number, frames: number, pcm: Float32Array, frame: number,
      *   playing: boolean, loop: boolean, step: number, lastPositionAt: number } | null} */
     this.state = null;
+    /**
+     * Set by destroy. process() must then return false: while it returns true the node keeps "active processing"
+     * status, so the browser cannot collect a disconnected node and its per-quantum work accumulates on the audio
+     * thread for the whole session, eventually starving rendering and silencing the game.
+     */
+    this.destroyed = false;
     this.port.onmessage = (event) => this.onMessage(event.data);
   }
 
@@ -76,12 +82,14 @@ class Ra2PcmStreamProcessor extends AudioWorkletProcessor {
       }
       case 'destroy': {
         this.state = null;
+        this.destroyed = true;
         break;
       }
     }
   }
 
   process(_inputs, outputs) {
+    if (this.destroyed) return false;
     const state = this.state;
     const output = outputs[0];
     if (!state || !output || output.length === 0) return true;

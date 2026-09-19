@@ -152,6 +152,35 @@ describe('动态客体代码内存边界', () => {
     expect(readU32(memory, lock + 8)).toBe(1);
   });
 
+  it('长局反复 CoCreateInstance 已注册类复用回调槽，不消耗动态 stub 区', () => {
+    const { memory, shim } = fixture();
+    const clsid = 0x3000,
+      iid = 0x3010,
+      factory = 0x3100,
+      cookie = 0x3020,
+      ppv = 0x3024,
+      stack = 0x3200;
+    memory.write_memory(new Uint8Array(16).fill(0x11), clsid);
+    memory.write_memory(new Uint8Array(16).fill(0x22), iid);
+    expect(callShim(shim, 'OLE32.DLL!CoRegisterClassObject', [clsid, factory, 4, 1, cookie]).eax).toBe(0);
+    // Leave only 16 bytes of dynamic stub space: any per-call stub allocation would throw.
+    shim.allocateCode(new Uint8Array(0x30000));
+    shim.allocateCode(new Uint8Array(0xffff0));
+    let first = 0;
+    for (let i = 0; i < 50_000; i++) {
+      writeU32(memory, stack, 0x401000);
+      expect(callShim(shim, 'OLE32.DLL!CoCreateInstance', [clsid, 0, 1, iid, ppv], stack).eax).toBe(0);
+      const bridge = readU32(memory, stack);
+      if (i === 0) first = bridge;
+      expect(bridge).toBe(first);
+      expect(bridge).toBeGreaterThanOrEqual(GUEST_CALLBACK_BASE);
+      // Simulate the guest tail releasing the slot.
+      writeU32(memory, GUEST_CALLBACK_OWNERS, 0);
+      writeU32(memory, HYPERCALL_CALLBACK_DEPTH, 0);
+    }
+    expect(shim.allocateCode(new Uint8Array(16))).toBe(0x1ffff0);
+  });
+
   it('线程在嵌套回调中退出时只回收自己的槽', () => {
     const { memory, shim } = fixture();
     callShim(shim, 'KERNEL32.DLL!CreateThread', [0, 0x10000, 0x401000, 0, 0, 0]);

@@ -1,12 +1,6 @@
 import type { PaletteState, SoundBufferState, SurfaceState, Win32Call, Win32Result } from '../win32';
 import { DEFAULT_PCM_FORMAT, parsePcmWaveFormatEx, type PcmWaveFormat } from '../audio';
-import {
-  HYPERCALL_ACTIVE_SHELL_SURFACE,
-  HYPERCALL_CALLBACK_DEPTH,
-  makeConstantImportStub,
-  makeImportStub,
-  type PeImport,
-} from '../pe';
+import { HYPERCALL_ACTIVE_SHELL_SURFACE, makeConstantImportStub, makeImportStub, type PeImport } from '../pe';
 import { win32ModuleOf } from './text';
 import { withWinmm } from './winmm';
 import type { Constructor } from './state';
@@ -114,6 +108,8 @@ const CLIPPER_METHODS: Array<[string, number]> = [
   ['SetHWnd', 12],
 ];
 
+/** E_OUTOFMEMORY; DirectSound and DirectDraw report allocation failure as DSERR_/DDERR_OUTOFMEMORY, the same value. */
+const OUT_OF_MEMORY = 0x8007_000e;
 const SOUND_BUFFER_METHODS: Array<[string, number]> = [
   ['QueryInterface', 12],
   ['AddRef', 4],
@@ -351,6 +347,8 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
     /** The native battlefield loop calls BLOCKBEGIN twice consecutively; the pair should consume only one refresh period. */
     private vblankPairSecondCall = false;
     private readonly clipperWindows = new Map<number, number>();
+    /** Reused DDSURFACEDESC staging for EnumDisplayModes; the enumeration copies it before returning. */
+    private enumModesDesc = 0;
 
     dispatchDirectx(key: string, name: string, a: number[]): Win32Result | null {
       switch (key) {
@@ -358,13 +356,13 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
           if (!a[1]) return { eax: 0x8000_4003 }; // E_POINTER
           const object = this.createComObject('IDirectDraw', DDRAW_METHODS);
           this.writeU32(a[1], object);
-          return { eax: 0 }; // DD_OK
+          return { eax: object ? 0 : OUT_OF_MEMORY }; // DD_OK
         }
         case 'DSOUND.DLL!ord1': {
           if (!a[1]) return { eax: 0x8000_4003 };
           const object = this.createComObject('IDirectSound', DSOUND_METHODS, 'DSOUND.COM');
           this.writeU32(a[1], object);
-          return { eax: 0 };
+          return { eax: object ? 0 : OUT_OF_MEMORY };
         }
         default:
           void name;
@@ -429,7 +427,11 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
           case 'EnumDisplayModes': {
             const callback = a[4] ?? 0;
             if (!callback) return { eax: 0x8000_4003 };
-            const desc = this.alloc(108, true);
+            // One reused staging descriptor and one reusable callback slot: the old code leaked 108 heap bytes and a
+            // dynamic stub per call, the same family of leak as the CoCreateInstance bridge.
+            this.enumModesDesc ||= this.alloc(108, true);
+            const desc = this.enumModesDesc;
+            if (!desc) return { eax: OUT_OF_MEMORY };
             this.writeSurfaceDesc(desc, {
               object: 0,
               width: this.displayWidth,
@@ -447,6 +449,7 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
               dirty: false,
             });
             const originalReturn = this.readU32(call.stack);
+            const frame = this.reserveGuestCallback();
             const code: number[] = [];
             const emit32 = (value: number) =>
               code.push(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, value >>> 24);
@@ -454,20 +457,17 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
               code.push(0x68);
               emit32(value);
             };
-            code.push(0xff, 0x05);
-            emit32(HYPERCALL_CALLBACK_DEPTH);
+            code.push(0x55, 0x89, 0xe5); // push ebp; mov ebp,esp
             push(a[3] ?? 0);
             push(desc);
             code.push(0xb8);
             emit32(callback);
             code.push(0xff, 0xd0); // callback(&DDSURFACEDESC, context)
-            code.push(0xff, 0x0d);
-            emit32(HYPERCALL_CALLBACK_DEPTH);
+            code.push(0x89, 0xec, 0x5d); // mov esp,ebp; pop ebp accommodates stdcall/cdecl cleanup differences.
             code.push(0x31, 0xc0); // DD_OK
-            code.push(0xb9);
-            emit32(originalReturn);
-            code.push(0xff, 0xe1);
-            this.writeU32(call.stack, this.allocateDynamicCode(code));
+            this.appendGuestCallbackReturn(code, frame, originalReturn);
+            this.memory.write_memory(code, frame.trampoline);
+            this.writeU32(call.stack, frame.trampoline);
             return { eax: 0 };
           }
           case 'WaitForVerticalBlank': {
@@ -514,6 +514,10 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
           case 'CreateClipper': {
             if (!a[2]) return { eax: 0x8000_4003 };
             const clipper = this.createComObject('IDirectDrawClipper', CLIPPER_METHODS);
+            if (!clipper) {
+              this.writeU32(a[2], 0);
+              return { eax: OUT_OF_MEMORY };
+            }
             this.clipperWindows.set(clipper, 0);
             this.writeU32(a[2], clipper);
             return { eax: 0 };
@@ -522,15 +526,15 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
             if (!a[3]) return { eax: 0x8000_4003 };
             const palette = this.createPalette(a[1] ?? 0, a[2] ?? 0);
             this.writeU32(a[3], palette);
-            return { eax: 0 };
+            return { eax: palette ? 0 : OUT_OF_MEMORY };
           }
           case 'CreateSurface': {
             const desc = a[1] ?? 0;
             const out = a[2] ?? 0;
             if (!desc || !out) return { eax: 0x8000_4003 };
             const surface = this.createSurfaceFromDesc(desc);
-            this.writeU32(out, surface.object);
-            return { eax: 0 };
+            this.writeU32(out, surface?.object ?? 0);
+            return { eax: surface ? 0 : OUT_OF_MEMORY };
           }
           default:
             return null;
@@ -750,13 +754,17 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
               return { eax: 0x8878_0064 }; // DSERR_BADFORMAT
             }
             const buffer = this.createSoundBuffer(this.readU32(a[1] + 8), format);
-            this.writeU32(a[2], buffer.object);
-            return { eax: 0 };
+            this.writeU32(a[2], buffer?.object ?? 0);
+            return { eax: buffer ? 0 : OUT_OF_MEMORY };
           }
           case 'DuplicateSoundBuffer': {
             const source = this.soundBuffers.get(a[1] ?? 0);
             if (!source || !a[2]) return { eax: 0x8878_001e };
             const duplicate = this.createSoundBuffer(source.size, source.format);
+            if (!duplicate) {
+              this.writeU32(a[2], 0);
+              return { eax: OUT_OF_MEMORY };
+            }
             this.memory.write_memory(this.memory.read_memory(source.data, source.size), duplicate.data);
             duplicate.position = source.position;
             duplicate.volume = source.volume;
@@ -931,6 +939,7 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
       let vtable = this.vtables.get(vtableKey);
       if (!vtable) {
         vtable = this.alloc(methods.length * 4, true);
+        if (!vtable) return 0;
         for (let i = 0; i < methods.length; i++) {
           const [method, argBytes] = methods[i]!;
           const id = this.nextDynamicId++;
@@ -973,14 +982,27 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
         this.vtables.set(vtableKey, vtable);
       }
       const object = this.alloc(Math.max(8, objectBytes), true);
+      if (!object) return 0;
       this.writeU32(object, vtable);
       this.writeU32(object + 4, 1);
       return object;
     }
-    protected createSoundBuffer(size: number, format: PcmWaveFormat = { ...DEFAULT_PCM_FORMAT }): SoundBufferState {
+    /**
+     * Returns null when the shim heap cannot hold the object or its PCM data. Reporting success with a NULL or
+     * low-memory buffer would make the game write samples over guest address 0 and play nothing.
+     */
+    protected createSoundBuffer(
+      size: number,
+      format: PcmWaveFormat = { ...DEFAULT_PCM_FORMAT },
+    ): SoundBufferState | null {
       const safeSize = Math.max(1, Math.min(size || 65_536, 4 * 1024 * 1024));
       const object = this.createComObject('IDirectSoundBuffer', SOUND_BUFFER_METHODS, 'DSOUND.COM', 16);
+      if (!object) return null;
       const data = this.alloc(safeSize, true);
+      if (!data) {
+        this.freeAllocation(object);
+        return null;
+      }
       const buffer: SoundBufferState = {
         object,
         data,
@@ -1047,8 +1069,10 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
       view.setUint16(16, format.cbSize, true);
       this.memory.write_memory(bytes.subarray(0, Math.min(bytes.length, capacity)), pointer);
     }
+    /** Returns 0 when the shim heap cannot hold the object; callers must report DDERR_OUTOFMEMORY. */
     protected createPalette(caps: number, entriesPtr: number): number {
       const object = this.createComObject('IDirectDrawPalette', PALETTE_METHODS);
+      if (!object) return 0;
       const entries = entriesPtr ? this.memory.read_memory(entriesPtr, 256 * 4).slice() : new Uint8Array(256 * 4);
       const palette = { object, caps, entries };
       this.applyReservedSystemPalette(palette);
@@ -1062,7 +1086,8 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
       if (palette.caps & 0x40) return;
       palette.entries.set([0, 0, 0, 0], 0);
     }
-    protected createSurfaceFromDesc(desc: number): SurfaceState {
+    /** Returns null when the shim heap cannot hold the surface or its pixels; callers must report DDERR_OUTOFMEMORY. */
+    protected createSurfaceFromDesc(desc: number): SurfaceState | null {
       const flags = this.readU32(desc + 4);
       const caps = this.readU32(desc + 104);
       const primary = (caps & 0x200) !== 0;
@@ -1073,25 +1098,37 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
       const width = requestedWidth || this.displayWidth || 800;
       const height = requestedHeight || this.displayHeight || 600;
       const surface = this.createSurface(width, height, caps);
-      if (primary) this.primarySurface = surface.object;
+      if (!surface) return null;
       const backBuffers = (flags & 0x20) !== 0 ? this.readU32(desc + 20) : 0;
       if (backBuffers > 0) {
         const back = this.createSurface(surface.width, surface.height, 0x4 | 0x40);
+        // A flip chain without its back buffer would present garbage; release the front surface and fail the call.
+        if (!back) {
+          this.releaseComObject(surface.object);
+          return null;
+        }
         surface.attached = back.object;
         back.attached = surface.object;
       }
+      if (primary) this.primarySurface = surface.object;
       return surface;
     }
-    protected createSurface(width: number, height: number, caps: number): SurfaceState {
+    /** Returns null when the shim heap cannot hold the object or its pixels; never reports a surface at address 0. */
+    protected createSurface(width: number, height: number, caps: number): SurfaceState | null {
       const object = this.createComObject(
         'IDirectDrawSurface',
         SURFACE_METHODS,
         'DDRAW.COM',
         this.gameProfile.directDraw?.guestSurfaceFastPath ? SURFACE_OBJECT_BYTES : 8,
       );
+      if (!object) return null;
       const bpp = this.displayBpp === 16 ? 16 : 8;
       const pitch = (width * (bpp >>> 3) + 3) & ~3;
       const pixels = this.alloc(pitch * height, true);
+      if (!pixels) {
+        this.freeAllocation(object);
+        return null;
+      }
       const surface: SurfaceState = {
         object,
         width,
