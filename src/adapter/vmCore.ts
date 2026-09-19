@@ -71,6 +71,8 @@ const STUB_LIMIT = 0x000c_0000;
 const HYPERCALLS_PER_HOST_YIELD = 128;
 /** Yielding by call count is not yielding by time: complex guest frames can stretch 128 calls into tens of milliseconds. */
 const HOST_SLICE_MS = 4;
+/** Development builds log heap/stub/sound-buffer state at this interval to diagnose long-session degradation. */
+const DIAGNOSTICS_INTERVAL_MS = 30_000;
 
 /** Win32 audio output plus host master-volume, stop-all, and destruction capabilities. */
 export interface VmAudioSink extends Win32AudioSink {
@@ -111,6 +113,8 @@ export class VmCore {
   private image: PeImage | null = null;
   private shim: Win32ShimBase | null = null;
   private pollTimer: ReturnType<typeof globalThis.setInterval> | null = null;
+  /** Development-only periodic console diagnostics for long sessions (heap, stubs, sound buffers, logic FPS). */
+  private diagnosticsTimer: ReturnType<typeof globalThis.setInterval> | null = null;
   private handling = false;
   private calls = 0;
   private readonly recentCalls: string[] = [];
@@ -305,6 +309,9 @@ export class VmCore {
 
       // Port events are primary; 50ms polling is only a fallback for CPU exceptions and exceptional conditions.
       this.pollTimer = globalThis.setInterval(() => void this.poll(), 50);
+      if (import.meta.env.DEV && import.meta.env.MODE !== 'test') {
+        this.diagnosticsTimer = globalThis.setInterval(() => void this.logDiagnostics(), DIAGNOSTICS_INTERVAL_MS);
+      }
       await emulator.run();
       this.status('running', `${game.executable} 正在 v86 中执行（入口 0x${image.entry.toString(16)}）`);
     } catch (error) {
@@ -809,6 +816,24 @@ export class VmCore {
   private clearPoll(): void {
     if (this.pollTimer !== null) globalThis.clearInterval(this.pollTimer);
     this.pollTimer = null;
+    if (this.diagnosticsTimer !== null) globalThis.clearInterval(this.diagnosticsTimer);
+    this.diagnosticsTimer = null;
+  }
+
+  private async logDiagnostics(): Promise<void> {
+    const shim = this.shim;
+    if (!shim || this.currentPhase !== 'running') return;
+    const performance = await this.getGamePerformance().catch(() => null);
+    const heap = shim.inspectHeapState();
+    const counts = shim.inspectResourceCounts();
+    const mb = (bytes: number) => (bytes / 1_048_576).toFixed(1);
+    console.info(
+      `[VM诊断] 逻辑帧=${performance?.frame ?? '-'} 逻辑fps=${performance?.logicFps?.toFixed(1) ?? '-'} ` +
+        `页面=${shim.inspectShellPageTitle() || '战场'} ` +
+        `堆: 活动${heap.liveAllocations}个/${mb(heap.liveBytes)}MB 空闲${mb(heap.freeBytes)}MB(${heap.freeBlocks}块) ` +
+        `顶端${mb(heap.nextAddress)}MB 虚拟${mb(heap.virtualBytes)}MB；` +
+        `stub已用${(counts.dynamicStubBytes / 1024).toFixed(1)}KB 声音缓冲${counts.soundBuffers} 表面${counts.surfaces}`,
+    );
   }
 
   private currentPhase: VmStatus['phase'] = 'loading';

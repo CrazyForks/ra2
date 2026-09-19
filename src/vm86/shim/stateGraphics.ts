@@ -12,7 +12,7 @@ import type {
 } from '../win32';
 import { HYPERCALL_CURSOR_COUNT } from '../pe';
 import { RGB565_TO_RGBA32 as rgb565Colors } from '../pixels';
-import { shimTraceEnabled, type Constructor } from './state';
+import { DYNAMIC_STUB_BASE, shimTraceEnabled, type Constructor } from './state';
 import type { ShimSyncChain } from './stateSync';
 
 // Bind shared tables locally so development/test ESM live-binding getters stay out of pixel loops.
@@ -29,6 +29,15 @@ export function withShimGraphics<TBase extends Constructor<ShimSyncChain>>(Base:
     protected readonly soundBuffers = new Map<number, SoundBufferState>();
     protected readonly gdiDcs = new Map<number, GdiDcState>();
     protected readonly gdiFonts = new Map<number, VmGdiFont>();
+
+    /** Live object counts for development diagnostics of long sessions; read-only. */
+    inspectResourceCounts(): { soundBuffers: number; surfaces: number; dynamicStubBytes: number } {
+      return {
+        soundBuffers: this.soundBuffers.size,
+        surfaces: this.surfaces.size,
+        dynamicStubBytes: this.nextDynamicStub - DYNAMIC_STUB_BASE,
+      };
+    }
     /** HBRUSH to COLORREF; null denotes NULL/HOLLOW_BRUSH. */
     protected readonly gdiBrushes = new Map<number, number | null>();
     protected readonly gdiStockObjects = new Set<number>();

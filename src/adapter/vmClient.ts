@@ -1,7 +1,7 @@
 import type { GamePerformanceSample } from '../games/performance';
 import type { VmDiagnosticAction, VmDiagnostics, VmRuntimeInfo } from './vmDiagnostics';
 import { normalizeGameClockRate } from '../vm86/clock';
-import { WebAudioPcmSink } from './audio';
+import { AUDIO_DIAGNOSTICS_INTERVAL_MS, WebAudioPcmSink } from './audio';
 import type { GuestMemRecordResult } from './memRecord';
 import {
   createRequestId,
@@ -89,6 +89,7 @@ export class WorkerVmClient implements VmShell {
       options.audio ??
       new WebAudioPcmSink({
         onError: (error) => console.warn('[VM audio]', error),
+        diagnosticsIntervalMs: AUDIO_DIAGNOSTICS_INTERVAL_MS,
       });
     this.worker =
       options.workerFactory?.() ?? new Worker(new URL('./vmWorker.ts', import.meta.url), { type: 'module' });

@@ -17,9 +17,13 @@
 // use JSDoc for types here while keeping the file itself plain JS.
 /* global AudioWorkletProcessor, registerProcessor, sampleRate, currentTime */
 
+/** Live processor instances on the audio thread; reported with the cursor to detect leaked nodes. */
+let liveProcessors = 0;
+
 class Ra2PcmStreamProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
+    liveProcessors++;
     /** @type {{ channels: number, frames: number, pcm: Float32Array, frame: number,
      *   playing: boolean, loop: boolean, step: number, lastPositionAt: number } | null} */
     this.state = null;
@@ -82,6 +86,7 @@ class Ra2PcmStreamProcessor extends AudioWorkletProcessor {
       }
       case 'destroy': {
         this.state = null;
+        if (!this.destroyed) liveProcessors--; // A repeated destroy must not double-count.
         this.destroyed = true;
         break;
       }
@@ -119,7 +124,7 @@ class Ra2PcmStreamProcessor extends AudioWorkletProcessor {
     // Report the cursor about every 100ms as the main thread's extrapolation baseline.
     if (currentTime - state.lastPositionAt >= 0.1) {
       state.lastPositionAt = currentTime;
-      this.port.postMessage({ kind: 'position', frame: state.frame });
+      this.port.postMessage({ kind: 'position', frame: state.frame, live: liveProcessors });
     }
     return true;
   }
