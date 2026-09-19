@@ -1797,6 +1797,12 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       let i = 0;
       while (i < picture.length) {
         const ch = picture[i]!;
+        // Keep DBCS pairs intact even when the trail byte is an ASCII format token.
+        if (ch.charCodeAt(0) >= 0x81 && ch.charCodeAt(0) <= 0xfe) {
+          out += picture.slice(i, i + 2);
+          i += 2;
+          continue;
+        }
         if (ch === "'") {
           if (picture[i + 1] === "'") {
             out += "'"; // '' escapes a single quote.
@@ -1815,11 +1821,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         }
         if (isToken(ch)) {
           let run = 1;
-          while (
-            i + run < picture.length &&
-            isToken(picture[i + run]!) &&
-            picture[i + run]!.toLowerCase() === ch.toLowerCase()
-          ) {
+          while (picture[i + run] === ch) {
             run++;
           }
           out += field(ch, run);
@@ -1874,9 +1876,15 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         this.lastError = ERROR_INSUFFICIENT_BUFFER;
         return 0;
       }
-      this.writeAscii(buffer, value);
+      this.memory.write_memory(Uint8Array.from([...Array.from(value, (ch) => ch.charCodeAt(0)), 0]), buffer);
       this.lastError = 0;
       return required;
+    }
+    /** Format pictures are guest bytes, not decoded Unicode; output must retain the guest's code page. */
+    private readLocalePicture(pointer: number): string {
+      const bytes = this.readBytes(pointer, 256);
+      const end = bytes.indexOf(0);
+      return String.fromCharCode(...bytes.subarray(0, end < 0 ? bytes.length : end));
     }
     /**
      * GetDateFormatA honors the picture string RA2 supplies for its save-slot labels; a NULL format falls back to
@@ -1884,8 +1892,22 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
      */
     protected getDateFormatA(flags: number, datePtr: number, formatPtr: number, buffer: number, cch: number): number {
       const date = datePtr ? this.readSystemTimeFields(datePtr) : this.localSystemTimeFields();
+      // GetDateFormat ignores the time half of SYSTEMTIME and derives the weekday itself.
+      const calendarDate = new Date(Date.UTC(date.year, date.month - 1, date.day));
+      if (
+        date.year < 1601 ||
+        date.year > 30827 ||
+        calendarDate.getUTCFullYear() !== date.year ||
+        calendarDate.getUTCMonth() !== date.month - 1 ||
+        calendarDate.getUTCDate() !== date.day ||
+        cch < 0
+      ) {
+        this.lastError = 87;
+        return 0;
+      }
+      date.weekday = calendarDate.getUTCDay();
       const picture = formatPtr
-        ? this.readCString(formatPtr)
+        ? this.readLocalePicture(formatPtr)
         : flags & DATE_LONGDATE
           ? 'dddd, MMMM d, yyyy'
           : flags & DATE_YEARMONTH
@@ -1893,7 +1915,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
             : 'M/d/yyyy'; // DATE_SHORTDATE and dwFlags == 0 share the invariant short pattern.
       const value = this.expandPicture(
         picture,
-        (ch) => 'dmyg'.includes(ch.toLowerCase()),
+        (ch) => 'dMyg'.includes(ch),
         (ch, run) => this.dateField(ch, run, date),
       );
       return this.writeLocaleString(buffer, cch, value);
@@ -1901,9 +1923,14 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
     /** GetTimeFormatA mirrors GetDateFormatA with the TIME_ flags; the save screen formats date and time together. */
     protected getTimeFormatA(flags: number, timePtr: number, formatPtr: number, buffer: number, cch: number): number {
       const time = timePtr ? this.readSystemTimeFields(timePtr) : this.localSystemTimeFields();
+      // GetTimeFormat ignores date fields, which callers may leave uninitialized.
+      if (time.hour > 23 || time.minute > 59 || time.second > 59 || cch < 0) {
+        this.lastError = 87;
+        return 0;
+      }
       let picture: string;
       if (formatPtr) {
-        picture = this.readCString(formatPtr);
+        picture = this.readLocalePicture(formatPtr);
       } else {
         const twentyFourHour = (flags & TIME_FORCE24HOURFORMAT) !== 0;
         picture = twentyFourHour ? 'HH' : 'h';
@@ -1940,7 +1967,8 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         this.lastError = 87; // ERROR_INVALID_PARAMETER
         return false;
       }
-      const date = this.fileTimeToDate(this.readFileTimeValue(fileTime));
+      const value = this.readFileTimeValue(fileTime);
+      const date = value < 0x8000_0000_0000_0000n ? this.fileTimeToDate(value) : null;
       if (!date) {
         this.lastError = 87;
         return false;
@@ -1958,21 +1986,21 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       this.lastError = 0;
       return true;
     }
-    /** FileTimeToLocalFileTime subtracts the host bias (UTC = local + Bias, matching getTimezoneOffset) at that instant. */
+    /** Win32 FileTimeToLocalFileTime uses the current timezone bias, matching GetTimeZoneInformation. */
     protected fileTimeToLocalFileTime(fileTime: number, localFileTime: number): boolean {
       if (!fileTime || !localFileTime) {
         this.lastError = 87;
         return false;
       }
       const value = this.readFileTimeValue(fileTime);
-      const date = this.fileTimeToDate(value);
-      if (!date) {
+      const bias =
+        BigInt(new Date(this.clock.wallNow()).getTimezoneOffset()) * 60_000n * FILETIME_TICKS_PER_MILLISECOND;
+      const local = value - bias;
+      if (local < 0n || local > 0xffff_ffff_ffff_ffffn) {
         this.lastError = 87;
         return false;
       }
-      // getTimezoneOffset is in minutes, while FILETIME_TICKS_PER_MILLISECOND is per millisecond.
-      const bias = BigInt(date.getTimezoneOffset()) * 60_000n * FILETIME_TICKS_PER_MILLISECOND;
-      this.writeFileTimeValue(localFileTime, value - bias);
+      this.writeFileTimeValue(localFileTime, local);
       this.lastError = 0;
       return true;
     }
