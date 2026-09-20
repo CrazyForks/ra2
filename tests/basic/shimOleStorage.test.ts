@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { GUEST_CALLBACK_BASE } from '../../src/vm86/pe';
 import { callShim, createGuestMemory, createTestShim, readU32, writeU32 } from '../helpers/guestMemory';
 import { guidBytes } from '../../src/vm86/shim/dplayx';
 import { RA2_ABI } from '../../src/games/ra2/abi';
@@ -91,6 +92,9 @@ describe('OLE structured storage', () => {
     expect(contains([0x8b, 0x11, 0xff, 0x52, 0x0c])).toBe(true); // GetClassID
     expect(contains([0x8b, 0x11, 0xff, 0x52, 0x10])).toBe(true); // IStream::Write
     expect(contains([0x8b, 0x11, 0xff, 0x52, 0x18])).toBe(true); // IPersistStream::Save
+    // The bridge lives in a callback slot, so its tail releases the slot under CLI and returns with push/ret
+    // instead of jumping through ECX; the original return address must still be what it returns to.
+    expect(bridge).toBeGreaterThanOrEqual(GUEST_CALLBACK_BASE);
     expect(
       contains([
         0x68,
@@ -100,6 +104,7 @@ describe('OLE structured storage', () => {
         originalReturn >>> 24,
       ]),
     ).toBe(true);
+    expect(contains([0xfb, 0xc3])).toBe(true); // sti; ret
   });
 
   it('为 IStorage/IStream vtable 登记正确的 x86 stdcall 参数字节数', () => {

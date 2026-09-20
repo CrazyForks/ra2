@@ -891,6 +891,8 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
      */
     private redirectOleSaveToStream(call: Win32Call, persistStream: number, stream: number): void {
       const originalReturn = this.readU32(call.stack);
+      // A callback slot rather than bump-allocated code and permanent heap: a campaign save runs this hundreds of
+      // times, and the slot's tail releases the bridge under CLI so a pending PIT cannot preempt the return path.
       const frame = this.reserveGuestCallback();
       const clsid = frame.trampoline + GUEST_CALLBACK_STRIDE - 32;
       const written = clsid + 16;
