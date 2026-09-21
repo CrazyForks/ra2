@@ -89,23 +89,89 @@ function readAscii(memory: FakeGuestMemory, pointer: number, max = 64): string {
 }
 
 describe('KERNEL32 日期/时间格式化', () => {
+  it('formats time while ignoring uninitialized date fields', () => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory);
+    memory.write_memory(new Uint8Array(new Uint16Array([0, 0, 0, 0, 16, 41, 7, 0]).buffer), 0x3000);
+    expect(callShim(shim, 'KERNEL32.DLL!GetTimeFormatA', [0x0400, 0x8, 0x3000, 0, 0x3100, 64]).eax).toBe(9);
+    expect(readAscii(memory, 0x3100)).toBe('16:41:07');
+    writeAsciiZ(memory, 0x3200, 'HH:mm:ss yyyy/MMMM/dd');
+    expect(callShim(shim, 'KERNEL32.DLL!GetTimeFormatA', [0x0400, 0, 0x3000, 0x3200, 0x3100, 64]).eax).toBeGreaterThan(
+      0,
+    );
+    expect(readAscii(memory, 0x3100)).toBe('16:41:07 yyyy/MMMM/dd');
+  });
+
+  it('formats dates while ignoring uninitialized time fields and correcting the weekday', () => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory);
+    memory.write_memory(
+      new Uint8Array(new Uint16Array([2026, 9, 0xffff, 19, 0xffff, 0xffff, 0xffff, 0xffff]).buffer),
+      0x3000,
+    );
+    writeAsciiZ(memory, 0x3200, 'yyyy/MM/dd ddd');
+    expect(callShim(shim, 'KERNEL32.DLL!GetDateFormatA', [0x0400, 0, 0x3000, 0x3200, 0x3100, 64]).eax).toBe(15);
+    expect(readAscii(memory, 0x3100)).toBe('2026/09/19 Sat');
+    writeAsciiZ(memory, 0x3200, 'yyyy/MM/dd HH:mm:ss');
+    expect(callShim(shim, 'KERNEL32.DLL!GetDateFormatA', [0x0400, 0, 0x3000, 0x3200, 0x3100, 64]).eax).toBeGreaterThan(
+      0,
+    );
+    expect(readAscii(memory, 0x3100)).toBe('2026/09/19 HH:mm:ss');
+  });
+
+  it.each([
+    [2026, 2, 31],
+    [2025, 2, 29],
+    [1900, 2, 29],
+    [2026, 4, 31],
+  ])('rejects nonexistent dates %i/%i/%i without writing output', (year, month, day) => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory);
+    memory.write_memory(new Uint8Array(new Uint16Array([year, month, 0, day, 0, 0, 0, 0]).buffer), 0x3000);
+    memory.write_memory(new Uint8Array(64).fill(0xa5), 0x3100);
+    expect(callShim(shim, 'KERNEL32.DLL!GetDateFormatA', [0x0400, 0, 0x3000, 0, 0x3100, 64]).eax).toBe(0);
+    expect(callShim(shim, 'KERNEL32.DLL!GetLastError').eax).toBe(87);
+    expect(memory.read_memory(0x3100, 64)).toEqual(new Uint8Array(64).fill(0xa5));
+    expect(callShim(shim, 'KERNEL32.DLL!GetDateFormatA', [0x0400, 0, 0x3000, 0, 0, 0]).eax).toBe(0);
+  });
+
+  it.each([2000, 2024])('accepts leap day in %i', (year) => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory);
+    memory.write_memory(new Uint8Array(new Uint16Array([year, 2, 0, 29, 0, 0, 0, 0]).buffer), 0x3000);
+    expect(callShim(shim, 'KERNEL32.DLL!GetDateFormatA', [0x0400, 0, 0x3000, 0, 0x3100, 64]).eax).toBe(10);
+    expect(readAscii(memory, 0x3100)).toBe(`2/29/${year}`);
+  });
+
+  it.each([
+    [24, 0, 0],
+    [0, 60, 0],
+    [0, 0, 60],
+  ])('rejects invalid time %i:%i:%i', (hour, minute, second) => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory);
+    memory.write_memory(new Uint8Array(new Uint16Array([0, 0, 0, 0, hour, minute, second, 0]).buffer), 0x3000);
+    expect(callShim(shim, 'KERNEL32.DLL!GetTimeFormatA', [0x0400, 0x8, 0x3000, 0, 0x3100, 64]).eax).toBe(0);
+    expect(callShim(shim, 'KERNEL32.DLL!GetLastError').eax).toBe(87);
+  });
+
   it('GetDateFormatA 默认短日期，返回含结尾符的长度', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory);
     writeSystemTime(memory, 0x3000);
     // LOCALE_USER_DEFAULT, DATE_SHORTDATE, no picture.
     const written = callShim(shim, 'KERNEL32.DLL!GetDateFormatA', [0x0400, 0x1, 0x3000, 0, 0x3100, 64]).eax;
-    expect(readAscii(memory, 0x3100)).toBe('2026/9/19');
-    expect(written).toBe('2026/9/19'.length + 1);
+    expect(readAscii(memory, 0x3100)).toBe('9/19/2026');
+    expect(written).toBe('9/19/2026'.length + 1);
   });
 
-  it('GetTimeFormatA 默认 24 小时制，TIME_NOSECONDS 去掉秒', () => {
+  it('GetTimeFormatA 24 小时制标志与 TIME_NOSECONDS', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory);
     writeSystemTime(memory, 0x3000);
-    callShim(shim, 'KERNEL32.DLL!GetTimeFormatA', [0x0400, 0, 0x3000, 0, 0x3100, 64]);
+    callShim(shim, 'KERNEL32.DLL!GetTimeFormatA', [0x0400, 0x8, 0x3000, 0, 0x3100, 64]);
     expect(readAscii(memory, 0x3100)).toBe('16:41:07');
-    callShim(shim, 'KERNEL32.DLL!GetTimeFormatA', [0x0400, 0x2, 0x3000, 0, 0x3100, 64]);
+    callShim(shim, 'KERNEL32.DLL!GetTimeFormatA', [0x0400, 0xa, 0x3000, 0, 0x3100, 64]);
     expect(readAscii(memory, 0x3100)).toBe('16:41');
   });
 
@@ -158,6 +224,6 @@ describe('KERNEL32 日期/时间格式化', () => {
     expect(callShim(shim, 'KERNEL32.DLL!GetLastError', []).eax).toBe(87);
     // A null SYSTEMTIME means "now", which must still produce this year's date.
     callShim(shim, 'KERNEL32.DLL!GetDateFormatA', [0x0400, 0x1, 0, 0, 0x3100, 64]);
-    expect(readAscii(memory, 0x3100).startsWith(String(new Date().getFullYear()))).toBe(true);
+    expect(readAscii(memory, 0x3100).endsWith(String(new Date().getFullYear()))).toBe(true);
   });
 });

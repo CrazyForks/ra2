@@ -53,6 +53,8 @@ Current asset-enabled CI requires original-executable startup, the RA2 quick-gam
 
 Fixed-address/instruction evidence lives in game modules and their tests. Never widen architecture allowlists, modify clocks, fabricate acknowledgments, or skip defeat checks to pass tests. Preserve failure reasons; a successful rerun does not erase earlier failures.
 
+`tests/basic/shimDplayEnumeration.test.ts` covers nested enumeration storage, out-of-order completion, thread exit, and failed allocation/bridge generation. `tests/basic/vm/dplayEnumeration.e2e.test.ts` executes nested callbacks and their return tails in real v86, checking descriptor stability, stack balance, and heap reclamation. `tests/basic/shimKernelFileTime.test.ts` checks date/time field independence, invalid dates, and leap years. All run under `check`; they do not replace original-executable or real multiplayer acceptance.
+
 ## Save and cold-load regression
 
 `pnpm run check` runs the asset-free OLE callback, storage metadata, asynchronous file-open, time conversion, and window-order regressions: `tests/basic/vm/olePersistence.e2e.test.ts`, `tests/basic/shimOleStorage.test.ts`, `tests/basic/vmCore.test.ts`, `tests/basic/shimFile.test.ts`, `tests/basic/shimWindowZOrder.test.ts`, and `tests/basic/shimScrollbarOcclusion.test.ts`. These do not replace the real RA2/YR save/load regressions:

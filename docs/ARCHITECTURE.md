@@ -72,6 +72,10 @@ Startup-page and direct-battlefield entry use one-shot guest hooks while retaini
 
 RA2 and YR remain separate engines. A single gamemd loading original RA2 resources is not a supported promise. Such conversion involves game logic and patches; filename mapping alone does not establish compatibility. Local guards do not prove upstream defects fully resolved: for example, `repairRa2InvalidRepairRate` corrects only nonpositive or nonfinite RepairRate values and cannot cover all custom rules.
 
+DirectPlay enumeration returns the reserved guest callback frame to the caller so its staging allocations can follow that frame's lifetime. Before another enumeration, the shim reclaims only buffers whose callback owner flag is clear; guest return tails and thread exit clear that flag. Nested or concurrent enumerations retain their own descriptors, names, and timeout pointers. An unrelated callback reusing a slot may delay collection, but cannot cause early release. Failed allocation or bridge generation rolls back unpublished buffers and reservations. Remaining staging is bounded by the callback-slot count and ends with the VM heap.
+
+Date and time formatting validate only the SYSTEMTIME fields used by the respective API. Date validation checks actual month lengths and leap years before deriving the weekday; unused time fields do not invalidate a date, and unused date fields do not invalidate a time.
+
 ## Scheduling, presentation, and ownership
 
 Worker execution is one guest path; main-thread fallback uses identical game policies and file semantics. `platform/browser/emulator.ts` wraps v86 browser adaptation. When the upstream interface matches, Workers use an in-thread MessageChannel scheduler while retaining original positive-wait durations. Otherwise, upstream scheduling remains in place. The main thread keeps its own scheduler. Adaptation does not change the guest clock or PIT frequency.

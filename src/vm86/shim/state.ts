@@ -61,10 +61,9 @@ import {
   type RegistryDefaultValue,
 } from './gameProfile';
 
-/** Generic constructor for the mixin chain, producing instance type T. */
-
 /** Dynamic guest stubs grow upward from here; the region ends at 0x200000. */
 export const DYNAMIC_STUB_BASE = 0x000c_0000;
+/** Generic constructor for the mixin chain, producing instance type T. */
 export type Constructor<T> = new (...args: any[]) => T;
 
 /** Guest PeekMessageA fast returns allowed after confirming an empty message queue. */
@@ -552,6 +551,12 @@ export class ShimState {
     throw new Error(`客体回调槽耗尽（${GUEST_CALLBACK_SLOTS} 个活动回调）`);
   }
 
+  /** Cancel a reserved bridge when generation fails before its address is handed to the guest. */
+  protected cancelGuestCallback(frame: GuestCallbackFrame): void {
+    this.writeU32(frame.ownerAddress, 0);
+    this.writeU32(HYPERCALL_CALLBACK_DEPTH, this.readU32(HYPERCALL_CALLBACK_DEPTH) - 1);
+  }
+
   protected releaseExitedThreadCallbacks(threadId: number): void {
     let released = 0;
     for (let slot = 0; slot < GUEST_CALLBACK_SLOTS; slot++) {
@@ -741,9 +746,6 @@ export class ShimState {
   }
 
   /**
-   * Mirror shim window geometry/properties into GUEST_WINDOW_TABLE for guest fast stubs. Synchronize after every state mutation: create, move, SetWindowLong, destroy, or dialog-item changes, otherwise guest reads become stale. Ignore out-of-range hwnd values because stubs fall back to full hypercalls. Store absolute X/Y by accumulating parent-relative offsets so stubs need no parent traversal.
-   */
-  /**
    * HWND values are never reused: RA2 keeps stale handles (page changes then repaint through them) and reuse made
    * new dialogs inherit a destroyed window's messages, leaving the menu blank. The mirror table wraps instead.
    */
@@ -751,6 +753,10 @@ export class ShimState {
     return this.nextWindow++;
   }
 
+  /**
+   * Mirror window properties after each mutation so guest fast stubs observe current state. Store absolute
+   * coordinates by accumulating parent offsets; colliding handles fall back to hypercalls after owner validation.
+   */
   protected syncWindowToGuest(hwnd: number): void {
     if (hwnd < 0x2000) return;
     // Wrap instead of giving up past the end: a long session creates far more than GUEST_WINDOW_TABLE_MAX windows,
