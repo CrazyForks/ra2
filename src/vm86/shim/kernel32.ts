@@ -22,6 +22,9 @@ import {
   GUEST_THREAD_CONTEXT_LAST_ERROR,
   GUEST_THREAD_CONTEXT_SEH,
   GUEST_THREAD_CONTEXT_STACK_BOTTOM,
+  GUEST_THREAD_FPU_CONTEXT_BYTES,
+  GUEST_THREAD_FPU_CONTEXTS,
+  GUEST_THREAD_CRITICAL_DEPTH,
   GUEST_THREAD_CONTEXT_STACK_TOP,
   GUEST_THREAD_LIMIT,
 } from '../pe';
@@ -306,9 +309,9 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         // The save-game screen labels its slots through the locale date/time APIs. a[0] is the LCID, which
         // the shim ignores because it carries a single (invariant) calendar; a[1] holds the DATE_/TIME_ flags.
         case 'KERNEL32.DLL!GetDateFormatA':
-          return { eax: this.getDateFormatA(a[1] ?? 0, a[2] ?? 0, a[3] ?? 0, a[4] ?? 0, a[5] ?? 0) };
+          return { eax: this.getDateFormatA(a[1] ?? 0, a[2] ?? 0, a[3] ?? 0, a[4] ?? 0, (a[5] ?? 0) | 0) };
         case 'KERNEL32.DLL!GetTimeFormatA':
-          return { eax: this.getTimeFormatA(a[1] ?? 0, a[2] ?? 0, a[3] ?? 0, a[4] ?? 0, a[5] ?? 0) };
+          return { eax: this.getTimeFormatA(a[1] ?? 0, a[2] ?? 0, a[3] ?? 0, a[4] ?? 0, (a[5] ?? 0) | 0) };
         case 'KERNEL32.DLL!CreateFileA':
           return { eax: this.openFile(a) };
         case 'KERNEL32.DLL!FindFirstFileA': {
@@ -629,7 +632,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
           return { eax: 1 };
         case 'KERNEL32.DLL!CloseHandle': {
           const handle = a[0] ?? 0;
-          if (!this.closeGuestSyncHandle(handle)) this.closeFile(handle);
+          if (!this.closeGuestThreadHandle(handle) && !this.closeGuestSyncHandle(handle)) this.closeFile(handle);
           return { eax: 1 };
         }
         case 'KERNEL32.DLL!FlushFileBuffers': {
@@ -926,6 +929,43 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
     private readI32From(data: Uint8Array, offset: number): number {
       return data[offset]! | (data[offset + 1]! << 8) | (data[offset + 2]! << 16) | (data[offset + 3]! << 24) | 0;
     }
+    /**
+     * Drop the guest's last reference to a thread. The id becomes reusable once the thread has also exited;
+     * until then its state stays so waits and exit codes on other handles keep working.
+     */
+    protected closeGuestThreadHandle(handle: number): boolean {
+      const id = this.guestThreadHandles.get(handle);
+      if (id === undefined) return false;
+      const thread = this.guestThreads.get(id);
+      if (!thread) {
+        this.guestThreadHandles.delete(handle);
+        return true;
+      }
+      // Keep the handle resolvable until the thread is reclaimed: another thread may already be blocked on it, and
+      // Windows keeps the object alive for that waiter. Handle numbers are never reused, so this cannot alias.
+      thread.handleClosed = true;
+      return true;
+    }
+
+    /**
+     * Release exited threads' stacks and recycle their ids. Called from CreateThread, never from the exit path
+     * itself: the exiting thread is still executing on its own stack when ExitThread reaches the shim.
+     */
+    protected reclaimExitedGuestThreads(): void {
+      const current = this.readU32(HYPERCALL_THREAD_CURRENT);
+      for (const thread of [...this.guestThreads.values()]) {
+        if (!thread.terminated || thread.id === current || thread.id === 0) continue;
+        if (thread.stackBase) {
+          this.freeAllocation(thread.stackBase);
+          thread.stackBase = undefined;
+        }
+        if (!thread.handleClosed) continue;
+        this.guestThreads.delete(thread.id);
+        this.guestThreadHandles.delete(thread.handle);
+        this.freeThreadIds.push(thread.id);
+      }
+    }
+
     protected createGuestThread(
       stackBytes: number,
       start: number,
@@ -933,17 +973,23 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       flags: number,
       tidPtr: number,
     ): number {
-      if (!start || this.nextThreadId >= GUEST_THREAD_LIMIT) {
+      // Reclaim first: without it, a session that churns threads exhausts the 64 ids and leaks every stack.
+      this.reclaimExitedGuestThreads();
+      if (!start || (this.freeThreadIds.length === 0 && this.nextThreadId >= GUEST_THREAD_LIMIT)) {
         this.lastError = 8;
         return 0;
       }
-      const id = this.nextThreadId++;
+      const id = this.freeThreadIds.pop() ?? this.nextThreadId++;
       const handle = this.nextThreadHandle++;
       if (shimTraceEnabled('VM_TRACE_THREAD'))
         console.log(`🧵 CreateThread id=${id} 入口=0x${start.toString(16)} 参数=0x${parameter.toString(16)}`);
       const reserve = Math.max(64 * 1024, Math.min(stackBytes || 64 * 1024, 1024 * 1024));
       const base = this.alloc(reserve, true);
-      if (!base) return 0;
+      if (!base) {
+        this.freeThreadIds.push(id);
+        this.lastError = 8;
+        return 0;
+      }
       if (!this.threadExitStub) {
         this.threadExitStub = this.registerDynamicWin32Import('KERNEL32.DLL', 'ExitThread', 4);
         this.threadReturnTrampoline = this.allocateDynamicCode([
@@ -970,12 +1016,20 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       this.writeU32(GUEST_THREAD_CONTEXT_STACK_BOTTOM + id * 4, base);
       this.writeU32(GUEST_THREAD_CONTEXT_LAST_ERROR + id * 4, 0);
       this.zero(FAST_TLS_TABLE + id * FAST_TLS_THREAD_BYTES, FAST_TLS_THREAD_BYTES);
+      // A reused id must not inherit the previous thread's compat lock depth (its import tails would skip STI and
+      // starve the scheduler) or its saved x87 state, which boot.asm restores with FRSTOR on the first switch.
+      this.writeU32(GUEST_THREAD_CRITICAL_DEPTH + id * 4, 0);
+      const fpu = GUEST_THREAD_FPU_CONTEXTS + id * GUEST_THREAD_FPU_CONTEXT_BYTES;
+      this.zero(fpu, GUEST_THREAD_FPU_CONTEXT_BYTES);
+      this.writeU32(fpu, 0x037f); // Default x87 control word.
+      this.writeU32(fpu + 8, 0xffff); // Tag word marking every register empty.
       this.guestThreads.set(id, {
         id,
         handle,
         runnable: (flags & 0x4) === 0,
         terminated: false,
         wakeAt: 0,
+        stackBase: base,
       });
       this.writeU32(GUEST_THREAD_RUN_STATES + id * 4, (flags & 0x4) === 0 ? 1 : 0);
       this.writeU32(HYPERCALL_THREAD_COUNT, this.nextThreadId);
@@ -1743,6 +1797,12 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       let i = 0;
       while (i < picture.length) {
         const ch = picture[i]!;
+        // Keep DBCS pairs intact even when the trail byte is an ASCII format token.
+        if (ch.charCodeAt(0) >= 0x81 && ch.charCodeAt(0) <= 0xfe) {
+          out += picture.slice(i, i + 2);
+          i += 2;
+          continue;
+        }
         if (ch === "'") {
           if (picture[i + 1] === "'") {
             out += "'"; // '' escapes a single quote.
@@ -1761,11 +1821,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         }
         if (isToken(ch)) {
           let run = 1;
-          while (
-            i + run < picture.length &&
-            isToken(picture[i + run]!) &&
-            picture[i + run]!.toLowerCase() === ch.toLowerCase()
-          ) {
+          while (picture[i + run] === ch) {
             run++;
           }
           out += field(ch, run);
@@ -1820,9 +1876,15 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         this.lastError = ERROR_INSUFFICIENT_BUFFER;
         return 0;
       }
-      this.writeAscii(buffer, value);
+      this.memory.write_memory(Uint8Array.from([...Array.from(value, (ch) => ch.charCodeAt(0)), 0]), buffer);
       this.lastError = 0;
       return required;
+    }
+    /** Format pictures are guest bytes, not decoded Unicode; output must retain the guest's code page. */
+    private readLocalePicture(pointer: number): string {
+      const bytes = this.readBytes(pointer, 256);
+      const end = bytes.indexOf(0);
+      return String.fromCharCode(...bytes.subarray(0, end < 0 ? bytes.length : end));
     }
     /**
      * GetDateFormatA honors the picture string RA2 supplies for its save-slot labels; a NULL format falls back to
@@ -1830,8 +1892,22 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
      */
     protected getDateFormatA(flags: number, datePtr: number, formatPtr: number, buffer: number, cch: number): number {
       const date = datePtr ? this.readSystemTimeFields(datePtr) : this.localSystemTimeFields();
+      // GetDateFormat ignores the time half of SYSTEMTIME and derives the weekday itself.
+      const calendarDate = new Date(Date.UTC(date.year, date.month - 1, date.day));
+      if (
+        date.year < 1601 ||
+        date.year > 30827 ||
+        calendarDate.getUTCFullYear() !== date.year ||
+        calendarDate.getUTCMonth() !== date.month - 1 ||
+        calendarDate.getUTCDate() !== date.day ||
+        cch < 0
+      ) {
+        this.lastError = 87;
+        return 0;
+      }
+      date.weekday = calendarDate.getUTCDay();
       const picture = formatPtr
-        ? this.readCString(formatPtr)
+        ? this.readLocalePicture(formatPtr)
         : flags & DATE_LONGDATE
           ? 'dddd, MMMM d, yyyy'
           : flags & DATE_YEARMONTH
@@ -1839,7 +1915,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
             : 'M/d/yyyy'; // DATE_SHORTDATE and dwFlags == 0 share the invariant short pattern.
       const value = this.expandPicture(
         picture,
-        (ch) => 'dmyg'.includes(ch.toLowerCase()),
+        (ch) => 'dMyg'.includes(ch),
         (ch, run) => this.dateField(ch, run, date),
       );
       return this.writeLocaleString(buffer, cch, value);
@@ -1847,9 +1923,14 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
     /** GetTimeFormatA mirrors GetDateFormatA with the TIME_ flags; the save screen formats date and time together. */
     protected getTimeFormatA(flags: number, timePtr: number, formatPtr: number, buffer: number, cch: number): number {
       const time = timePtr ? this.readSystemTimeFields(timePtr) : this.localSystemTimeFields();
+      // GetTimeFormat ignores date fields, which callers may leave uninitialized.
+      if (time.hour > 23 || time.minute > 59 || time.second > 59 || cch < 0) {
+        this.lastError = 87;
+        return 0;
+      }
       let picture: string;
       if (formatPtr) {
-        picture = this.readCString(formatPtr);
+        picture = this.readLocalePicture(formatPtr);
       } else {
         const twentyFourHour = (flags & TIME_FORCE24HOURFORMAT) !== 0;
         picture = twentyFourHour ? 'HH' : 'h';
@@ -1886,7 +1967,8 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         this.lastError = 87; // ERROR_INVALID_PARAMETER
         return false;
       }
-      const date = this.fileTimeToDate(this.readFileTimeValue(fileTime));
+      const value = this.readFileTimeValue(fileTime);
+      const date = value < 0x8000_0000_0000_0000n ? this.fileTimeToDate(value) : null;
       if (!date) {
         this.lastError = 87;
         return false;
@@ -1904,21 +1986,21 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       this.lastError = 0;
       return true;
     }
-    /** FileTimeToLocalFileTime subtracts the host bias (UTC = local + Bias, matching getTimezoneOffset) at that instant. */
+    /** Win32 FileTimeToLocalFileTime uses the current timezone bias, matching GetTimeZoneInformation. */
     protected fileTimeToLocalFileTime(fileTime: number, localFileTime: number): boolean {
       if (!fileTime || !localFileTime) {
         this.lastError = 87;
         return false;
       }
       const value = this.readFileTimeValue(fileTime);
-      const date = this.fileTimeToDate(value);
-      if (!date) {
+      const bias =
+        BigInt(new Date(this.clock.wallNow()).getTimezoneOffset()) * 60_000n * FILETIME_TICKS_PER_MILLISECOND;
+      const local = value - bias;
+      if (local < 0n || local > 0xffff_ffff_ffff_ffffn) {
         this.lastError = 87;
         return false;
       }
-      // getTimezoneOffset is in minutes, while FILETIME_TICKS_PER_MILLISECOND is per millisecond.
-      const bias = BigInt(date.getTimezoneOffset()) * 60_000n * FILETIME_TICKS_PER_MILLISECOND;
-      this.writeFileTimeValue(localFileTime, value - bias);
+      this.writeFileTimeValue(localFileTime, local);
       this.lastError = 0;
       return true;
     }

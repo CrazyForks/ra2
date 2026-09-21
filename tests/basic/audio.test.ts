@@ -491,3 +491,42 @@ describe('DirectSound 流式音乐（RA2 增补，原 audioSmoke）', () => {
     }
   });
 });
+
+describe('PCM 流 worklet 处理器生命周期', () => {
+  /** Load the worklet module with AudioWorklet globals stubbed, returning the registered processor class. */
+  async function loadProcessor(): Promise<
+    new () => {
+      port: { onmessage: ((event: { data: unknown }) => void) | null; postMessage: (message: unknown) => void };
+      process: (inputs: unknown, outputs: Float32Array[][]) => boolean;
+    }
+  > {
+    const globals = globalThis as unknown as Record<string, unknown>;
+    let registered: unknown = null;
+    globals.AudioWorkletProcessor = class {
+      readonly port = { onmessage: null as ((event: { data: unknown }) => void) | null, postMessage: () => {} };
+    };
+    globals.registerProcessor = (_name: string, processor: unknown) => {
+      registered = processor;
+    };
+    globals.sampleRate = 48_000;
+    globals.currentTime = 0;
+    // Plain JS worklet source with no declarations; it is loaded for its registerProcessor side effect only.
+    // @ts-expect-error -- untyped module
+    await import('../../src/adapter/pcmStreamWorklet.js');
+    return registered as never;
+  }
+
+  it('destroy 后 process 返回 false，浏览器才能回收已断开的节点', async () => {
+    const Processor = await loadProcessor();
+    const processor = new Processor();
+    const outputs = [[new Float32Array(128)]];
+    processor.port.onmessage?.({
+      data: { kind: 'create', channels: 1, frames: 4, frequency: 48_000, loop: true, frame: 0 },
+    });
+    // A live stream keeps rendering; only destroy ends processing. Returning true after destroy leaks the node's
+    // per-quantum work onto the audio thread for the whole session, which silences the game over a long match.
+    expect(processor.process(null, outputs)).toBe(true);
+    processor.port.onmessage?.({ data: { kind: 'destroy' } });
+    expect(processor.process(null, outputs)).toBe(false);
+  });
+});

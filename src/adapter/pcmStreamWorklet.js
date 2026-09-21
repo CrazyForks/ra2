@@ -17,12 +17,22 @@
 // use JSDoc for types here while keeping the file itself plain JS.
 /* global AudioWorkletProcessor, registerProcessor, sampleRate, currentTime */
 
+/** Live processor instances on the audio thread; reported with the cursor to detect leaked nodes. */
+let liveProcessors = 0;
+
 class Ra2PcmStreamProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
+    liveProcessors++;
     /** @type {{ channels: number, frames: number, pcm: Float32Array, frame: number,
      *   playing: boolean, loop: boolean, step: number, lastPositionAt: number } | null} */
     this.state = null;
+    /**
+     * Set by destroy. process() must then return false: while it returns true the node keeps "active processing"
+     * status, so the browser cannot collect a disconnected node and its per-quantum work accumulates on the audio
+     * thread for the whole session, eventually starving rendering and silencing the game.
+     */
+    this.destroyed = false;
     this.port.onmessage = (event) => this.onMessage(event.data);
   }
 
@@ -76,12 +86,15 @@ class Ra2PcmStreamProcessor extends AudioWorkletProcessor {
       }
       case 'destroy': {
         this.state = null;
+        if (!this.destroyed) liveProcessors--; // A repeated destroy must not double-count.
+        this.destroyed = true;
         break;
       }
     }
   }
 
   process(_inputs, outputs) {
+    if (this.destroyed) return false;
     const state = this.state;
     const output = outputs[0];
     if (!state || !output || output.length === 0) return true;
@@ -111,7 +124,7 @@ class Ra2PcmStreamProcessor extends AudioWorkletProcessor {
     // Report the cursor about every 100ms as the main thread's extrapolation baseline.
     if (currentTime - state.lastPositionAt >= 0.1) {
       state.lastPositionAt = currentTime;
-      this.port.postMessage({ kind: 'position', frame: state.frame });
+      this.port.postMessage({ kind: 'position', frame: state.frame, live: liveProcessors });
     }
     return true;
   }

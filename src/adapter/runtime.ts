@@ -3,7 +3,7 @@ import { serveRelayPort, relayAddressCandidates, relayRoomFromPath } from 'relay
 import { createBrowserEmulator } from '../platform/browser/emulator';
 import { BrowserEmulatorProbe } from '../platform/browser/emulatorProbe';
 import type { VmDiagnosticAction, VmDiagnostics, VmRuntimeInfo } from './vmDiagnostics';
-import { DEFAULT_MASTER_VOLUME, WebAudioPcmSink } from './audio';
+import { AUDIO_DIAGNOSTICS_INTERVAL_MS, DEFAULT_MASTER_VOLUME, WebAudioPcmSink } from './audio';
 import { gameVmConfiguration } from '../games/vmConfiguration';
 import {
   collectDirectoryOverlays,
@@ -217,6 +217,7 @@ export async function createVmShell(
 export class Win32GameVm implements VmShell {
   private readonly audio = new WebAudioPcmSink({
     onError: (error) => console.warn('[VM audio]', error),
+    diagnosticsIntervalMs: AUDIO_DIAGNOSTICS_INTERVAL_MS,
   });
   private readonly core: VmCore;
   private removeAudioUnlock: (() => void) | null = null;

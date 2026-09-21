@@ -1,6 +1,6 @@
 import type { Win32Call, Win32Result } from '../win32';
 import { HYPERCALL_CALLBACK_RESULT } from '../pe';
-import type { Constructor } from './state';
+import type { Constructor, GuestCallbackFrame } from './state';
 import type { withDirectx } from './directx';
 import { createDefaultDplayTransport } from './dplayTransport';
 import type { DplayTransport } from './dplayTransport';
@@ -233,6 +233,8 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
     protected lastInjectRejectAt = 0;
     /** Received-message queue consumed by Receive; data lives in the shim heap. */
     protected dplayQueue: Array<{ from: number; to: number; data: number; size: number }> = [];
+    /** Guest staging by callback owner address; an active bridge must retain all its callback arguments. */
+    private readonly enumSessionsScratch = new Map<number, number[]>();
     /** Cached remote sessions for EnumSessions, refreshed by announce heartbeats. */
     private dplayRemoteSessions = new Map<
       string,
@@ -280,7 +282,12 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
     /**
      * Guest callback bridge using the same trampoline style as WndProc: push each argument group right-to-left, call the guest function, and repeat for multiple players/sessions. Before return, set EAX=returnEax and jump to the original return address. Enumeration APIs return DP_OK independently of callback BOOL results.
      */
-    protected invokeGuestCallbacks(call: Win32Call, callback: number, argSets: number[][], returnEax = 0): void {
+    protected invokeGuestCallbacks(
+      call: Win32Call,
+      callback: number,
+      argSets: number[][],
+      returnEax = 0,
+    ): GuestCallbackFrame | undefined {
       if (argSets.length === 0) return;
       const originalReturn = this.readU32(call.stack);
       const frame = this.reserveGuestCallback();
@@ -306,9 +313,15 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
       code.push(0x5d); // pop ebp
       code.push(0xb8);
       emit32(returnEax); // mov eax, returnEax
-      this.appendGuestCallbackReturn(code, frame, originalReturn);
-      this.memory.write_memory(code, trampoline);
-      this.writeU32(call.stack, trampoline);
+      try {
+        this.appendGuestCallbackReturn(code, frame, originalReturn);
+        this.memory.write_memory(code, trampoline);
+        this.writeU32(call.stack, trampoline);
+        return frame;
+      } catch (error) {
+        this.cancelGuestCallback(frame);
+        throw error;
+      }
     }
 
     /** Convenience wrapper for one callback. */
@@ -1081,6 +1094,14 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
           }
           case 'EnumSessions': {
             // Build session lists from cached host announcements; discard after 30s.
+            // Guest return tails and ExitThread clear the owner. Enumeration count says nothing about completion:
+            // another thread or nested callback can enumerate repeatedly while an outer callback is suspended.
+            // Reusing the slot for an unrelated active bridge can delay collection, but cannot free data early.
+            for (const [owner, pointers] of this.enumSessionsScratch) {
+              if (this.readU32(owner) !== 0) continue;
+              for (const pointer of pointers) this.freeAllocation(pointer);
+              this.enumSessionsScratch.delete(owner);
+            }
             const callback = a[3] ?? 0;
             const context = a[4] ?? 0;
             if (!callback) return { eax: 0x8000_4003 };
@@ -1108,42 +1129,55 @@ export function withDplayx<TBase extends Constructor<DirectxChain>>(Base: TBase)
             const now = this.clock.now();
             const callbackFlags = this.gameProfile.directPlay?.enumSessionsCallbackFlags ?? 0;
             const argSets: number[][] = [];
-            for (const [instance, s] of this.dplayRemoteSessions) {
-              if (now - s.lastSeen > DPLAY_DISCOVERY_TTL_MS) {
-                this.dplayRemoteSessions.delete(instance);
-                continue;
+            let scratch: number[] = [];
+            try {
+              for (const [instance, s] of this.dplayRemoteSessions) {
+                if (now - s.lastSeen > DPLAY_DISCOVERY_TTL_MS) {
+                  this.dplayRemoteSessions.delete(instance);
+                  continue;
+                }
+                const name = this.alloc(s.nameBytes.length + 1, true);
+                const desc = this.alloc(80, true);
+                const timeout = this.alloc(4, true);
+                scratch.push(name, desc, timeout);
+                if (!name || !desc || !timeout) return { eax: 0x8007_000e }; // DPERR_OUTOFMEMORY
+                this.memory.write_memory(s.nameBytes, name);
+                this.memory.write_memory(new Uint8Array(80), desc);
+                this.writeU32(desc, 80); // dwSize
+                this.writeU32(desc + 4, s.sessionFlags); // dwFlags: host session flags.
+                this.memory.write_memory(guidBytes(instance), desc + 8); // guidInstance
+                this.memory.write_memory(guidBytes(s.appGuid), desc + 24); // guidApplication: the game filters by this value.
+                this.writeU32(desc + 40, s.maxPlayers); // dwMaxPlayers
+                this.writeU32(desc + 44, s.currentPlayers); // dwCurrentPlayers
+                this.writeU32(desc + 48, name); // lpszSessionNameA
+                this.writeU32(timeout, a[2] ?? 0); // Return the enumeration timeout supplied by the game.
+                // LPDPENUMSESSIONSCALLBACK2(DPSESSIONDESC2*, DWORD*, flags, context);
+                // see game-registered enumSessionsCallbackFlags for values and rationale.
+                argSets.push([desc, timeout, callbackFlags, context]);
               }
-              const name = this.bytesToGuest(s.nameBytes);
-              const desc = this.alloc(80, true);
-              this.memory.write_memory(new Uint8Array(80), desc);
-              this.writeU32(desc, 80); // dwSize
-              this.writeU32(desc + 4, s.sessionFlags); // dwFlags: host session flags.
-              this.memory.write_memory(guidBytes(instance), desc + 8); // guidInstance
-              this.memory.write_memory(guidBytes(s.appGuid), desc + 24); // guidApplication: the game filters by this value.
-              this.writeU32(desc + 40, s.maxPlayers); // dwMaxPlayers
-              this.writeU32(desc + 44, s.currentPlayers); // dwCurrentPlayers
-              this.writeU32(desc + 48, name); // lpszSessionNameA
-              const timeout = this.alloc(4, true);
-              this.writeU32(timeout, a[2] ?? 0); // Return the enumeration timeout supplied by the game.
-              // LPDPENUMSESSIONSCALLBACK2(DPSESSIONDESC2*, DWORD*, flags, context);
-              // see game-registered enumSessionsCallbackFlags for values and rationale.
-              argSets.push([desc, timeout, callbackFlags, context]);
-            }
-            if (argSets.length === 0) {
-              if (DPLAY_VERBOSE_LOG)
-                console.log(`[dplayx] EnumSessions 返回 0 个会话（缓存 ${this.dplayRemoteSessions.size}）`);
+              if (argSets.length === 0) {
+                if (DPLAY_VERBOSE_LOG)
+                  console.log(`[dplayx] EnumSessions 返回 0 个会话（缓存 ${this.dplayRemoteSessions.size}）`);
+                return { eax: 0 };
+              }
+              if (DPLAY_VERBOSE_LOG) {
+                const first = [...this.dplayRemoteSessions.values()][0];
+                console.log(
+                  `[dplayx] EnumSessions 返回 ${argSets.length} 个会话` +
+                    `（app=${first?.appGuid}, flags=0x${first?.sessionFlags.toString(16)}, ` +
+                    `cur=${first?.currentPlayers}/max=${first?.maxPlayers}）`,
+                );
+              }
+              const frame = this.invokeGuestCallbacks(call, callback, argSets);
+              if (frame) {
+                this.enumSessionsScratch.set(frame.ownerAddress, scratch);
+                scratch = [];
+              }
               return { eax: 0 };
+            } finally {
+              // Allocation or bridge-generation failures never hand these buffers to the guest.
+              for (const pointer of scratch) this.freeAllocation(pointer);
             }
-            if (DPLAY_VERBOSE_LOG) {
-              const first = [...this.dplayRemoteSessions.values()][0];
-              console.log(
-                `[dplayx] EnumSessions 返回 ${argSets.length} 个会话` +
-                  `（app=${first?.appGuid}, flags=0x${first?.sessionFlags.toString(16)}, ` +
-                  `cur=${first?.currentPlayers}/max=${first?.maxPlayers}）`,
-              );
-            }
-            this.invokeGuestCallbacks(call, callback, argSets);
-            return { eax: 0 };
           }
           case 'InitializeConnection': {
             // conn=null initializes the default connection; this succeeds in the reference 2001 PC environment with TCP/IP.

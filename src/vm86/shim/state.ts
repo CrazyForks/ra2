@@ -16,6 +16,7 @@ import {
   GUEST_CALLBACK_BASE,
   GUEST_CALLBACK_STRIDE,
   GUEST_CALLBACK_SLOTS,
+  GUEST_CALLBACK_SCRATCH_BYTES,
   GUEST_CALLBACK_OWNERS,
   HYPERCALL_CALLBACK_DEPTH,
   GUEST_THREAD_FPU_CONTEXTS,
@@ -36,6 +37,7 @@ import {
   GUEST_WINDOW_TABLE,
   GUEST_WINDOW_TABLE_MAX,
   GUEST_WINDOW_USERDATA,
+  GUEST_WINDOW_OWNER,
   GUEST_WINDOW_VALID,
   GUEST_WINDOW_WIDTH,
   GUEST_WINDOW_WNDPROC,
@@ -59,6 +61,8 @@ import {
   type RegistryDefaultValue,
 } from './gameProfile';
 
+/** Dynamic guest stubs grow upward from here; the region ends at 0x200000. */
+export const DYNAMIC_STUB_BASE = 0x000c_0000;
 /** Generic constructor for the mixin chain, producing instance type T. */
 export type Constructor<T> = new (...args: any[]) => T;
 
@@ -96,6 +100,8 @@ export interface GuestCallbackFrame {
   depth: number;
   trampoline: number;
   ownerAddress: number;
+  /** Reserved data at the slot tail; generated instructions must stop before this address. */
+  scratchAddress: number;
 }
 
 export interface GuestThreadState {
@@ -104,6 +110,10 @@ export interface GuestThreadState {
   runnable: boolean;
   terminated: boolean;
   wakeAt: number;
+  /** Heap allocation backing this thread's stack; released once the thread has exited and stopped running. */
+  stackBase?: number;
+  /** CloseHandle has been called, so the guest can no longer observe this thread and its id may be reused. */
+  handleClosed?: boolean;
   wait?: GuestWaitState;
   criticalSection?: number;
   /** Wait result completed before saving the shared context, consumed by the host-delay return path. */
@@ -183,6 +193,8 @@ export class ShimState {
   protected nextThreadHandle = 0x0001_1000;
   protected readonly guestThreads = new Map<number, GuestThreadState>();
   protected readonly guestThreadHandles = new Map<number, number>();
+  /** Ids of exited threads whose handles are closed; reused so long sessions do not exhaust GUEST_THREAD_LIMIT. */
+  protected readonly freeThreadIds: number[] = [];
   protected threadExitStub = 0;
   protected threadReturnTrampoline = 0;
   protected readonly commandLine = 0x0006_1000;
@@ -191,7 +203,7 @@ export class ShimState {
   protected readonly environmentW = 0x0006_1300;
   /** Dynamic import IDs and stub allocator; stateGuestDll owns registration. */
   protected nextDynamicId: number;
-  protected nextDynamicStub = 0x000c_0000;
+  protected nextDynamicStub = DYNAMIC_STUB_BASE;
   protected readonly windowClasses = new Map<string, number>();
   protected readonly windows = new Map<number, number>();
   protected readonly windowClassNames = new Map<number, string>();
@@ -530,15 +542,25 @@ export class ShimState {
   protected disposeGameNetwork(): void {}
 
   /** Reserve slots during host generation; other threads or not-yet-started bridges cannot reuse them. */
-  protected reserveGuestCallback(): GuestCallbackFrame {
+  protected reserveGuestCallback(scratchBytes = GUEST_CALLBACK_SCRATCH_BYTES): GuestCallbackFrame {
+    if (!Number.isInteger(scratchBytes) || scratchBytes < 0 || scratchBytes >= GUEST_CALLBACK_STRIDE) {
+      throw new Error(`Invalid guest callback scratch size: ${scratchBytes}`);
+    }
     for (let depth = 0; depth < GUEST_CALLBACK_SLOTS; depth++) {
       const ownerAddress = GUEST_CALLBACK_OWNERS + depth * 4;
       if (this.readU32(ownerAddress) !== 0) continue;
       this.writeU32(ownerAddress, this.readU32(HYPERCALL_THREAD_CURRENT) + 1);
       this.writeU32(HYPERCALL_CALLBACK_DEPTH, this.readU32(HYPERCALL_CALLBACK_DEPTH) + 1);
-      return { depth, trampoline: GUEST_CALLBACK_BASE + depth * GUEST_CALLBACK_STRIDE, ownerAddress };
+      const trampoline = GUEST_CALLBACK_BASE + depth * GUEST_CALLBACK_STRIDE;
+      return { depth, trampoline, ownerAddress, scratchAddress: trampoline + GUEST_CALLBACK_STRIDE - scratchBytes };
     }
     throw new Error(`客体回调槽耗尽（${GUEST_CALLBACK_SLOTS} 个活动回调）`);
+  }
+
+  /** Cancel a reserved bridge when generation fails before its address is handed to the guest. */
+  protected cancelGuestCallback(frame: GuestCallbackFrame): void {
+    this.writeU32(frame.ownerAddress, 0);
+    this.writeU32(HYPERCALL_CALLBACK_DEPTH, this.readU32(HYPERCALL_CALLBACK_DEPTH) - 1);
   }
 
   protected releaseExitedThreadCallbacks(threadId: number): void {
@@ -571,7 +593,10 @@ export class ShimState {
     emit32(GUEST_THREAD_CRITICAL_DEPTH);
     code.push(0);
     code.push(0x75, 0x01, 0xfb, 0xc3); // jne ret; sti; ret, with STI's interrupt shadow covering RET.
-    if (code.length > GUEST_CALLBACK_STRIDE) throw new Error(`客体回调桥超出槽位: ${code.length}`);
+    // Reject before the scratch tail, not at the slot end: bridges such as CoCreateInstance keep their data there.
+    if (code.length > frame.scratchAddress - frame.trampoline) {
+      throw new Error(`客体回调桥超出槽位: ${code.length}`);
+    }
   }
 
   /** Generate dynamic guest stubs on the host, shared by file, DLL, synchronization, and graphics mixins. */
@@ -727,12 +752,27 @@ export class ShimState {
   }
 
   /**
-   * Mirror shim window geometry/properties into GUEST_WINDOW_TABLE for guest fast stubs. Synchronize after every state mutation: create, move, SetWindowLong, destroy, or dialog-item changes, otherwise guest reads become stale. Ignore out-of-range hwnd values because stubs fall back to full hypercalls. Store absolute X/Y by accumulating parent-relative offsets so stubs need no parent traversal.
+   * HWND values are never reused: RA2 keeps stale handles (page changes then repaint through them) and reuse made
+   * new dialogs inherit a destroyed window's messages, leaving the menu blank. The mirror table wraps instead.
+   */
+  protected allocateWindowHandle(): number {
+    return this.nextWindow++;
+  }
+
+  /**
+   * Mirror window properties after each mutation so guest fast stubs observe current state. Store absolute
+   * coordinates by accumulating parent offsets; colliding handles fall back to hypercalls after owner validation.
    */
   protected syncWindowToGuest(hwnd: number): void {
-    const index = hwnd - 0x2000;
-    if (index < 0 || index >= GUEST_WINDOW_TABLE_MAX) return;
+    if (hwnd < 0x2000) return;
+    // Wrap instead of giving up past the end: a long session creates far more than GUEST_WINDOW_TABLE_MAX windows,
+    // and without wrapping every later window permanently loses its fast stubs. Colliding hwnds differ by the table
+    // size, so the owner field below tells the stub whether this entry is really its window.
+    const index = (hwnd - 0x2000) & (GUEST_WINDOW_TABLE_MAX - 1);
     const base = GUEST_WINDOW_TABLE + index * GUEST_WINDOW_ENTRY_BYTES;
+    // A destroyed window must not clear an entry a colliding live window has since claimed, or that window would
+    // lose its fast stubs until its next state change. Live windows still take the slot over.
+    if (!this.windows.has(hwnd) && this.readU32(base + GUEST_WINDOW_OWNER) !== hwnd) return;
     let absX = 0;
     let absY = 0;
     {
@@ -763,7 +803,18 @@ export class ShimState {
     this.writeU32(base + GUEST_WINDOW_EXTRA4, (this.windowLongs.get(`${hwnd}:4`) ?? 0) >>> 0);
     this.writeU32(base + GUEST_WINDOW_EXTRA8, (this.windowLongs.get(`${hwnd}:8`) ?? 0) >>> 0);
     this.writeU32(base + GUEST_WINDOW_EXTRA12, (this.windowLongs.get(`${hwnd}:12`) ?? 0) >>> 0);
-    this.writeU32(base + GUEST_WINDOW_VALID, this.windows.has(hwnd) ? 1 : 0);
+    this.writeU32(base + GUEST_WINDOW_OWNER, hwnd >>> 0);
+    const live = this.windows.has(hwnd);
+    this.writeU32(base + GUEST_WINDOW_VALID, live ? 1 : 0);
+    // The slot is free again: hand it to a live window that wraps onto it, otherwise a long-lived window evicted
+    // by a newer one (the main window is evicted every GUEST_WINDOW_TABLE_MAX windows) would stay on hypercalls.
+    if (!live) {
+      for (const candidate of this.windows.keys()) {
+        if (candidate === hwnd || ((candidate - 0x2000) & (GUEST_WINDOW_TABLE_MAX - 1)) !== index) continue;
+        this.syncWindowToGuest(candidate);
+        break;
+      }
+    }
   }
 
   /**

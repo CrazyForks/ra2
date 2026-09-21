@@ -75,6 +75,8 @@ export const GUEST_CALLBACK_OWNERS = 0x0007_3c00;
 export const GUEST_CALLBACK_BASE = 0x0022_0000;
 export const GUEST_CALLBACK_STRIDE = 4096;
 export const GUEST_CALLBACK_SLOTS = 64;
+/** Tail bytes of each callback slot reserved for bridge scratch data (see ole32 CoCreateInstance); code must not reach them. */
+export const GUEST_CALLBACK_SCRATCH_BYTES = 32;
 /** Match boot.asm FNSAVE/FRSTOR layout: 108-byte state with 128-byte stride. */
 export const GUEST_THREAD_FPU_CONTEXTS = 0x0007_8000;
 export const GUEST_THREAD_FPU_CONTEXT_BYTES = 128;
@@ -85,7 +87,8 @@ export const GUEST_THREAD_FPU_CONTEXT_BYTES = 128;
 // Allocate hwnd sequentially from 0x2000 and index by hwnd-0x2000; out-of-range/unsynchronized entries use full hypercalls.
 // X/Y hold absolute screen coordinates, accumulated through parents during shim synchronization; guest stubs need no parent traversal.
 export const GUEST_WINDOW_TABLE = 0x0006_2000;
-export const GUEST_WINDOW_TABLE_MAX = 896;
+/** Power of two: guest stubs mask the hwnd instead of dividing, and entries carry their owner for collisions. */
+export const GUEST_WINDOW_TABLE_MAX = 512;
 export const GUEST_WINDOW_ENTRY_BYTES = 64;
 export const GUEST_WINDOW_X = 0;
 export const GUEST_WINDOW_Y = 4;
@@ -102,6 +105,7 @@ export const GUEST_WINDOW_EXTRA4 = 44;
 export const GUEST_WINDOW_EXTRA8 = 48;
 export const GUEST_WINDOW_EXTRA12 = 52;
 export const GUEST_WINDOW_VALID = 56;
+export const GUEST_WINDOW_OWNER = 60; // HWND owning this wrapped entry.
 
 export interface PeImport {
   /** Hypercall request ID; reserve 0 for no request, so IDs start at 1. */

@@ -303,22 +303,14 @@ describe('FILETIME 族（保存游戏路径）', () => {
     }
   });
 
-  it('FileTimeToLocalFileTime 按该时刻的宿主时区偏移换算', () => {
+  it('FileTimeToLocalFileTime uses the current host timezone bias', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory);
     const instant = Date.UTC(2024, 0, 15, 3, 4, 5);
     const utc = fileTimeFromUnixMilliseconds(instant);
     writeFileTime(memory, FT_A, utc);
     expect(callShim(shim, 'KERNEL32.DLL!FileTimeToLocalFileTime', [FT_A, FT_B]).eax).toBe(1);
-    const local = new Date(instant);
-    const localFieldsAsUtc = Date.UTC(
-      local.getFullYear(),
-      local.getMonth(),
-      local.getDate(),
-      local.getHours(),
-      local.getMinutes(),
-      local.getSeconds(),
-    );
+    const localFieldsAsUtc = instant - new Date().getTimezoneOffset() * 60_000;
     expect(readFileTime(memory, FT_B)).toBe(fileTimeFromUnixMilliseconds(localFieldsAsUtc));
     expect(callShim(shim, 'KERNEL32.DLL!GetLastError').eax).toBe(0);
 

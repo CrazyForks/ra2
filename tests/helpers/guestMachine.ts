@@ -15,7 +15,7 @@ import {
   HYPERCALL_STACK_TOP,
   type PeImport,
 } from '../../src/vm86/pe';
-import { readStackArgs, type Win32Call } from '../../src/vm86/win32';
+import { readStackArgs, type Win32Call, type Win32ShimOptions } from '../../src/vm86/win32';
 
 export const PROGRAM = 0x0040_0000;
 export const DONE = 0x0030_0000;
@@ -30,8 +30,16 @@ export class GuestMachine {
   readonly calls: Win32Call[] = [];
   afterCall?: (call: Win32Call) => void;
   private readonly imports = new Map<number, PeImport>();
-  constructor(readonly memory: V86) {
-    this.shim = new Win32Shim(memory, { heapTop: 0x00e0_0000, virtualTop: 0x00e0_0000, firstDynamicId: 1000 });
+  constructor(
+    readonly memory: V86,
+    options: Win32ShimOptions = {},
+  ) {
+    this.shim = new Win32Shim(memory, {
+      heapTop: 0x00e0_0000,
+      virtualTop: 0x00e0_0000,
+      firstDynamicId: 1000,
+      ...options,
+    });
     this.write(HYPERCALL_ENTRY, PROGRAM);
     this.write(HYPERCALL_STACK_TOP, 0x0070_0000);
   }
@@ -126,7 +134,10 @@ export class GuestMachine {
   }
 }
 
-export async function withGuestMachine(test: (machine: GuestMachine) => Promise<void>): Promise<void> {
+export async function withGuestMachine(
+  test: (machine: GuestMachine) => Promise<void>,
+  options: Win32ShimOptions = {},
+): Promise<void> {
   const bios = new Uint8Array(readFileSync(resolve('src/vm86/boot.bin')));
   const vm = new V86({
     wasm_path: resolve('node_modules/v86/build/v86.wasm'),
@@ -139,7 +150,7 @@ export async function withGuestMachine(test: (machine: GuestMachine) => Promise<
   });
   await new Promise<void>((done) => vm.add_listener('emulator-ready', done));
   try {
-    await test(new GuestMachine(vm));
+    await test(new GuestMachine(vm, options));
   } finally {
     await vm.destroy();
   }

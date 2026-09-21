@@ -19,15 +19,18 @@ const STREAM_PROCESSOR_FRAMES = 4_096;
 const PCM_STREAM_WORKLET_NAME = 'ra2-pcm-stream';
 
 /** AudioWorklet module cache: share one addModule call per context and allow retries after failure. */
-let workletModulePromise: Promise<void> | null = null;
+const workletModules = new WeakMap<AudioContext, Promise<void>>();
 function loadPcmStreamWorklet(context: AudioContext): Promise<void> {
-  workletModulePromise ??= context.audioWorklet
-    .addModule(new URL('./pcmStreamWorklet.js', import.meta.url))
-    .catch((error) => {
-      workletModulePromise = null;
+  let pending = workletModules.get(context);
+  if (!pending) {
+    // Processor registration belongs to one context; a later session has a new audio-thread global scope.
+    pending = context.audioWorklet.addModule(new URL('./pcmStreamWorklet.js', import.meta.url)).catch((error) => {
+      workletModules.delete(context);
       throw error;
     });
-  return workletModulePromise;
+    workletModules.set(context, pending);
+  }
+  return pending;
 }
 
 export interface PcmBufferSnapshot {
@@ -50,6 +53,8 @@ export interface WebAudioPcmSinkOptions {
   /** Connect to context.destination by default. */
   destination?: (context: AudioContext) => AudioNode;
   onError?: (error: unknown) => void;
+  /** Development diagnostics: log sink state and guest audio activity at this interval, plus every AudioContext state change. */
+  diagnosticsIntervalMs?: number;
 }
 
 interface PcmBufferState {
@@ -95,6 +100,10 @@ export function directSoundPanToStereo(pan: number): number {
 /**
  * Initial linear master gain: a 50% slider gives squared gain (0.5)^2. These two constants derive slider percentage and linear gain from one another, avoiding duplicate literals in the page, toolbar, and Worker configuration.
  */
+/** Development builds log audio diagnostics every 30s; production and tests leave them off. */
+export const AUDIO_DIAGNOSTICS_INTERVAL_MS =
+  import.meta.env.DEV && import.meta.env.MODE !== 'test' ? 30_000 : undefined;
+
 export const DEFAULT_MASTER_VOLUME = 0.25;
 /** Slider percentage (0..100) equivalent to DEFAULT_MASTER_VOLUME. */
 export const DEFAULT_VOLUME_PERCENT = Math.round(Math.sqrt(DEFAULT_MASTER_VOLUME) * 100);
@@ -107,7 +116,18 @@ export class WebAudioPcmSink {
   /** Linear master gain 0..1, applied after all buffers and before the destination. */
   private masterVolume = DEFAULT_MASTER_VOLUME;
 
-  constructor(private readonly options: WebAudioPcmSinkOptions = {}) {}
+  /** Guest activity since the last diagnostics line; only maintained when diagnostics are enabled. */
+  private readonly activity = { plays: 0, stops: 0, writes: 0, writeBytes: 0, errors: 0, lastError: '' };
+  private diagnosticsTimer: ReturnType<typeof globalThis.setInterval> | null = null;
+  private lastDiagnosticsContextTime: number | null = null;
+  /** Last processor count reported by the audio thread; grows without bound if disconnected nodes are never collected. */
+  private liveWorkletProcessors = 0;
+
+  constructor(private readonly options: WebAudioPcmSinkOptions = {}) {
+    if (options.diagnosticsIntervalMs) {
+      this.diagnosticsTimer = globalThis.setInterval(() => this.logDiagnostics(), options.diagnosticsIntervalMs);
+    }
+  }
 
   createBuffer(id: PcmBufferId, byteLength: number, format: PcmWaveFormat = DEFAULT_PCM_FORMAT as PcmWaveFormat): void {
     this.assertAlive();
@@ -164,6 +184,8 @@ export class WebAudioPcmSink {
 
   /** Write the guest PCM snapshot obtained by Unlock into the mirrored buffer. */
   writeBuffer(id: PcmBufferId, offset: number, bytes: Uint8Array): number {
+    this.activity.writes++;
+    this.activity.writeBytes += bytes.byteLength;
     const state = this.buffers.get(id);
     if (!state || bytes.byteLength === 0) return 0;
     const start = clamp(Math.trunc(offset), 0, state.pcm.byteLength);
@@ -186,6 +208,7 @@ export class WebAudioPcmSink {
   }
 
   play(id: PcmBufferId, options: PcmPlayOptions = {}): boolean {
+    this.activity.plays++;
     const state = this.buffers.get(id);
     if (!state) return false;
     state.loop = options.loop ?? false;
@@ -208,6 +231,7 @@ export class WebAudioPcmSink {
   }
 
   stop(id: PcmBufferId): boolean {
+    this.activity.stops++;
     const state = this.buffers.get(id);
     if (!state) return false;
     state.positionBytes = this.currentPosition(state);
@@ -358,6 +382,8 @@ export class WebAudioPcmSink {
 
   async destroy(): Promise<void> {
     if (this.destroyed) return;
+    if (this.diagnosticsTimer !== null) globalThis.clearInterval(this.diagnosticsTimer);
+    this.diagnosticsTimer = null;
     this.stopAll();
     this.buffers.clear();
     this.destroyed = true;
@@ -457,9 +483,10 @@ export class WebAudioPcmSink {
   private onWorkletMessage(
     state: PcmBufferState,
     worklet: AudioWorkletNode,
-    message: { kind: string; frame?: number },
+    message: { kind: string; frame?: number; live?: number },
   ): void {
     if (state.worklet !== worklet || !this.context || message.kind !== 'position') return;
+    if (message.live !== undefined) this.liveWorkletProcessors = message.live;
     state.streamFrame = message.frame ?? state.streamFrame;
     state.workletPositionAt = this.context.currentTime;
   }
@@ -702,6 +729,14 @@ export class WebAudioPcmSink {
       }
       // A new context needs a new master gain node; the old node is destroyed with its context.
       this.masterGain = null;
+      if (this.options.diagnosticsIntervalMs) {
+        const context = this.context;
+        context.addEventListener('statechange', () =>
+          console.warn(
+            `[音频诊断] AudioContext 状态变为 ${context.state}（音频时钟 ${context.currentTime.toFixed(1)}s）`,
+          ),
+        );
+      }
       return this.context;
     } catch (error) {
       this.report(error);
@@ -724,7 +759,45 @@ export class WebAudioPcmSink {
   }
 
   private report(error: unknown): void {
+    this.activity.errors++;
+    this.activity.lastError = error instanceof Error ? error.message : String(error);
     this.options.onError?.(error);
+  }
+
+  /**
+   * One line separating guest-side silence (no Play/Unlock writes arriving) from host-side silence (context not
+   * running, audio clock frozen, or worklets no longer reporting their playback cursor).
+   */
+  private logDiagnostics(): void {
+    const context = this.context;
+    let playing = 0;
+    let worklets = 0;
+    let streams = 0;
+    let sources = 0;
+    let staleWorklets = 0;
+    for (const state of this.buffers.values()) {
+      if (state.playing) playing++;
+      if (state.worklet) {
+        worklets++;
+        // The worklet posts its cursor about every 100ms while rendering; a playing one silent for >1s has stalled.
+        if (context && state.playing && context.currentTime - state.workletPositionAt > 1) staleWorklets++;
+      }
+      if (state.stream) streams++;
+      if (state.source) sources++;
+    }
+    const clock = context?.currentTime ?? null;
+    const clockDelta =
+      clock !== null && this.lastDiagnosticsContextTime !== null ? clock - this.lastDiagnosticsContextTime : null;
+    this.lastDiagnosticsContextTime = clock;
+    const activity = this.activity;
+    console.info(
+      `[音频诊断] Context=${context?.state ?? '未创建'} 音频时钟+${clockDelta?.toFixed(1) ?? '-'}s ` +
+        `缓冲${this.buffers.size} 播放中${playing}（worklet ${worklets}/停滞${staleWorklets}，脚本流${streams}，一次性源${sources}）；` +
+        `音频线程处理器${this.liveWorkletProcessors}；` +
+        `本周期 Play${activity.plays} Stop${activity.stops} 写入${activity.writes}次/${(activity.writeBytes / 1024).toFixed(0)}KB ` +
+        `错误${activity.errors}${activity.lastError ? `（${activity.lastError}）` : ''}`,
+    );
+    Object.assign(activity, { plays: 0, stops: 0, writes: 0, writeBytes: 0, errors: 0, lastError: '' });
   }
 }
 

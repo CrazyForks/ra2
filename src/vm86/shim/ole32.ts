@@ -891,6 +891,8 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
      */
     private redirectOleSaveToStream(call: Win32Call, persistStream: number, stream: number): void {
       const originalReturn = this.readU32(call.stack);
+      // A callback slot rather than bump-allocated code and permanent heap: a campaign save runs this hundreds of
+      // times, and the slot's tail releases the bridge under CLI so a pending PIT cannot preempt the return path.
       const frame = this.reserveGuestCallback();
       const clsid = frame.trampoline + GUEST_CALLBACK_STRIDE - 32;
       const written = clsid + 16;
@@ -1067,8 +1069,11 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
       riid: number,
       ppv: number,
     ): void {
-      const factory = this.alloc(4, true);
-      const iidClassFactory = this.alloc(16, true);
+      // Reuse a callback slot for both code and scratch data instead of leaking stub and heap space per call.
+      const frame = this.reserveGuestCallback();
+      const factory = frame.trampoline + GUEST_CALLBACK_STRIDE - 32;
+      const iidClassFactory = factory + 4;
+      this.writeU32(factory, 0);
       // IID_IClassFactory = {00000001-0000-0000-C000-000000000046} in memory byte order.
       this.memory.write_memory([1, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46], iidClassFactory);
       const originalReturn = this.readU32(call.stack);
@@ -1101,9 +1106,7 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
       code.push(0x51, 0x8b, 0x11, 0xff, 0x52, 0x08); // factory->Release
       code.push(0x58); // Restore CreateInstance HRESULT.
       const finish = code.length;
-      code.push(0xb9);
-      emit32(originalReturn);
-      code.push(0xff, 0xe1);
+      this.appendGuestCallbackReturn(code, frame, originalReturn);
       for (const patch of [failedPatch, emptyPatch]) {
         const relative = finish - (patch + 4);
         code[patch] = relative & 0xff;
@@ -1111,7 +1114,8 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
         code[patch + 2] = (relative >>> 16) & 0xff;
         code[patch + 3] = relative >>> 24;
       }
-      this.writeU32(call.stack, this.allocateDynamicCode(code));
+      this.memory.write_memory(code, frame.trampoline);
+      this.writeU32(call.stack, frame.trampoline);
     }
 
     /**

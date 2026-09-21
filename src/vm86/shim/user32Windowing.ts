@@ -39,7 +39,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
     protected createWindow(call: Win32Call): number {
       const classPtr = call.args[1] ?? 0;
       const className = classPtr > 0xffff ? this.readCString(classPtr).toLowerCase() : '';
-      const hwnd = this.nextWindow++;
+      const hwnd = this.allocateWindowHandle();
       const callback = this.windowClasses.get(className) ?? 0;
       this.windows.set(hwnd, callback);
       this.placeWindow(hwnd, 0);
@@ -111,7 +111,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
     protected createMciWindow(call: Win32Call): number {
       // MCIWndCreateA uses cdecl: the IAT stub must not pop arguments, but all four still follow the return address.
       const parent = this.readU32(call.stack + 4) || this.primaryWindow;
-      const hwnd = this.nextWindow++;
+      const hwnd = this.allocateWindowHandle();
       this.mciWindows.set(hwnd, { parent, playing: false });
       return hwnd;
     }
@@ -532,7 +532,7 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
         cursor = item + 2 + extra;
         const key = `${parent}:${id}`;
         if (this.dialogChildren.has(key)) continue;
-        const hwnd = this.nextWindow++;
+        const hwnd = this.allocateWindowHandle();
         this.dialogChildren.set(key, hwnd);
         this.windows.set(hwnd, 0);
         this.placeWindow(hwnd, 0);
