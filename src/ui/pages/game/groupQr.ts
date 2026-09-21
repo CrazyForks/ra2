@@ -5,7 +5,7 @@ import { toDataURL } from 'qrcode';
  * To update the code, change the text below; the next build generates the new image automatically.
  */
 export const WECHAT_GROUP_QR_TEXT =
-  'https://weixin.qq.com/g/AQYAAAMtS83wONOk6OEVm7BUg4pq2KpDdmSStHRPhwg-_M-913F_fxSfr5x_amFB';
+  'https://weixin.qq.com/g/AQYAAG2rDA_iewg54FzNrncGPHbqHD0ckMlCx9ndGiF4V-9m_wCTf34spqrnBCvE';
 
 /** Generate the WeChat group QR code as a PNG data URL; null for empty text. */
 export function renderGroupQrDataUrl(text: string): Promise<string | null> {

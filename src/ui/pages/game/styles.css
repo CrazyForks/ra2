@@ -439,6 +439,7 @@ canvas {
     min-width: 0;
   }
 }
+
 #ui {
   position: fixed;
   inset: 0;
@@ -935,9 +936,9 @@ canvas {
   -webkit-user-select: none;
 }
 #vm-controls.collapsed {
-  width: auto;
-  padding: 6px;
-  gap: 6px;
+  width: 184px;
+  padding: 8px;
+  gap: 7px;
 }
 #vm-controls.collapsed > :not(#vm-controls-toggle) {
   display: none;
@@ -1429,6 +1430,17 @@ input[type='range']::-moz-range-thumb {
   color: var(--ink-dim);
   box-shadow: none;
 }
+#vm-touch-controls .touch-keyboard-icon {
+  display: block;
+  width: 24px;
+  height: 16px;
+  margin: auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+}
 #vm-touch-controls .touch-collapse:active {
   background: transparent;
   box-shadow: none;
@@ -1464,6 +1476,33 @@ input[type='range']::-moz-range-thumb {
 #vm-touch-controls .touch-dpad .touch-key[data-code='ArrowDown'] {
   grid-column: 2;
   grid-row: 3;
+}
+#vm-touch-controls .touch-dpad .touch-key {
+  font-size: 0;
+}
+#vm-touch-controls .touch-dpad .touch-key::before {
+  content: '';
+  display: block;
+  width: 0;
+  height: 0;
+  margin: auto;
+  border-style: solid;
+}
+#vm-touch-controls .touch-dpad .touch-key[data-code='ArrowUp']::before {
+  border-width: 0 10px 12px;
+  border-color: transparent transparent currentColor;
+}
+#vm-touch-controls .touch-dpad .touch-key[data-code='ArrowRight']::before {
+  border-width: 10px 0 10px 12px;
+  border-color: transparent transparent transparent currentColor;
+}
+#vm-touch-controls .touch-dpad .touch-key[data-code='ArrowDown']::before {
+  border-width: 12px 10px 0;
+  border-color: currentColor transparent transparent;
+}
+#vm-touch-controls .touch-dpad .touch-key[data-code='ArrowLeft']::before {
+  border-width: 10px 12px 10px 0;
+  border-color: transparent currentColor transparent transparent;
 }
 /* Joystick: transparent floating overlay, occupying no layout space and leaving the game area intact */
 #vm-touch-joystick {
@@ -1502,6 +1541,16 @@ input[type='range']::-moz-range-thumb {
 @media (orientation: portrait) {
   #vm-touch-controls {
     grid-template-columns: repeat(4, minmax(44px, 1fr));
+  }
+  /* When collapsed, keep the keyboard toggle centered instead of letting it sit beside the joystick. */
+  #vm-touch-controls.collapsed {
+    left: 50%;
+    right: auto;
+    width: 60px;
+    grid-template-columns: 44px;
+    justify-content: center;
+    transform: translateX(-50%);
+    box-sizing: border-box;
   }
   #vm-touch-controls .touch-dpad {
     grid-column: 1 / -1;
@@ -2218,6 +2267,51 @@ input[type='range']::-webkit-slider-thumb {
 :lang(en) #vm-controls:not(.collapsed) {
   width: 216px;
 }
+:lang(en) #vm-controls.collapsed {
+  width: 216px;
+}
 :lang(en) #vm-controls .resolution-controls > .label {
   flex-basis: 64px;
+}
+
+/* Keep the sidebar frame stable while collapsing only its contents. */
+#vm-controls,
+#vm-controls.collapsed {
+  width: 184px;
+  min-width: 184px;
+  max-width: 184px;
+  overflow-x: hidden;
+}
+:lang(en) #vm-controls,
+:lang(en) #vm-controls.collapsed {
+  width: 216px;
+  min-width: 216px;
+  max-width: 216px;
+}
+
+/* Keep the sidebar frame stable while reducing its shared width in both states. */
+#vm-controls,
+#vm-controls.collapsed {
+  width: 144px;
+  min-width: 144px;
+  max-width: 144px;
+}
+:lang(en) #vm-controls,
+:lang(en) #vm-controls.collapsed {
+  width: 176px;
+  min-width: 176px;
+  max-width: 176px;
+}
+
+/* Keep mobile overlays ordered: sidebar above touch tray, touch tray above joystick. */
+@media (max-width: 860px) {
+  #vm-touch-controls {
+    z-index: 25;
+  }
+  #vm-touch-joystick {
+    z-index: 10;
+  }
+  #vm-controls {
+    z-index: 35;
+  }
 }

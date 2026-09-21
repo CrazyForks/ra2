@@ -44,6 +44,7 @@ Start a separate development server and set `RA2_BROWSER_ORIGIN`:
 pnpm run check
 pnpm run test:browser:react-ui
 pnpm run test:browser:touch-ui
+pnpm run test:browser:performance
 pnpm run test:custom-maps
 pnpm run test:browser:archive-layers
 ```

@@ -108,6 +108,11 @@ export const RA2_RUNTIME_HOOKS: GameRuntimeHooks = Object.freeze({
   beforeHostMessage: repairRa2InvalidRepairRate,
   writeGameSpeedFlag: writeRa2GameSpeed,
   crashHint(vector: number, eip: number): string {
+    // SwizzleManager's missing old-pointer mapping branch deliberately divides by zero.
+    // Saves from the former OleSaveToStream success stub omit object data; loading them
+    // in a fresh process reproduces this address even with all installation assets present.
+    if (vector === 0 && eip === 0x0069_fcbd)
+      return '；存档对象引用恢复失败：存档中的对象数据缺失或不一致。旧版保存缺陷生成的不完整存档无法补回丢失的数据；请刷新网页后开始新游戏并创建新存档。';
     if (vector !== 0 || eip !== 0x006d_6817) return '';
     return '；已知签名：RA2 RulesClass::RepairRate 为 0，建筑修理节拍在 0x6d6817 除零';
   },

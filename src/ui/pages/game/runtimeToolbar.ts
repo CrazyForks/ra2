@@ -8,6 +8,7 @@ import type { CheatGuideGameId } from './cheatGuides';
 import { gameResolutionValue, type GameResolution } from '../../../games/resolution';
 
 export interface RuntimeToolbar {
+  getPerformanceSettings(): Pick<ToolbarModel, 'rate' | 'resolution' | 'upscaleMode' | 'reshadeMode'>;
   setRendererDetail(detail: string): void;
   setGameTitle(title: string): void;
   recordCall(count?: number): void;
@@ -24,6 +25,7 @@ export interface RuntimeToolbar {
 }
 
 export interface RuntimeToolbarCallbacks {
+  onCollectPerformance?(signal: AbortSignal, progress: (remainingSeconds: number) => void): Promise<string>;
   onClockRate(rate: number): void;
   onResolution(value: string): Promise<void>;
   onVolume(linear: number): void;
@@ -132,6 +134,12 @@ export function installRuntimeToolbar(
     publish();
   }, 500);
   return {
+    getPerformanceSettings: () => ({
+      rate: model.rate,
+      resolution: model.resolution,
+      upscaleMode: model.upscaleMode,
+      reshadeMode: model.reshadeMode,
+    }),
     setRendererDetail(detail) {
       model.rendererDetail = detail;
       publish();

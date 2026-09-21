@@ -11,20 +11,64 @@ function writeWide(memory: ReturnType<typeof createGuestMemory>, address: number
 }
 
 describe('OLE structured storage', () => {
-  it('RA2 与 YR 都禁用会在 IRQ 返回边界破坏 v86 的客体 Save 回调链', () => {
+  it('persists numeric and Unicode properties across a fresh shim session', () => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory);
+    writeWide(memory, 0x2000, 'props.sav');
+    memory.write_memory(guidBytes('{0000013a-0000-0000-c000-000000000046}'), 0x2100);
+    memory.write_memory(guidBytes('{f29f85e0-4ff9-1068-ab91-08002b27b3d9}'), 0x2120);
+    callShim(shim, 'OLE32.DLL!StgCreateDocfile', [0x2000, 0x1012, 0, 0x2200]);
+    const storage = readU32(memory, 0x2200);
+    callShim(shim, 'OLE32.DLL!IStorage.QueryInterface', [storage, 0x2100, 0x2204]);
+    callShim(shim, 'OLE32.DLL!IPropertySetStorage.Create', [readU32(memory, 0x2204), 0x2120, 0, 0, 0x1012, 0x2208]);
+    const properties = readU32(memory, 0x2208);
+    writeU32(memory, 0x2300, 1);
+    writeU32(memory, 0x2304, 2);
+    writeU32(memory, 0x2308, 1);
+    writeU32(memory, 0x230c, 3);
+    writeU32(memory, 0x2400, 3);
+    writeU32(memory, 0x2408, 10000);
+    writeU32(memory, 0x2410, 31);
+    writeU32(memory, 0x2418, 0x2500);
+    writeWide(memory, 0x2500, '遭遇战存档');
+    expect(callShim(shim, 'OLE32.DLL!IPropertyStorage.WriteMultiple', [properties, 2, 0x2300, 0x2400, 2]).eax).toBe(0);
+    callShim(shim, 'OLE32.DLL!IStorage.Commit', [storage, 0]);
+    const bytes = shim.getMountedFileBytes('props.sav')!.slice();
+    // Overwrite original pointer targets: serialized properties must own their values.
+    memory.write_memory(new Uint8Array(64), 0x2500);
+    const restored = createTestShim(memory);
+    restored.mountFile('props.sav', bytes);
+    expect(callShim(restored, 'OLE32.DLL!StgOpenStorage', [0x2000, 0, 0x10, 0, 0, 0x2200]).eax).toBe(0);
+    callShim(restored, 'OLE32.DLL!IStorage.QueryInterface', [readU32(memory, 0x2200), 0x2100, 0x2204]);
+    expect(
+      callShim(restored, 'OLE32.DLL!IPropertySetStorage.Open', [readU32(memory, 0x2204), 0x2120, 0x10, 0x2208]).eax,
+    ).toBe(0);
+    expect(
+      callShim(restored, 'OLE32.DLL!IPropertyStorage.ReadMultiple', [readU32(memory, 0x2208), 2, 0x2300, 0x2600]).eax,
+    ).toBe(0);
+    expect(readU32(memory, 0x2608)).toBe(10000);
+    expect(readU32(memory, 0x2610)).toBe(31);
+    expect(new TextDecoder('utf-16le').decode(memory.read_memory(readU32(memory, 0x2618), 10))).toBe('遭遇战存档');
+    // Truncated metadata must be rejected instead of exposing partial properties.
+    const corrupt = createTestShim(memory);
+    corrupt.mountFile('props.sav', bytes.subarray(0, bytes.length - 1));
+    expect(callShim(corrupt, 'OLE32.DLL!StgOpenStorage', [0x2000, 0, 0x10, 0, 0, 0x2200]).eax).not.toBe(0);
+    expect(readU32(memory, 0x2200)).toBe(0);
+  });
+  it('RA2 and YR both serialize native objects', () => {
     const memory = createGuestMemory();
     const stack = 0x3000;
     const returnAddress = 0x0065_5938;
     writeU32(memory, stack, returnAddress);
     const shim = createTestShim(memory, { gameId: 'ra2' });
     expect(callShim(shim, 'OLE32.DLL!OleSaveToStream', [0x4000, 0x5000], stack).eax).toBe(0);
-    expect(readU32(memory, stack)).toBe(returnAddress);
+    expect(readU32(memory, stack)).not.toBe(returnAddress);
 
     const yrMemory = createGuestMemory();
     writeU32(yrMemory, stack, returnAddress);
     const yrShim = createTestShim(yrMemory, { gameId: 'yr' });
     expect(callShim(yrShim, 'OLE32.DLL!OleSaveToStream', [0x4000, 0x5000], stack).eax).toBe(0);
-    expect(readU32(yrMemory, stack)).toBe(returnAddress);
+    expect(readU32(yrMemory, stack)).not.toBe(returnAddress);
   });
 
   it('OleSaveToStream 保持两参数 stdcall ABI 并串接客体 IPersistStream', () => {
@@ -49,13 +93,11 @@ describe('OLE structured storage', () => {
     expect(contains([0x8b, 0x11, 0xff, 0x52, 0x18])).toBe(true); // IPersistStream::Save
     expect(
       contains([
-        0xb9,
+        0x68,
         originalReturn & 0xff,
         (originalReturn >>> 8) & 0xff,
         (originalReturn >>> 16) & 0xff,
         originalReturn >>> 24,
-        0xff,
-        0xe1,
       ]),
     ).toBe(true);
   });

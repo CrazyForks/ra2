@@ -1,6 +1,8 @@
 import type { GamePerformanceSample } from '../games/performance';
 import { serveRelayPort, relayAddressCandidates, relayRoomFromPath } from 'relay-package/client';
 import { createBrowserEmulator } from '../platform/browser/emulator';
+import { BrowserEmulatorProbe } from '../platform/browser/emulatorProbe';
+import type { VmDiagnosticAction, VmDiagnostics, VmRuntimeInfo } from './vmDiagnostics';
 import { DEFAULT_MASTER_VOLUME, WebAudioPcmSink } from './audio';
 import { gameVmConfiguration } from '../games/vmConfiguration';
 import {
@@ -99,6 +101,12 @@ export async function createVmShell(
       ),
       ra2Network,
       options.startupPage,
+      {
+        mode: 'main-thread',
+        reason: typeof Worker === 'undefined' ? 'worker-unavailable' : 'requested',
+        workerProbeMs: null,
+        fallbackReason: null,
+      },
     );
   }
   const handle = directoryHandleOf(source.files);
@@ -164,6 +172,7 @@ export async function createVmShell(
     transfer.push(channel.port2);
   }
   let client: WorkerVmClient;
+  const probeStartedAt = performance.now();
   try {
     client = new WorkerVmClient(callbacks, config, {
       ...options,
@@ -184,6 +193,12 @@ export async function createVmShell(
     return client;
   } catch (error) {
     console.warn('[VM] worker 模式不可用，回退主线程模式：', error);
+    const runtimeInfo: VmRuntimeInfo = {
+      mode: 'main-thread',
+      reason: 'probe-failed',
+      workerProbeMs: performance.now() - probeStartedAt,
+      fallbackReason: error instanceof Error ? error.message : String(error),
+    };
     await client.destroy();
     return new Win32GameVm(
       callbacks,
@@ -193,6 +208,7 @@ export async function createVmShell(
       ),
       ra2Network,
       options.startupPage,
+      runtimeInfo,
     );
   }
 }
@@ -207,10 +223,23 @@ export class Win32GameVm implements VmShell {
   private removePagehideFlush: (() => void) | null = null;
   private fileProvider: GameFileProvider;
 
-  constructor(callbacks: GameVmCallbacks, source: GameSource, ra2Network?: Ra2NetworkConfig, startupPage?: string) {
+  constructor(
+    callbacks: GameVmCallbacks,
+    source: GameSource,
+    ra2Network?: Ra2NetworkConfig,
+    startupPage?: string,
+    readonly runtimeInfo: VmRuntimeInfo = {
+      mode: 'main-thread',
+      reason: 'default',
+      workerProbeMs: null,
+      fallbackReason: null,
+    },
+  ) {
     this.fileProvider = source.files;
+    const probe = new BrowserEmulatorProbe();
     const platform: VmCorePlatform = {
-      createEmulator: createBrowserEmulator,
+      createEmulator: (options) => createBrowserEmulator(options, probe),
+      executionProbe: probe,
       ...gameVmConfiguration(source.game, callbacks.onNetworkStatus, ra2Network),
       startupPage,
       fetchBytes,
@@ -283,6 +312,10 @@ export class Win32GameVm implements VmShell {
 
   getGamePerformance(): Promise<GamePerformanceSample | null> {
     return this.core.getGamePerformance();
+  }
+
+  getDiagnostics(action: VmDiagnosticAction): Promise<VmDiagnostics> {
+    return this.core.getDiagnostics(action);
   }
 
   async getPointerState(): Promise<VmPointerState | null> {

@@ -1,5 +1,18 @@
 // Chinese source keys keep existing UI wording available as the Chinese catalog.
 export const englishMessages = {
+  '性能诊断…': 'Performance diagnostics…',
+  性能诊断: 'Performance diagnostics',
+  性能诊断报告: 'Performance diagnostic report',
+  '采样中 · {0}s': 'Recording · {0}s',
+  '开始 20 秒采样': 'Record for 20 seconds',
+  停止采样: 'Stop recording',
+  复制报告: 'Copy report',
+  报告已复制: 'Report copied',
+  '无法自动复制，请长按报告文字选择并复制。': 'Automatic copy failed. Touch and hold the report to select and copy it.',
+  '进入对局后开始采样，保持前台并正常操作 20 秒。请在两个浏览器使用相同地图、游戏速度、分辨率和画质设置。':
+    'Start recording in a match, keep the page in the foreground, and play normally for 20 seconds. Use the same map, game speed, resolution, and graphics settings in both browsers.',
+  '采样结束后复制报告发回。报告包含浏览器、运行模式和性能数据，不包含存档或游戏资源。':
+    'Copy and send back the report after recording. It includes browser, runtime mode, and performance data, without saves or game resources.',
   触屏虚拟按键: 'Touch controls',
   折叠虚拟按键: 'Collapse touch controls',
   'Esc 键': 'Esc key',

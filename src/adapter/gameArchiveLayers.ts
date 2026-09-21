@@ -19,8 +19,10 @@ export function openGameArchive(
     let provider: ProgressiveGameFileProvider | null = null;
     let prioritize = (_name: string) => {};
     const layers = gameArchiveLayers(gameId);
+    const memoryPolicy = isArchiveUpload(bytes) && isConservativeBrowser() ? 'conservative' : 'normal';
     const task = extractArchiveFiles(bytes, {
       wanted: layers.wanted,
+      memoryPolicy,
       directoryRules: GAME_ARCHIVE_DIRECTORY_RULES,
       layers,
       signal: controller.signal,
@@ -59,4 +61,19 @@ export function openGameArchive(
       )
       .finally(() => globalThis.removeEventListener?.('pagehide', abort));
   });
+}
+
+/** iOS browsers share WebKit's tight per-page memory budget, including third-party browsers. */
+function isConservativeBrowser(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return (
+    /iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+    (/Macintosh/i.test(navigator.userAgent) && navigator.maxTouchPoints > 1)
+  );
+}
+
+function isArchiveUpload(bytes: Uint8Array | Blob): boolean {
+  return (
+    bytes instanceof Blob && 'name' in bytes && typeof bytes.name === 'string' && /\.(?:rar|7z|zip)$/i.test(bytes.name)
+  );
 }

@@ -15,6 +15,8 @@ export interface ArchiveExtractResult {
 export interface ArchiveExtractOptions {
   /** Required top-level filenames, compared individually without case sensitivity. */
   wanted: string[];
+  /** Browser memory policy forwarded to the extraction Worker. */
+  memoryPolicy?: 'normal' | 'conservative';
   /** Add-on packages only: discover unknown filenames by suffix and explore all nested archives. */
   extensions?: string[];
   directoryRules?: readonly ArchiveDirectoryRule[];
@@ -33,6 +35,9 @@ export function extractArchiveFiles(
   bytes: Uint8Array | Blob,
   options: ArchiveExtractOptions,
 ): Promise<ArchiveExtractResult> {
+  if (options.memoryPolicy === 'conservative' && isArchiveBlob(bytes)) {
+    return extractArchiveByBatch(bytes, options);
+  }
   return new Promise((resolve, reject) => {
     const { wanted, extensions, onStatus, signal } = options;
     const files = new Map<string, Uint8Array>();
@@ -123,6 +128,101 @@ export function extractArchiveFiles(
       fail(error);
     }
   });
+}
+
+/** Run bounded archive batches in fresh Workers so iOS can reclaim the grown 7z WASM heap between batches. */
+function extractArchiveByBatch(
+  bytes: Uint8Array | Blob,
+  options: ArchiveExtractOptions,
+): Promise<ArchiveExtractResult> {
+  const files = new Map<string, Uint8Array>();
+  const found = new Set<string>();
+  const targets = [...new Set(options.wanted.map((name) => name.toLowerCase()))];
+  let activeWorker: Worker | undefined;
+  let aborted = false;
+  const abort = () => {
+    aborted = true;
+    activeWorker?.terminate();
+  };
+  options.signal?.addEventListener('abort', abort, { once: true });
+  const runTargets = (batch: readonly string[]): Promise<number> =>
+    new Promise((resolve, reject) => {
+      if (aborted) {
+        reject(new DOMException('归档提取已取消', 'AbortError'));
+        return;
+      }
+      const worker = new Worker(new URL('./archiveExtractWorker.ts', import.meta.url), { type: 'module' });
+      activeWorker = worker;
+      let settled = false;
+      let batchBytes = 0;
+      const finish = (error?: unknown) => {
+        if (settled) return;
+        settled = true;
+        worker.onmessage = null;
+        worker.onerror = null;
+        worker.onmessageerror = null;
+        worker.terminate();
+        if (activeWorker === worker) activeWorker = undefined;
+        if (error) reject(error);
+        else resolve(batchBytes);
+      };
+      worker.onmessage = (event: MessageEvent<ArchiveExtractResponse>) => {
+        const message = event.data;
+        if (message.type === 'status') options.onStatus?.(`[低内存归档] ${message.message}`);
+        else if (message.type === 'file') {
+          files.set(message.name, message.bytes);
+          found.add(message.name.toLowerCase());
+          batchBytes += message.bytes.byteLength;
+          options.onFile?.(message.name, message.bytes);
+        } else if (message.type === 'done') {
+          for (const name of message.found) found.add(name.toLowerCase());
+          finish();
+        } else if (message.type === 'error') finish(new Error(message.message));
+      };
+      worker.onerror = (event) => finish(new Error(event.message || '归档解压 Worker 异常'));
+      worker.onmessageerror = () => finish(new Error('归档解压 Worker 消息解码失败'));
+      const request = {
+        type: 'extract' as const,
+        wanted: [...batch],
+        extensions: options.extensions,
+        directoryRules: options.directoryRules,
+      };
+      if (bytes instanceof Blob) worker.postMessage({ ...request, archive: bytes });
+      else {
+        const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+        worker.postMessage({ ...request, buffer }, [buffer]);
+      }
+    });
+  return (async () => {
+    try {
+      let index = 0;
+      let batchSize = 1;
+      while (index < targets.length) {
+        const batch = targets.slice(index, index + batchSize);
+        const extractedBytes = await runTargets(batch);
+        index += batch.length;
+        // Large outputs stay isolated; small outputs share the next Worker to reduce full-RAR rescans.
+        batchSize = extractedBytes >= 32 * 1024 * 1024 ? 1 : extractedBytes >= 8 * 1024 * 1024 ? 2 : 4;
+      }
+      return {
+        files,
+        found: [...found],
+        missing: options.wanted.filter((name) => !found.has(name.toLowerCase())),
+      };
+    } finally {
+      options.signal?.removeEventListener('abort', abort);
+      activeWorker?.terminate();
+    }
+  })();
+}
+
+function isArchiveBlob(bytes: Uint8Array | Blob): boolean {
+  return (
+    bytes instanceof Blob &&
+    'name' in bytes &&
+    typeof bytes.name === 'string' &&
+    /\.(?:rar|7z|zip|exe)$/i.test(bytes.name)
+  );
 }
 
 function formatArchiveBytes(size: number): string {

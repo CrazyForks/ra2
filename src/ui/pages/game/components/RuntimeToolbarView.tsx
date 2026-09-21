@@ -8,6 +8,7 @@ import { setControlsCollapsed, toggleImmersiveFullscreen } from '../gameInput';
 import { openGroupJoinDialog } from '../joinGroupDialog';
 import type { RuntimeToolbarCallbacks } from '../runtimeToolbar';
 import { Modal } from './Modal';
+import { PerformanceDiagnostics } from './PerformanceDiagnostics';
 import { GameSelect } from './GameSelect';
 import type { UpscaleMode } from '../vmFrameRenderer';
 import { controlsCollapsed } from '../state/uiState';
@@ -366,6 +367,9 @@ export function RuntimeToolbarView({
       >
         {t('快速开局…')}{' '}
       </button>
+      {callbacks.onCollectPerformance && (
+        <PerformanceDiagnostics collect={callbacks.onCollectPerformance} available={model.mapsAvailable} />
+      )}
       {ModelProbeDialog && (
         <button
           id="vm-model-probe"

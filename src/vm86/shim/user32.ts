@@ -492,21 +492,25 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
           return { eax: this.captureWindow };
         case 'USER32.DLL!GetTopWindow': {
           const parent = a[0] ?? 0;
-          const child = [...this.windowParents].find(([, candidate]) => candidate === parent)?.[0];
-          return { eax: child ?? (parent ? 0 : this.primaryWindow) };
+          const child = [...this.windowZOrder].reverse().find((hwnd) => (this.windowParents.get(hwnd) ?? 0) === parent);
+          return { eax: child ?? 0 };
         }
         case 'USER32.DLL!GetWindow': {
           const hwnd = a[0] ?? 0;
           const relation = a[1] ?? 0;
+          if (!this.windows.has(hwnd)) return { eax: 0 };
           if (relation === 4) return { eax: 0 }; // GW_OWNER: the current modeless dialog has no owner.
           if (relation === 5) {
             // GW_CHILD
-            return { eax: [...this.windowParents].find(([, parent]) => parent === hwnd)?.[0] ?? 0 };
+            return {
+              eax: [...this.windowZOrder].reverse().find((child) => this.windowParents.get(child) === hwnd) ?? 0,
+            };
           }
           const parent = this.windowParents.get(hwnd) ?? 0;
-          const siblings = [...this.windowParents]
-            .filter(([, candidate]) => candidate === parent)
-            .map(([candidate]) => candidate);
+          // Win32 enumerates siblings from top to bottom, following subsequent reordering.
+          const siblings = this.windowZOrder
+            .filter((candidate) => (this.windowParents.get(candidate) ?? 0) === parent)
+            .reverse();
           const index = siblings.indexOf(hwnd);
           switch (relation) {
             case 0:

@@ -57,8 +57,8 @@ With `?start-page=skirmish`, the first native page after selecting RA2/YR resour
 - Browser scripts separately verify Worker, `vm-worker=0`, and default startup without navigation parameters, recording the first page. They use normal development entry and executable caching without intercepting/replacing executable requests, verifying that the entire page-selected executable reaches the Worker. Screenshots remain in test-configured temporary directories; game assets are not committed.
 
 ```bash
-VM_REQUIRE_GAME_RESOURCES=1 pnpm exec vitest run tests/real-game/ra2/startupPage.test.ts
-VM_REQUIRE_GAME_RESOURCES=1 pnpm exec vitest run tests/real-game/yr/startupPage.test.ts
+pnpm exec vitest run tests/real-game/ra2/startupPage.test.ts
+pnpm exec vitest run tests/real-game/yr/startupPage.test.ts
 RA2_BROWSER_ORIGIN=https://127.0.0.1:15175 pnpm run test:browser:startup-page
 ```
 

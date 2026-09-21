@@ -226,6 +226,56 @@ describe('VmCore lifecycle orchestration', () => {
     }
   });
 
+  it('loads Unicode structured-storage paths before the first synchronous open', async () => {
+    const emulator = new FakeEmulator();
+    const fixture = source();
+    const bytes = new Uint8Array([83, 71, 66, 89]);
+    const path = '存档.sav';
+    const mount = vi.fn();
+    const dispatch = vi.fn(() => {
+      expect(mount).toHaveBeenCalledWith(path, bytes, true, bytes.length);
+      return null;
+    });
+    const shim = Object.assign(fakeShim(dispatch), {
+      mountFile: mount,
+      resolveDynamicImport: () => ({
+        id: 999,
+        key: 'OLE32.DLL!StgOpenStorage',
+        dll: 'OLE32.DLL',
+        name: 'StgOpenStorage',
+        argBytes: 24,
+        slot: 0,
+        stub: 0,
+      }),
+    });
+    const core = new VmCore(
+      {},
+      fixture,
+      platform(emulator, new FakeAudio(), () => shim),
+    );
+    try {
+      await core.start();
+      const read = vi.spyOn(fixture.files, 'read').mockImplementation(async (name) => {
+        expect(name).toBe(path);
+        await Promise.resolve();
+        expect(dispatch).not.toHaveBeenCalled();
+        return bytes;
+      });
+      emulator.write_memory(
+        [...path, '\0'].flatMap((char) => [char.charCodeAt(0) & 255, char.charCodeAt(0) >>> 8]),
+        0x3000,
+      );
+      writeU32(emulator, HYPERCALL_STACK, 0x2000);
+      writeU32(emulator, 0x2004, 0x3000);
+      writeU32(emulator, HYPERCALL_REQUEST, 999);
+      await (core as unknown as { poll(): Promise<void> }).poll();
+      expect(read).toHaveBeenCalledWith(path);
+      expect(dispatch).toHaveBeenCalledOnce();
+    } finally {
+      await core.destroy();
+    }
+  });
+
   it.each(SUPPORTED_GAMES)('$id 的启动参数经公共 VmCore 传入 shim', async (game) => {
     const emulator = new FakeEmulator();
     const fixture = source();

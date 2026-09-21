@@ -1651,6 +1651,29 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
         if (this.windowClassNames.get(hwnd)?.toLowerCase() !== 'scrollbar' || !this.isWindowVisible(hwnd)) continue;
         const state = this.scrollbarState(hwnd);
         const rect = this.screenRect(hwnd);
+        // Host-drawn controls must obey the same sibling Z order as native dialog painting.
+        // A later sibling of any ancestor can cover this control, even if its own parent is visible.
+        const occluders: ReturnType<typeof this.screenRect>[] = [];
+        const visited = new Set<number>();
+        for (
+          let ancestor = hwnd;
+          ancestor && !visited.has(ancestor);
+          ancestor = this.windowParents.get(ancestor) ?? 0
+        ) {
+          visited.add(ancestor);
+          const parent = this.windowParents.get(ancestor) ?? 0;
+          for (const candidate of this.windowZOrder.slice(this.windowZOrder.indexOf(ancestor) + 1)) {
+            if ((this.windowParents.get(candidate) ?? 0) !== parent || !this.isWindowVisible(candidate)) continue;
+            const cover = this.screenRect(candidate);
+            if (
+              cover.x < rect.x + rect.width &&
+              cover.x + cover.width > rect.x &&
+              cover.y < rect.y + rect.height &&
+              cover.y + cover.height > rect.y
+            )
+              occluders.push(cover);
+          }
+        }
         const vertical = ((this.windowLongs.get(`${hwnd}:-16`) ?? 0) & 1) !== 0;
         const length = vertical ? rect.height : rect.width;
         const breadth = vertical ? rect.width : rect.height;
@@ -1662,6 +1685,12 @@ export function withUser32Windowing<TBase extends Constructor<Gdi32Chain>>(Base:
               const x = rect.x + (vertical ? b : a);
               const y = rect.y + (vertical ? a : b);
               if (x < 0 || y < 0 || x >= width || y >= height) continue;
+              if (
+                occluders.some(
+                  (cover) => x >= cover.x && x < cover.x + cover.width && y >= cover.y && y < cover.y + cover.height,
+                )
+              )
+                continue;
               const offset = (y * width + x) * 4;
               rgba[offset] = color[0]!;
               rgba[offset + 1] = color[1]!;

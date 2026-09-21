@@ -303,3 +303,69 @@
     margin: 16px 0 0;
   }
 }
+
+/* Keep portrait phones on the desktop-style continuous backdrop; do not split the artwork above the picker. */
+@media (max-width: 560px) and (orientation: portrait) {
+  .game-home #stage {
+    background:
+      linear-gradient(#0003, #0003),
+      url(/backgrounds/ra2vm-launcher-background.jpg) center / cover no-repeat,
+      #121315;
+  }
+  .game-home #ui::before {
+    display: none;
+  }
+  .game-home #ui > .game-source-picker {
+    margin: auto 0;
+  }
+}
+
+/* iOS landscape needs the home overlay itself to own the vertical gesture; the document body is intentionally non-scrolling. */
+@media (max-width: 560px) and (orientation: landscape) {
+  .game-home #ui {
+    position: absolute;
+    inset: 0;
+    transform: none;
+    width: 100%;
+    height: auto;
+    max-height: none;
+    overflow: hidden;
+    pointer-events: auto;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+  }
+  .game-home #ui > .game-source-picker {
+    margin: 16px 0;
+    max-height: calc(100% - 32px);
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* Phone landscape is usually wider than 560px; use the short viewport as the reliable mobile breakpoint. */
+@media (orientation: landscape) and (max-height: 600px) {
+  .game-home #ui {
+    position: fixed;
+    inset: auto;
+    top: calc(50% - 8px);
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(72vw, 102vh);
+    height: min(70vh, 49vw);
+    max-height: none;
+    overflow: hidden;
+    pointer-events: auto;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+  }
+  .game-home #ui > .game-source-picker {
+    margin: 16px 0;
+    max-height: calc(100% - 32px);
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+  }
+}

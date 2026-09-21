@@ -63,7 +63,9 @@
 .game-select-options {
   box-sizing: border-box;
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
+  touch-action: pan-y;
   scrollbar-width: none;
   border: 1px solid #f00;
   padding-right: 20px;
@@ -80,10 +82,24 @@
   font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
+  touch-action: pan-y;
 }
 .game-select-option.active {
   background: #f00;
   color: var(--ra2-button-text);
+}
+@media (pointer: coarse) {
+  /* Mobile option labels may exceed the narrow sidebar; expose them with horizontal-only touch scrolling. */
+  .game-select-options {
+    overflow-x: auto;
+    overflow-y: auto;
+    touch-action: pan-x;
+  }
+  .game-select-option {
+    width: max-content;
+    min-width: 100%;
+    touch-action: pan-x;
+  }
 }
 .game-scrollbar {
   position: absolute;

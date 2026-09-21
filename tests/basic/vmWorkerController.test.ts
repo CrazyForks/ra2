@@ -15,6 +15,7 @@ import type { MainToWorkerMessage, VmInitConfig, WorkerToMainMessage } from '../
 import { SessionGameFileProvider } from '../../src/platform/browser/files/sessionFiles';
 import type { GameVmCallbacks } from '../../src/app/session/runtimeEvents';
 import type { VmFrame } from '../../src/vm86/win32';
+import type { VmDiagnosticAction, VmDiagnostics } from '../../src/adapter/vmDiagnostics';
 
 class FakeProvider implements GameFileProvider {
   readonly label = 'controller-test';
@@ -119,6 +120,11 @@ class FakeAudio implements VmAudioSink {
 }
 
 class FakeCore implements VmWorkerCore {
+  async getDiagnostics(action: VmDiagnosticAction): Promise<VmDiagnostics> {
+    this.calls.push(`diagnostics:${action}`);
+    if (this.fail === 'diagnostics') throw new Error('diagnostics failed');
+    return { sampledAtMs: 12, phase: 'running', hypercalls: 123, clockRate: this.clock, execution: null, game: null };
+  }
   readonly calls: string[] = [];
   fileProvider: GameFileProvider | null = null;
   callbacks: GameVmCallbacks | null = null;
@@ -253,6 +259,22 @@ function frame(value: number): VmFrame {
 }
 
 describe('VmWorkerController request-scoped errors', () => {
+  it('routes capture actions and correlates probe errors without stopping the VM', async () => {
+    const { controller, messages, core } = harness();
+    await controller.handleMessage({ type: 'init', config: config(), requestId: 1 });
+    await controller.handleMessage({ type: 'diagnostics', action: 'start', requestId: 2 });
+    expect(core.calls).toContain('diagnostics:start');
+    expect(messages).toContainEqual({
+      type: 'diagnostics-reply',
+      requestId: 2,
+      value: expect.objectContaining({ hypercalls: 123, execution: null }),
+    });
+    core.fail = 'diagnostics';
+    await controller.handleMessage({ type: 'diagnostics', action: 'stop', requestId: 3 });
+    expect(messages).toContainEqual({ type: 'error', requestId: 3, message: 'diagnostics failed' });
+    expect(core.calls).not.toContain('stop');
+    controller.dispose();
+  });
   it('性能探针在 Worker 内读取并返回原始采样时间', async () => {
     const { controller, messages, core } = harness();
     await controller.handleMessage({ type: 'init', config: config(), requestId: 1 });

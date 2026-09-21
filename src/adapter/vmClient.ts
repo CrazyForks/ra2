@@ -1,4 +1,5 @@
 import type { GamePerformanceSample } from '../games/performance';
+import type { VmDiagnosticAction, VmDiagnostics, VmRuntimeInfo } from './vmDiagnostics';
 import { normalizeGameClockRate } from '../vm86/clock';
 import { WebAudioPcmSink } from './audio';
 import type { GuestMemRecordResult } from './memRecord';
@@ -47,6 +48,13 @@ interface PendingRequest {
  * The public interface matches Win32GameVm (VmShell), keeping page.ts independent of the execution thread.
  */
 export class WorkerVmClient implements VmShell {
+  readonly runtimeInfo: VmRuntimeInfo = {
+    mode: 'worker',
+    reason: 'default',
+    workerProbeMs: null,
+    fallbackReason: null,
+  };
+  private readonly probeStartedAt = performance.now();
   private readonly worker: Worker;
   private readonly onTerminated: (() => void) | undefined;
   private readonly audio: WebAudioPcmSink;
@@ -105,6 +113,10 @@ export class WorkerVmClient implements VmShell {
   /** Worker-load probe: timeout/onerror rejects, allowing createVmShell to fall back. */
   waitProbe(): Promise<void> {
     return this.probeReady;
+  }
+
+  getDiagnostics(action: VmDiagnosticAction): Promise<VmDiagnostics> {
+    return this.request((requestId) => ({ type: 'diagnostics', action, requestId }));
   }
 
   async start(): Promise<void> {
@@ -273,6 +285,7 @@ export class WorkerVmClient implements VmShell {
       case 'probe': {
         const supported = message.ready;
         if (supported) {
+          this.runtimeInfo.workerProbeMs = performance.now() - this.probeStartedAt;
           this.probeOk = true;
           if (this.probeTimer !== null) globalThis.clearTimeout(this.probeTimer);
           this.probeTimer = null;
@@ -320,6 +333,7 @@ export class WorkerVmClient implements VmShell {
         }
         break;
       case 'game-performance-reply':
+      case 'diagnostics-reply':
       case 'state-reply':
         this.resolveRequest(message.requestId, message.value);
         break;

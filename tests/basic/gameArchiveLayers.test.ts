@@ -68,4 +68,31 @@ describe('游戏归档启动层发布', () => {
     expect(extraction.options!.signal?.aborted).toBe(true);
     await expect(source.completion).rejects.toThrow('取消');
   });
+  it('iPhone uses conservative extraction to limit overlapping WASM output buffers', async () => {
+    vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)' });
+    const archive = new Blob();
+    Object.defineProperty(archive, 'name', { value: 'game.rar' });
+    const opening = openGameArchive(archive, 'ra2', () => {});
+    expect(extraction.options!.memoryPolicy).toBe('conservative');
+    extraction.reject!(new Error('stop'));
+    await expect(opening).rejects.toThrow('stop');
+  });
+
+  it('iPhone keeps non-uploaded archive bytes on the normal extraction path', async () => {
+    vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)' });
+    const opening = openGameArchive(new Uint8Array(), 'ra2', () => {});
+    expect(extraction.options!.memoryPolicy).toBe('normal');
+    extraction.reject!(new Error('stop'));
+    await expect(opening).rejects.toThrow('stop');
+  });
+
+  it('iPhone keeps executable uploads on the normal extraction path', async () => {
+    vi.stubGlobal('navigator', { userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)' });
+    const executable = new Blob();
+    Object.defineProperty(executable, 'name', { value: 'setup.exe' });
+    const opening = openGameArchive(executable, 'ra2', () => {});
+    expect(extraction.options!.memoryPolicy).toBe('normal');
+    extraction.reject!(new Error('stop'));
+    await expect(opening).rejects.toThrow('stop');
+  });
 });

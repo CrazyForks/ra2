@@ -33,19 +33,14 @@ export function gameResourceExe(gameId: SupportedGameId): string {
   return join(directory, game.executable);
 }
 
-export function gameResourcesAvailable(gameId: SupportedGameId): boolean {
+/**
+ * Real-game regressions require the original executable. A missing file fails the run instead of skipping the suite:
+ * a skipped suite disappears from the report, so a green run would silently drop these regressions.
+ * There is deliberately no opt-out switch, so every developer sees the same missing-resource failure.
+ */
+export function requireGameResources(gameId: SupportedGameId): void {
   const executable = gameResourceExe(gameId);
-  const available = existsSync(executable);
-  // Full local test runs may skip uninstalled games; explicit acceptance must not disguise missing assets as a pass.
-  if (!available && process.env.VM_REQUIRE_GAME_RESOURCES === '1') {
+  if (!existsSync(executable)) {
     throw new Error(`真实游戏验收缺少 ${executable}；请配置 VM_GAME_DIR 或 game/ra2/`);
   }
-  if (!available) {
-    // Skipping must be visible: without this line, pnpm test could report all green without running a single real-game case.
-    console.warn(
-      `[真实游戏] ${gameId} 已跳过：缺少 ${executable}。本次运行不构成真实游戏验收；` +
-        `配置 VM_GAME_DIR 或用 VM_REQUIRE_GAME_RESOURCES=1 让缺资源直接失败。`,
-    );
-  }
-  return available;
 }

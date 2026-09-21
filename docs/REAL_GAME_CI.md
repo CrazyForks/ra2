@@ -62,7 +62,7 @@ Real-game sequence:
 
 1. Download and validate the original package, then import with the shared extractor outside the checkout.
 2. Prepare fixed executables, check required resources, and record/validate the imported inventory.
-3. Run the game's original-executable startup in strict mode; RA2 also runs its quick-game contract.
+3. Run the game's original-executable startup in strict mode; RA2 also runs its quick-game regression. Both games run `tests/real-game/<gameId>/saveLoad.test.ts` as a separate required `save-load` step. The latter saves through native menus, destroys the VM, then loads disk-backed saved bytes in a fresh VM without starting a match first. It checks restored simulation state and native object counts, continued simulation, and menu interaction. Missing resources, a wrong executable hash, timeouts, or assertions fail the step; no skip or continue-on-error is accepted in this resource-enabled job.
 4. Own a dedicated development port and verify Worker/main-thread direct battlefield startup. Battlefield startup waits are per game (RA2 150 s, YR 300 s): CI observed YR startup near the 2.5-minute mark against the RA2-derived limit, so the shared timeout was widened instead of treating a slow healthy start as a failure.
 5. Clean download directories on normal/failure paths; ephemeral runner destruction handles forced termination.
 

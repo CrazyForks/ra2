@@ -29,6 +29,9 @@ The web interface automatically selects English or Simplified Chinese from your 
 languages when the page opens. Other languages fall back to English. Game text uses the language
 of the imported resources; the download dialog lets you filter packages by their game text language.
 
+To investigate slow gameplay, use **Performance diagnostics…** in the game toolbar, record for 20 seconds,
+then copy the report. See [browser comparison reports](docs/GAME_PERFORMANCE.md#browser-comparison-reports).
+
 ## Play with friends
 
 ### 1. Deploy a relay

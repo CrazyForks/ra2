@@ -36,6 +36,11 @@ export class FramePresenter {
   private dead = false;
   private cursorDrawnBeforeFrame = false;
   private tickPending = false;
+  private presentations = 0;
+
+  get presentedFrames(): number {
+    return this.presentations;
+  }
 
   constructor(
     private output: FrameOutput,
@@ -105,6 +110,7 @@ export class FramePresenter {
     const target = this.hooks.targetSize();
     // Even when enhancement lags, sample and position the cursor from the latest original frame.
     this.output.draw(enhanced ?? frame, target.width, target.height, this.cursor, frame);
+    this.presentations++;
     this.drawnVersion = this.version;
     this.drawnCursorVersion = this.cursorVersion;
     this.hooks.presented?.();

@@ -29,6 +29,55 @@ import { normalizeGuestPath } from '../paths';
 import { guestFileSearch, type GuestFileEntry } from './fileSearch';
 
 /** Kernel32 Win32 API cases extracted from Win32Shim.dispatch's main switch. */
+/** FILETIME counts 100ns intervals since 1601-01-01; this is the match for the 1970-01-01 Unix epoch. */
+const FILETIME_UNIX_EPOCH = 116_444_736_000_000_000n;
+const FILETIME_TICKS_PER_MILLISECOND = 10_000n;
+
+/** GetDateFormatA/GetTimeFormatA flag bits the shim honors; the remaining DATE_/TIME_ flags only affect reading order. */
+const DATE_LONGDATE = 0x0000_0002;
+const DATE_YEARMONTH = 0x0000_0008;
+const TIME_NOMINUTESORSECONDS = 0x0000_0001;
+const TIME_NOSECONDS = 0x0000_0002;
+const TIME_NOTIMEMARKER = 0x0000_0004;
+const TIME_FORCE24HOURFORMAT = 0x0000_0008;
+const ERROR_INSUFFICIENT_BUFFER = 122;
+
+/** Invariant-culture names: the shim exposes the Gregorian calendar only, so a requested LCID cannot change these. */
+const MONTH_SHORT_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTH_LONG_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+const WEEKDAY_SHORT_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const WEEKDAY_LONG_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/** SYSTEMTIME's eight consecutive WORDs decoded into plain numbers. */
+interface SystemTimeFields {
+  year: number;
+  month: number;
+  weekday: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+  milliseconds: number;
+}
+
+function padNumber(value: number, width: number): string {
+  return String(value).padStart(width, '0');
+}
+
+/** CompareStringA/W fold ASCII letters under NORM_IGNORECASE; other units compare by code point. */
 export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base: TBase) {
   return class extends Base {
     private dllGetVersionStub = 0;
@@ -221,6 +270,24 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
           return { eax: 0 };
         case 'KERNEL32.DLL!SystemTimeToFileTime':
           return { eax: this.systemTimeToFileTime(a[0] ?? 0, a[1] ?? 0) ? 1 : 0 };
+        // Saving a game walks the whole FILETIME family: FileTimeToLocalFileTime and CompareFileTime
+        // are reached on different hosts, and the DOS conversions follow when the save list refreshes.
+        case 'KERNEL32.DLL!FileTimeToSystemTime':
+          return { eax: this.fileTimeToSystemTime(a[0] ?? 0, a[1] ?? 0) ? 1 : 0 };
+        case 'KERNEL32.DLL!FileTimeToLocalFileTime':
+          return { eax: this.fileTimeToLocalFileTime(a[0] ?? 0, a[1] ?? 0) ? 1 : 0 };
+        case 'KERNEL32.DLL!CompareFileTime':
+          return { eax: this.compareFileTime(a[0] ?? 0, a[1] ?? 0) };
+        case 'KERNEL32.DLL!FileTimeToDosDateTime':
+          return { eax: this.fileTimeToDosDateTime(a[0] ?? 0, a[1] ?? 0, a[2] ?? 0) ? 1 : 0 };
+        case 'KERNEL32.DLL!DosDateTimeToFileTime':
+          return { eax: this.dosDateTimeToFileTime(a[0] ?? 0, a[1] ?? 0, a[2] ?? 0) ? 1 : 0 };
+        case 'KERNEL32.DLL!GetFileTime':
+          return { eax: this.getFileTime(a[0] ?? 0, a[1] ?? 0, a[2] ?? 0, a[3] ?? 0) ? 1 : 0 };
+        case 'KERNEL32.DLL!SetFileTime':
+          return { eax: this.setFileTime(a[0] ?? 0, a[1] ?? 0, a[2] ?? 0, a[3] ?? 0) ? 1 : 0 };
+        case 'KERNEL32.DLL!GetFileInformationByHandle':
+          return { eax: this.getFileInformationByHandle(a[0] ?? 0, a[1] ?? 0) ? 1 : 0 };
         case 'KERNEL32.DLL!GetTimeZoneInformation': {
           const info = a[0] ?? 0;
           if (!info) {
@@ -236,6 +303,12 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
           this.lastError = 0;
           return { eax: 0 }; // TIME_ZONE_ID_UNKNOWN
         }
+        // The save-game screen labels its slots through the locale date/time APIs. a[0] is the LCID, which
+        // the shim ignores because it carries a single (invariant) calendar; a[1] holds the DATE_/TIME_ flags.
+        case 'KERNEL32.DLL!GetDateFormatA':
+          return { eax: this.getDateFormatA(a[1] ?? 0, a[2] ?? 0, a[3] ?? 0, a[4] ?? 0, a[5] ?? 0) };
+        case 'KERNEL32.DLL!GetTimeFormatA':
+          return { eax: this.getTimeFormatA(a[1] ?? 0, a[2] ?? 0, a[3] ?? 0, a[4] ?? 0, a[5] ?? 0) };
         case 'KERNEL32.DLL!CreateFileA':
           return { eax: this.openFile(a) };
         case 'KERNEL32.DLL!FindFirstFileA': {
@@ -1620,12 +1693,356 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
             date.getUTCSeconds(),
             date.getUTCMilliseconds(),
           ];
+      this.writeSystemTimeFields(ptr, values);
+    }
+    /** SYSTEMTIME is eight consecutive WORDs: year, month, weekday, day, hour, minute, second, milliseconds. */
+    protected writeSystemTimeFields(ptr: number, values: readonly number[]): void {
       const bytes = new Uint8Array(16);
       for (let i = 0; i < values.length; i++) {
         bytes[i * 2] = values[i]! & 0xff;
         bytes[i * 2 + 1] = values[i]! >>> 8;
       }
       this.memory.write_memory(bytes, ptr);
+    }
+    protected readSystemTimeFields(ptr: number): SystemTimeFields {
+      return {
+        year: this.readU16(ptr),
+        month: this.readU16(ptr + 2),
+        weekday: this.readU16(ptr + 4),
+        day: this.readU16(ptr + 6),
+        hour: this.readU16(ptr + 8),
+        minute: this.readU16(ptr + 10),
+        second: this.readU16(ptr + 12),
+        milliseconds: this.readU16(ptr + 14),
+      };
+    }
+    /** The date/time formatting APIs treat a NULL SYSTEMTIME as "now", resolved in the host's local timezone. */
+    protected localSystemTimeFields(): SystemTimeFields {
+      const date = new Date(this.clock.wallNow());
+      return {
+        year: date.getFullYear(),
+        month: date.getMonth() + 1,
+        weekday: date.getDay(),
+        day: date.getDate(),
+        hour: date.getHours(),
+        minute: date.getMinutes(),
+        second: date.getSeconds(),
+        milliseconds: date.getMilliseconds(),
+      };
+    }
+    /**
+     * Expand a Win32 date/time picture: quoted or backslash-escaped literals pass through verbatim, while a run of
+     * the same token letter selects a field width. GetDateFormatA and GetTimeFormatA differ only in the token set.
+     */
+    protected expandPicture(
+      picture: string,
+      isToken: (ch: string) => boolean,
+      field: (ch: string, run: number) => string,
+    ): string {
+      let out = '';
+      let i = 0;
+      while (i < picture.length) {
+        const ch = picture[i]!;
+        if (ch === "'") {
+          if (picture[i + 1] === "'") {
+            out += "'"; // '' escapes a single quote.
+            i += 2;
+            continue;
+          }
+          i++;
+          while (i < picture.length && picture[i] !== "'") out += picture[i++]!;
+          i++; // Skip the closing quote; an unterminated literal simply ends the picture.
+          continue;
+        }
+        if (ch === '\\' && i + 1 < picture.length) {
+          out += picture[i + 1]!;
+          i += 2;
+          continue;
+        }
+        if (isToken(ch)) {
+          let run = 1;
+          while (
+            i + run < picture.length &&
+            isToken(picture[i + run]!) &&
+            picture[i + run]!.toLowerCase() === ch.toLowerCase()
+          ) {
+            run++;
+          }
+          out += field(ch, run);
+          i += run;
+          continue;
+        }
+        out += ch;
+        i++;
+      }
+      return out;
+    }
+    /** Expand one date picture letter: d[dd|ddd|dddd], M[MM|MMM|MMMM], y[yy|yyyy] and g (era). */
+    protected dateField(ch: string, run: number, date: SystemTimeFields): string {
+      switch (ch.toLowerCase()) {
+        case 'd':
+          if (run >= 4) return WEEKDAY_LONG_NAMES[date.weekday] ?? '';
+          if (run === 3) return WEEKDAY_SHORT_NAMES[date.weekday] ?? '';
+          return padNumber(date.day, run === 2 ? 2 : 1);
+        case 'm':
+          if (run >= 4) return MONTH_LONG_NAMES[date.month - 1] ?? '';
+          if (run === 3) return MONTH_SHORT_NAMES[date.month - 1] ?? '';
+          return padNumber(date.month, run === 2 ? 2 : 1);
+        case 'y':
+          if (run >= 4) return padNumber(date.year, 4);
+          return run === 2 ? padNumber(date.year % 100, 2) : String(date.year % 100);
+        default:
+          return 'AD'; // 'g': the shim only carries the Gregorian era.
+      }
+    }
+    /** Expand one time picture letter: h/H[hh|HH], m[mm], s[ss] and t|tt for the AM/PM marker. */
+    protected timeField(ch: string, run: number, time: SystemTimeFields): string {
+      const hour = ch === 'H' ? time.hour : time.hour % 12 || 12;
+      switch (ch.toLowerCase()) {
+        case 'h':
+          return padNumber(hour, run >= 2 ? 2 : 1);
+        case 'm':
+          return padNumber(time.minute, run >= 2 ? 2 : 1);
+        case 's':
+          return padNumber(time.second, run >= 2 ? 2 : 1);
+        default:
+          return time.hour < 12 ? (run >= 2 ? 'AM' : 'A') : run >= 2 ? 'PM' : 'P';
+      }
+    }
+    /** GetDateFormatA mirrors GetTimeFormatA's buffer protocol: return the required size including the NUL. */
+    protected writeLocaleString(buffer: number, cch: number, value: string): number {
+      const required = value.length + 1;
+      if (cch === 0) {
+        this.lastError = 0;
+        return required;
+      }
+      if (!buffer || cch < required) {
+        this.lastError = ERROR_INSUFFICIENT_BUFFER;
+        return 0;
+      }
+      this.writeAscii(buffer, value);
+      this.lastError = 0;
+      return required;
+    }
+    /**
+     * GetDateFormatA honors the picture string RA2 supplies for its save-slot labels; a NULL format falls back to
+     * the invariant short/long patterns.
+     */
+    protected getDateFormatA(flags: number, datePtr: number, formatPtr: number, buffer: number, cch: number): number {
+      const date = datePtr ? this.readSystemTimeFields(datePtr) : this.localSystemTimeFields();
+      const picture = formatPtr
+        ? this.readCString(formatPtr)
+        : flags & DATE_LONGDATE
+          ? 'dddd, MMMM d, yyyy'
+          : flags & DATE_YEARMONTH
+            ? 'MMMM yyyy'
+            : 'M/d/yyyy'; // DATE_SHORTDATE and dwFlags == 0 share the invariant short pattern.
+      const value = this.expandPicture(
+        picture,
+        (ch) => 'dmyg'.includes(ch.toLowerCase()),
+        (ch, run) => this.dateField(ch, run, date),
+      );
+      return this.writeLocaleString(buffer, cch, value);
+    }
+    /** GetTimeFormatA mirrors GetDateFormatA with the TIME_ flags; the save screen formats date and time together. */
+    protected getTimeFormatA(flags: number, timePtr: number, formatPtr: number, buffer: number, cch: number): number {
+      const time = timePtr ? this.readSystemTimeFields(timePtr) : this.localSystemTimeFields();
+      let picture: string;
+      if (formatPtr) {
+        picture = this.readCString(formatPtr);
+      } else {
+        const twentyFourHour = (flags & TIME_FORCE24HOURFORMAT) !== 0;
+        picture = twentyFourHour ? 'HH' : 'h';
+        if (!(flags & TIME_NOMINUTESORSECONDS)) picture += ':mm';
+        if (!(flags & (TIME_NOSECONDS | TIME_NOMINUTESORSECONDS))) picture += ':ss';
+        if (!twentyFourHour && !(flags & TIME_NOTIMEMARKER)) picture += ' tt';
+      }
+      const value = this.expandPicture(
+        picture,
+        (ch) => 'hHmst'.includes(ch),
+        (ch, run) => this.timeField(ch, run, time),
+      );
+      return this.writeLocaleString(buffer, cch, value);
+    }
+    /** Read the two 32-bit halves of a guest FILETIME as one unsigned 64-bit value. */
+    protected readFileTimeValue(ptr: number): bigint {
+      return BigInt(this.readU32(ptr)) | (BigInt(this.readU32(ptr + 4)) << 32n);
+    }
+    protected writeFileTimeValue(ptr: number, value: bigint): void {
+      this.writeU32(ptr, Number(value & 0xffff_ffffn));
+      this.writeU32(ptr + 4, Number((value >> 32n) & 0xffff_ffffn));
+    }
+    /** FILETIME -> host Date; null when the value falls outside JavaScript's representable range. */
+    protected fileTimeToDate(value: bigint): Date | null {
+      const unixMilliseconds =
+        Number(value / FILETIME_TICKS_PER_MILLISECOND) - Number(FILETIME_UNIX_EPOCH / FILETIME_TICKS_PER_MILLISECOND);
+      if (!Number.isFinite(unixMilliseconds)) return null;
+      const date = new Date(unixMilliseconds);
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+    /** Inverse of systemTimeToFileTime, writing UTC fields: RA2 save listings compare these after conversion. */
+    protected fileTimeToSystemTime(fileTime: number, systemTime: number): boolean {
+      if (!fileTime || !systemTime) {
+        this.lastError = 87; // ERROR_INVALID_PARAMETER
+        return false;
+      }
+      const date = this.fileTimeToDate(this.readFileTimeValue(fileTime));
+      if (!date) {
+        this.lastError = 87;
+        return false;
+      }
+      this.writeSystemTimeFields(systemTime, [
+        date.getUTCFullYear(),
+        date.getUTCMonth() + 1,
+        date.getUTCDay(),
+        date.getUTCDate(),
+        date.getUTCHours(),
+        date.getUTCMinutes(),
+        date.getUTCSeconds(),
+        date.getUTCMilliseconds(),
+      ]);
+      this.lastError = 0;
+      return true;
+    }
+    /** FileTimeToLocalFileTime subtracts the host bias (UTC = local + Bias, matching getTimezoneOffset) at that instant. */
+    protected fileTimeToLocalFileTime(fileTime: number, localFileTime: number): boolean {
+      if (!fileTime || !localFileTime) {
+        this.lastError = 87;
+        return false;
+      }
+      const value = this.readFileTimeValue(fileTime);
+      const date = this.fileTimeToDate(value);
+      if (!date) {
+        this.lastError = 87;
+        return false;
+      }
+      // getTimezoneOffset is in minutes, while FILETIME_TICKS_PER_MILLISECOND is per millisecond.
+      const bias = BigInt(date.getTimezoneOffset()) * 60_000n * FILETIME_TICKS_PER_MILLISECOND;
+      this.writeFileTimeValue(localFileTime, value - bias);
+      this.lastError = 0;
+      return true;
+    }
+    /** CompareFileTime returns -1/0/1; unsigned FILETIME ordering matches chronological ordering. */
+    protected compareFileTime(left: number, right: number): number {
+      if (!left || !right) {
+        this.lastError = 87;
+        return 0;
+      }
+      const a = this.readFileTimeValue(left);
+      const b = this.readFileTimeValue(right);
+      return a < b ? 0xffff_ffff : a > b ? 1 : 0;
+    }
+    /** Pack a FILETIME (UTC) into packed FAT date/time WORDs; no timezone conversion, as RtlTimeToTimeFields does. */
+    protected fileTimeToDosDateTime(fileTime: number, fatDate: number, fatTime: number): boolean {
+      if (!fileTime) {
+        this.lastError = 87;
+        return false;
+      }
+      const date = this.fileTimeToDate(this.readFileTimeValue(fileTime));
+      const year = date?.getUTCFullYear() ?? 0;
+      if (!date || year < 1980 || year > 2107) {
+        this.lastError = 87;
+        return false;
+      }
+      if (fatDate) {
+        const packed = ((year - 1980) << 9) | ((date.getUTCMonth() + 1) << 5) | date.getUTCDate();
+        this.memory.write_memory([packed & 0xff, (packed >>> 8) & 0xff], fatDate);
+      }
+      if (fatTime) {
+        const packed = (date.getUTCHours() << 11) | (date.getUTCMinutes() << 5) | (date.getUTCSeconds() >> 1);
+        this.memory.write_memory([packed & 0xff, (packed >>> 8) & 0xff], fatTime);
+      }
+      this.lastError = 0;
+      return true;
+    }
+    /** Inverse of fileTimeToDosDateTime: FAT date/time fields are decoded as UTC, then range-checked. */
+    protected dosDateTimeToFileTime(fatDate: number, fatTime: number, fileTime: number): boolean {
+      if (!fileTime) {
+        this.lastError = 87;
+        return false;
+      }
+      const year = 1980 + ((fatDate >> 9) & 0x7f);
+      const month = (fatDate >> 5) & 0x0f;
+      const day = fatDate & 0x1f;
+      const hour = (fatTime >> 11) & 0x1f;
+      const minute = (fatTime >> 5) & 0x3f;
+      const second = (fatTime & 0x1f) * 2;
+      if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) {
+        this.lastError = 87;
+        return false;
+      }
+      const unixMilliseconds = Date.UTC(year, month - 1, day, hour, minute, second);
+      const normalized = new Date(unixMilliseconds);
+      if (
+        normalized.getUTCFullYear() !== year ||
+        normalized.getUTCMonth() !== month - 1 ||
+        normalized.getUTCDate() !== day
+      ) {
+        this.lastError = 87;
+        return false;
+      }
+      this.writeFileTimeValue(
+        fileTime,
+        BigInt(unixMilliseconds) * FILETIME_TICKS_PER_MILLISECOND + FILETIME_UNIX_EPOCH,
+      );
+      this.lastError = 0;
+      return true;
+    }
+    /** GetFileTime reports the per-path FILETIMEs shared with SetFileTime and FindFirstFileA. */
+    protected getFileTime(handle: number, creation: number, access: number, written: number): boolean {
+      const file = this.fileHandles.get(handle);
+      if (!file) {
+        this.lastError = 6; // ERROR_INVALID_HANDLE
+        return false;
+      }
+      const times = this.fileTimes.get(file.path);
+      if (!times) {
+        this.lastError = 2; // ERROR_FILE_NOT_FOUND
+        return false;
+      }
+      if (creation) this.writeFileTimeValue(creation, times.created);
+      if (access) this.writeFileTimeValue(access, times.accessed);
+      if (written) this.writeFileTimeValue(written, times.written);
+      this.lastError = 0;
+      return true;
+    }
+    /** SetFileTime updates only the non-NULL fields, as Win32 does. */
+    protected setFileTime(handle: number, creation: number, access: number, written: number): boolean {
+      const file = this.fileHandles.get(handle);
+      if (!file) {
+        this.lastError = 6;
+        return false;
+      }
+      const now = this.guestNowFileTime();
+      const times = this.fileTimes.get(file.path) ?? { created: now, accessed: now, written: now };
+      if (creation) times.created = this.readFileTimeValue(creation);
+      if (access) times.accessed = this.readFileTimeValue(access);
+      if (written) times.written = this.readFileTimeValue(written);
+      this.fileTimes.set(file.path, times);
+      this.lastError = 0;
+      return true;
+    }
+    /** BY_HANDLE_FILE_INFORMATION (52 bytes); the file index is the handle so callers can compare identities. */
+    protected getFileInformationByHandle(handle: number, information: number): boolean {
+      const file = this.fileHandles.get(handle);
+      if (!file || !information) {
+        this.lastError = file ? 87 : 6;
+        return false;
+      }
+      const times = this.fileTimes.get(file.path);
+      this.zero(information, 52);
+      this.writeU32(information, 0x80); // FILE_ATTRIBUTE_NORMAL
+      this.writeFileTimeValue(information + 4, times?.created ?? 0n);
+      this.writeFileTimeValue(information + 12, times?.accessed ?? 0n);
+      this.writeFileTimeValue(information + 20, times?.written ?? 0n);
+      this.writeU32(information + 28, (this.options.volumeSerial ?? 0x2001_0701) >>> 0);
+      this.writeU32(information + 32, Math.floor(file.size / 0x1_0000_0000));
+      this.writeU32(information + 36, file.size >>> 0);
+      this.writeU32(information + 40, 1); // nNumberOfLinks
+      this.writeU32(information + 44, 0); // nFileIndexHigh
+      this.writeU32(information + 48, handle >>> 0); // nFileIndexLow
+      this.lastError = 0;
+      return true;
     }
     protected systemTimeToFileTime(systemTime: number, fileTime: number): boolean {
       if (!systemTime || !fileTime) {

@@ -678,16 +678,21 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
         // Campaign 的 owner-draw Static 与真实 Win32 一样保持 HTTRANSPARENT。
         // 父对话框在 WM_NCHITTEST 分支用 ChildWindowFromPointEx 判断 1770..1772，
         // 并启动徽标动画和 hover 音效；直接改投 Static 会绕开该分支。
+        // A #32770 picked by z-order can be a modal dialog owned directly by the primary window rather
+        // than a page nested inside the active shell page. Unifying that one to the active page would
+        // hand the click to the page underneath and leave the modal without input, so only dialogs inside
+        // the active page's tree keep the coordinate unification; every other #32770 keeps its native hit.
+        const retargetChrome =
+          this.gameProfile.shell?.retargetDialogChrome === true &&
+          this.windowClassNames.get(nativeTarget)?.toLowerCase() === '#32770' &&
+          (this.activeShellPage === 0 || this.isWindowInTree(nativeTarget, this.activeShellPage));
         const target =
           latchedTarget ||
           this.scrollbarDrag?.hwnd ||
           dropScrollbar ||
           dropWindow ||
           this.captureWindow ||
-          (this.gameProfile.shell?.retargetDialogChrome &&
-          this.windowClassNames.get(nativeTarget)?.toLowerCase() === '#32770'
-            ? this.hitTestShellPage(screenX, screenY, this.primaryWindow)
-            : nativeTarget);
+          (retargetChrome ? this.hitTestShellPage(screenX, screenY, this.primaryWindow) : nativeTarget);
         if (target) {
           if (
             message === 0x0201 &&
@@ -903,6 +908,11 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
         let depth = 0;
         let descendant = false;
         let comboDropAncestor = isComboDropWindow ? hwnd : 0;
+        // Topmost window on this chain: the direct child of root for an ordinary descendant, or the
+        // highest existing window when the chain never reaches root (WS_POPUP combo drop windows).
+        // Its z-order separates overlapping dialogs; depth alone cannot, because a control of a lower
+        // dialog is deeper than the focused dialog covering it.
+        let topAncestor = hwnd;
         const seen = new Set<number>();
         while (parent && !seen.has(parent)) {
           seen.add(parent);
@@ -918,6 +928,7 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
           ) {
             comboDropAncestor = parent;
           }
+          topAncestor = parent;
           parent = this.windowParents.get(parent) ?? 0;
         }
         // WS_POPUP 的 ComboDropWin 不一定挂在 primary 的 child tree 上；它的
@@ -960,11 +971,21 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
           y >= rect.y + rect.height
         )
           continue;
-        // 真实弹层优先于同级 ComboBox 的虚拟展开区域；弹层内部的滚动条/列表
-        // 仍由更深层级覆盖弹层本身。普通子窗口保留原有深度优先级。
-        const rank = comboDropAncestor
-          ? (0x1_0000 + (depth << 2)) | (className === 'combodropwin' ? 3 : 0)
-          : (depth << 2) | (combo?.dropped ? 2 : 0);
+        // Win32 resolves the topmost top-level window under the point first and only then descends, so
+        // z-order outranks depth. Depth alone let a control of a lower dialog win over the focused dialog
+        // covering it, which is what routed post-save clicks into a ListBox of the page below.
+        // A real ComboDropWin keeps its own tier above sibling ComboBox virtual expanded rects, and those
+        // expanded rects in turn keep a tier above the ordinary z-order step: the popup area a ComboBox
+        // paints over its neighbors is topmost in real Win32, so z-order must not hand the click to a
+        // sibling row that merely sits higher in the z list.
+        // The tier table stays inside Number's exact-integer range; depth is capped well below the z step.
+        const tier = comboDropAncestor ? 2 : combo?.dropped ? 1 : 0;
+        const zIndex = Math.max(0, this.windowZOrder.indexOf(topAncestor));
+        const rank =
+          tier * 1e12 +
+          zIndex * 1e6 +
+          Math.min(depth, 999) * 1e3 +
+          (comboDropAncestor && className === 'combodropwin' ? 3 : 0);
         if (rank >= bestRank) {
           best = hwnd;
           bestRank = rank;

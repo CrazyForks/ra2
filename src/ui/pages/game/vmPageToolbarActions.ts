@@ -16,6 +16,7 @@ import type { VmFrameRenderer } from './vmFrameRenderer';
 import type { RuntimeToolbar, RuntimeToolbarCallbacks } from './runtimeToolbar';
 import { parseGameResolution } from '../../../games/resolution';
 import { storeResolution } from './vmPageResolution';
+import { collectPerformanceReport } from './performanceDiagnostics';
 import { upscaleStatus } from './state/uiState';
 import { sendCheatKey, sendCheatSequence } from './input';
 import { editCustomMapPackages } from './customMapDialog';
@@ -71,6 +72,21 @@ export function createVmPageToolbarActions(deps: VmPageToolbarActionDeps): Runti
     onSchedulePerformanceRender,
   } = deps;
   return {
+    async onCollectPerformance(signal, progress) {
+      const vm = getVm();
+      if (!vm || getExitHandled() || getStatus().phase !== 'running') throw new Error(t('游戏尚未运行'));
+      return collectPerformanceReport({
+        vm,
+        signal,
+        progress,
+        canvas,
+        presenter,
+        renderer: frameRenderer,
+        gameId: getSelectedGameId(),
+        sourceKind: getGameSource()?.files.constructor.name ?? null,
+        settings: () => getToolbar().getPerformanceSettings(),
+      });
+    },
     onLiveModel: import.meta.env.DEV ? (file, modelId) => effects.set(file, modelId) : undefined,
     async onQuickStart() {
       const vm = getVm();

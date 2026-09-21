@@ -5,12 +5,12 @@ import { resolveGameDir } from '../helpers/gameDir';
 import { runVmSmoke, type VmClick } from '../helpers/runVmSmoke';
 
 // This regression explicitly uses Gonghui assets and executable; an ordinary RA2 directory cannot count as successful MOD verification.
-const enabled = process.env.VM_GONGHUI === '1' && existsSync(join(resolveGameDir('ra2'), 'expand01.mix'));
-// When Gonghui acceptance is explicitly requested, a missing MOD must not silently skip the entire suite.
-if (process.env.VM_REQUIRE_GAME_RESOURCES === '1' && process.env.VM_GONGHUI === '1' && !enabled) {
+// Gonghui is an opt-in third-party MOD, so its suite runs only when VM_GONGHUI=1. Once requested, missing assets fail instead of skipping.
+const requested = process.env.VM_GONGHUI === '1';
+if (requested && !existsSync(join(resolveGameDir('ra2'), 'expand01.mix'))) {
   throw new Error('共辉验收缺少 expand01.mix；请配置 VM_GAME_DIR');
 }
-describe.skipIf(!enabled)('共和国之辉快速游戏与模型资源', () => {
+describe.runIf(requested)('共和国之辉快速游戏与模型资源', () => {
   for (const [name, type, selection] of [
     [
       '中国',

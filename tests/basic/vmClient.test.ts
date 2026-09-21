@@ -194,6 +194,28 @@ describe('WorkerVmClient RPC lifecycle', () => {
     await expect(client.getGamePerformance()).rejects.toThrow('worker 消息反序列化失败');
   });
 
+  it('reports actual Worker mode and routes diagnostic captures through the existing request lifecycle', async () => {
+    const { worker, client } = setup();
+    expect(client.runtimeInfo).toMatchObject({ mode: 'worker', reason: 'default', fallbackReason: null });
+    expect(client.runtimeInfo.workerProbeMs).toBeGreaterThanOrEqual(0);
+    const pending = client.getDiagnostics('start');
+    const value = {
+      sampledAtMs: 55,
+      phase: 'running' as const,
+      hypercalls: 80,
+      clockRate: 1,
+      execution: null,
+      game: null,
+    };
+    worker.emit({ type: 'diagnostics-reply', requestId: requestId(worker, 'diagnostics'), value });
+    await expect(pending).resolves.toEqual(value);
+    const sample = client.getDiagnostics('sample');
+    const rejected = expect(sample).rejects.toThrow('worker 消息反序列化失败');
+    worker.emitMessageError();
+    await rejected;
+    await client.destroy();
+  });
+
   it('rejects and removes a request-scoped worker error without killing the worker', async () => {
     const { worker, client } = setup();
     const pending = client.getPointerState();

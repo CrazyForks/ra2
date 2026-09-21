@@ -12,6 +12,40 @@ GameRuntimeHooks.createFrameReader exposes read-only native simulation counters.
 
 Existing DirectDraw boundary counts, frame-upload FPS, and browser rAF retain their own meanings. They do not replace native simulation FPS. This probe does not record a completion timestamp for every guest simulation frame.
 
+## Browser comparison reports
+
+In a running match, expand the toolbar and choose **Performance diagnostics… → Record for 20 seconds**.
+The dialog closes while recording so normal play can continue. Keep the page in the foreground; when the report opens,
+choose **Copy report**. If clipboard access fails, select and copy the read-only report text. **Stop recording** preserves
+a cancelled report; leaving the session cancels sampling and releases the display observer. Nothing is uploaded automatically.
+
+Compare Safari and Chrome on the same phone with the same game, map, units, game speed, clock multiplier, resolution,
+and graphics settings. Each browser retains its own settings and resource caches. Record whether this is the first
+import, a reload, or a warmed match. Browser viewport emulation on a desktop is not an iOS performance measurement.
+
+Reports contain actual Worker/main-thread mode, Worker probe duration and fallback reason, browser identity,
+rendering backend, logical frame/canvas/viewport dimensions, DPR, clock and graphics settings, native simulation samples,
+hypercalls, submitted/presented frames, rAF intervals, page visibility, and main-thread long tasks when supported.
+No game files, saves, player names, or page URL are collected. A missing native reader or unavailable browser metric
+remains null; an unsupported scheduler has supported=false. Errors and partial reports remain explicit.
+
+During recording, the browser platform temporarily wraps the existing v86 yield/callback and CPU loop methods.
+It measures zero-delay scheduling waits, positive-delay overshoot, and CPU slice wall time without changing ticks,
+requested waits, guest clocks, or game settings. Superseded callbacks are counted separately. Original methods are
+restored on stop/destruction, with a 30-second watchdog for a lost client. Outside captures there are no probe wrappers,
+rAF loops, or per-second diagnostic RPCs. Captures add measurement overhead; CPU slice time is not whole-Worker or
+whole-device CPU usage, and JIT enabled/cache size alone does not establish compilation throughput.
+
+Timing aggregates are cumulative within a capture. VM samples use the execution thread's monotonic clock;
+requestMs includes RPC transport and probe work, so it is not pure message latency. Native FPS is weighted by its
+actual sample intervals, independently from display rates. presentedFps includes cursor-triggered redraws.
+Visibility changes, native resets, incomplete captures, and changed settings require care when comparing reports.
+
+Asset-free instrumentation/UI checks: `pnpm run test:browser:performance` with `RA2_BROWSER_ORIGIN` pointing at the
+development server. A small synthetic BIOS checks the real v86 scheduler and method restoration in main-thread and
+Worker modes; synthetic UI reports check cancellation and copying. Real-game startup and diagnostics use
+`pnpm run test:browser:battle-start`. These checks do not establish iOS performance; the phone reports provide that evidence.
+
 ## Version evidence
 
 RA2 1.006 uses the executable hash in src/games/ra2/startupPage.ts; YR 1.001 uses src/games/yr/startupPage.ts. src/games/ra2/performance.ts verifies read/increment/write instructions from 0x540676 through 0x540689 and reads counter 0xa40d2c. The independent YR 1.001 implementation in src/games/yr/performance.ts verifies 0x55de73 through 0x55de86 and reads 0xa8ed84. Each checks its SHA-256 before instruction signatures. See [Network reliability](RA2_NETWORK_RELIABILITY.md) for LAN timing version binding, signatures, and limitations.

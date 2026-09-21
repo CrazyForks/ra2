@@ -49,6 +49,8 @@ import type { GameFileProvider, ResourcePolicy } from '../resources/contracts';
 import type { GameSource } from '../games/source';
 import type { VmPointerState } from './vmShell';
 import type { GameVmCallbacks, VmStatus } from '../app/session/runtimeEvents';
+import type { VmExecutionProbe } from '../vm86/diagnostics';
+import type { VmDiagnosticAction, VmDiagnostics } from './vmDiagnostics';
 
 const DEFAULT_GUEST_MEMORY_SIZE = 128 * 1024 * 1024;
 /** Recording sample interval: v86 has no per-write hook, so modification counts approximate sampling windows, incrementing once per window. */
@@ -79,6 +81,7 @@ export interface VmAudioSink extends Win32AudioSink {
 
 /** Platform injection boundary: supply main-thread or Worker host facilities here; VmCore contains no DOM/window references. */
 export interface VmCorePlatform {
+  executionProbe?: VmExecutionProbe;
   /** Inject game-resource policies at composition time; the core does not infer policies from extensions, game names, or URLs. */
   resourcePolicy: ResourcePolicy<GameSource>;
   startupPage?: string;
@@ -372,6 +375,29 @@ export class VmCore {
     );
   }
 
+  async getDiagnostics(action: VmDiagnosticAction): Promise<VmDiagnostics> {
+    if (action === 'start') {
+      this.gamePerformance.reset();
+      this.platform.executionProbe?.start();
+    } else if (action === 'stop') {
+      this.platform.executionProbe?.stop();
+    }
+    try {
+      const game = await this.getGamePerformance();
+      return {
+        sampledAtMs: performance.now(),
+        phase: this.currentPhase,
+        hypercalls: this.calls,
+        clockRate: this.gameClockRate,
+        execution: this.platform.executionProbe?.sample() ?? null,
+        game,
+      };
+    } catch (error) {
+      if (action === 'start') this.platform.executionProbe?.stop();
+      throw error;
+    }
+  }
+
   /** Write the speed state explicitly supplied by the current game; return null if unavailable. */
   setGameSpeedFlag(value: number): number | null {
     const hooks = this.source.game.runtimeHooks;
@@ -458,6 +484,7 @@ export class VmCore {
   }
 
   async destroy(): Promise<void> {
+    this.platform.executionProbe?.stop();
     this.rangePrefetch.clear();
     this.clearPoll();
     this.hostYieldPending = false;
@@ -583,6 +610,12 @@ export class VmCore {
         const sync = this.syncGuestFile(call.args[0]);
         if (sync) await sync;
       }
+      // Structured storage opens a UTF-16 path directly, without a preceding CreateFileA.
+      // Wait for browser-backed saves on the first open, just like ordinary file APIs.
+      if (imported.key === 'OLE32.DLL!StgOpenStorage' && call.args[0]) {
+        const sync = this.syncGuestFile(call.args[0], true);
+        if (sync) await sync;
+      }
 
       // Keep only MOVIES*.MIX index prefixes resident. When the original game seeks to a BIK segment,
       // fetch actual bytes in 2MiB pages at the synchronous ReadFile boundary instead of downloading/copying the whole 300+MiB movie package.
@@ -699,8 +732,8 @@ export class VmCore {
    * Synchronize current provider content into the Win32 file layer before the guest opens a file.
    * Reread on every open: real Win9x sees externally replaced disk content on the next open, such as a save modified in Windows. The old read-once cache kept returning stale snapshots for Windows saves replaced within a page session, corrupting loaded state.
    */
-  private syncGuestFile(pathPtr: number): Promise<void> | null {
-    const guestPath = this.readCString(pathPtr);
+  private syncGuestFile(pathPtr: number, wide = false): Promise<void> | null {
+    const guestPath = wide ? this.readWideString(pathPtr) : this.readCString(pathPtr);
     const normalized = normalizeGuestPath(guestPath);
     if (!normalized) return null;
     const sessionStatic = this.platform.resourcePolicy.isSessionStatic(normalized);
@@ -764,6 +797,13 @@ export class VmCore {
     const nul = bytes.indexOf(0);
     const end = nul < 0 ? bytes.length : nul;
     return decodeGuestNarrow(bytes.subarray(0, end));
+  }
+
+  private readWideString(address: number, max = 1024): string {
+    const bytes = this.emulator!.read_memory(address, max * 2);
+    let end = 0;
+    while (end + 1 < bytes.length && (bytes[end] !== 0 || bytes[end + 1] !== 0)) end += 2;
+    return new TextDecoder('utf-16le').decode(bytes.subarray(0, end));
   }
 
   private clearPoll(): void {

@@ -33,11 +33,8 @@ export const RA2_SHIM_PROFILE: GameShimProfile = Object.freeze({
   // may repeatedly use native Bink. Deferred unlocking in BinkClose prevents thread switches until the preceding instance has fully exited,
   // so reopening it on return to the main menu cannot corrupt guest context.
   skipIncompleteBinkPlayback: true,
-  // RA2 1.006 serializes hundreds of guest IPersistStream objects during campaign transitions. After returning from
-  // guest Save, v86 recursively triggers #NP in call_interrupt_vector for a pending PIT,
-  // eventually producing unreachable/Maximum call stack. Keep structured-storage interfaces but disable this
-  // unsafe guest callback chain, letting the original game enter the mission from its in-memory object table.
-  skipGuestOleSaveToStream: true,
+  // Persist native objects through bounded, scheduler-aware COM callback slots.
+  skipGuestOleSaveToStream: false,
   guestDllPatches: Object.freeze({
     'binkw32.dll': Object.freeze([
       // Bink 1.0p sometimes has an uninitialized first-frame time base, making the instruction at 0x10009d30

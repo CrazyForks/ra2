@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { expect, it } from 'vitest';
 
-const read = (file: string) => readFileSync(file, 'utf8');
+const read = (file: string) => readFileSync(file, 'utf8').replaceAll('\r\n', '\n');
 const workflow = read('.github/workflows/quality-check.yml');
 const basic = workflow.split('  basic:\n')[1]!.split('  ra2:\n')[0]!;
 const ra2 = workflow.split('  ra2:\n')[1]!.split('  yr:\n')[0]!;
@@ -65,14 +65,17 @@ it('Basic 显式选择无素材目录，有资源入口仍执行原始 EXE 契�
   expect(read('tests/basic/ra2ShortGame.test.ts')).not.toMatch(/fetch\(|readFile|\.tmp-third-party/);
   const script = read('scripts/ci/run.mts');
   expect(script).toContain("existsSync('game') || existsSync('.tmp-third-party')");
-  expect(script).toContain("VM_REQUIRE_GAME_RESOURCES: '1'");
+  expect(script).toContain("VM_GAME_DIR: join(roots.game, 'ra2')");
   expect(script).toContain('tests/real-game/ra2/shortGame.test.ts');
+  expect(script).toContain("await tasks.run('save-load', 6, 'pnpm', [");
+  expect(script).toContain('tests/real-game/${gameId}/saveLoad.test.ts');
+  for (const gameId of ['ra2', 'yr']) expect(existsSync(`tests/real-game/${gameId}/saveLoad.test.ts`)).toBe(true);
   // Do not inherit local VM_* debug switches; identify missing secret variables instead of falling into a generic download-failure branch.
   expect(script).toMatch(/key\.startsWith\('VM_'\)/);
   expect(script).toContain('缺少 ${prefix}_URL');
   expect(read('scripts/ci/processes.ts')).toContain('--strictPort');
-  // Explicit real-game entries are strict by default; skipping is allowed only in the full pnpm test run.
+  // Missing game resources fail every entry, so real-game scripts must not carry a skip switch.
   for (const name of ['test:e2e', 'test:vm', 'test:vm:ra2', 'test:vm:yr']) {
-    expect(pkg.scripts[name], name).toContain('VM_REQUIRE_GAME_RESOURCES=1');
+    expect(pkg.scripts[name], name).not.toContain('VM_REQUIRE_GAME_RESOURCES');
   }
 });

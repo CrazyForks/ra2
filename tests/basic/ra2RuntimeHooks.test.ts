@@ -31,6 +31,11 @@ function readF64(memory: FakeGuestMemory, address: number): number {
 }
 
 describe('RA2 运行态护栏', () => {
+  it('identifies save reference restoration failures without misdiagnosing missing installation assets', () => {
+    expect(RA2_RUNTIME_HOOKS.crashHint!(0, 0x0069_fcbd)).toContain('存档对象引用恢复失败');
+    expect(RA2_RUNTIME_HOOKS.crashHint!(13, 0x0069_fcbd)).toBe('');
+    expect(RA2_RUNTIME_HOOKS.crashHint!(0, 0x0069_fcbe)).toBe('');
+  });
   it('RA2 启动缩短测速时长及轮数，保留函数其余字节且可重复应用', () => {
     const memory = createGuestMemory();
     writeCpuCalibration(memory);

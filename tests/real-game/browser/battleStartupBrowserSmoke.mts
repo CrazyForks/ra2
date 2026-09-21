@@ -113,6 +113,33 @@ globalThis.__battleStartSnapshot = () => {
         );
         assert.ok(report?.valid && report.logicFps > 0, '原生逻辑计数必须真实推进');
         console.log('[game-perf]', game, mode, JSON.stringify(report));
+        // Exercise the same opt-in capture the phone user opens, including Worker RPC and native counters.
+        await page.locator('#vm-performance-diagnostics').click();
+        const diagnosticDialog = page.getByRole('dialog', { name: '性能诊断', exact: true });
+        await diagnosticDialog.getByRole('button', { name: '开始 20 秒采样', exact: true }).click();
+        await expect(diagnosticDialog).toBeHidden();
+        await expect(diagnosticDialog).toBeVisible({ timeout: 45_000 });
+        const diagnostic = JSON.parse(
+          await diagnosticDialog.getByRole('textbox', { name: '性能诊断报告' }).inputValue(),
+        );
+        writeFileSync(
+          join(screenshotDirectory, `${game}-diagnostics-${mode}.json`),
+          JSON.stringify(diagnostic, null, 2),
+        );
+        assert.equal(diagnostic.status, 'complete');
+        assert.equal(diagnostic.runtime.mode, mode === 'worker' ? 'worker' : 'main-thread');
+        assert.ok(diagnostic.summary.nativeLogicFps > 0, '诊断必须读取实际推进的原生计数');
+        const execution = diagnostic.samples.at(-1).vm.execution;
+        assert.equal(execution.supported, true);
+        assert.equal(execution.active, false, '采样结束后必须恢复原调度方法');
+        assert.equal(execution.jitDisabled, false);
+        assert.ok(execution.cpuSlices.count > 0 && execution.immediateWaits.count > 0, '实际 CPU 与调度必须被观测');
+        assert.deepEqual(diagnostic.errors, []);
+        await diagnosticDialog.getByRole('button', { name: '关闭', exact: true }).click();
+        const afterCapture = await snapshot();
+        assert.ok(afterCapture?.human === 1 && afterCapture.dead === 0 && afterCapture.units > 0);
+        assert.deepEqual(errors, []);
+        console.log('[diagnostics]', game, mode, diagnostic.runtime, diagnostic.summary);
         console.log(game, mode, '无客体输入直达战场通过');
       } finally {
         // A crashed renderer must not let a screenshot error replace the real failure; capture page state and

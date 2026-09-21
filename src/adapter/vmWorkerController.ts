@@ -1,6 +1,8 @@
 import type { GamePerformanceSample } from '../games/performance';
 import { PortRelaySocket } from 'relay-package/client';
 import { createBrowserEmulator } from '../platform/browser/emulator';
+import { BrowserEmulatorProbe } from '../platform/browser/emulatorProbe';
+import type { VmDiagnosticAction, VmDiagnostics } from './vmDiagnostics';
 import { DirectoryGameFileProvider } from '../platform/browser/files/directory';
 import { gameVmConfiguration } from '../games/vmConfiguration';
 import { HttpGameFileProvider } from '../platform/browser/files/http';
@@ -24,6 +26,7 @@ import { SerialTaskQueue } from '../utils/serialTaskQueue';
 import { FrameBufferPool } from './frameBufferPool';
 
 export interface VmWorkerCore {
+  getDiagnostics(action: VmDiagnosticAction): Promise<VmDiagnostics>;
   start(): Promise<void>;
   stop(): Promise<void>;
   flushFiles(): Promise<void>;
@@ -142,6 +145,8 @@ function errorMessage(error: unknown): string {
 
 function requestIdOf(message: MainToWorkerMessage): number | undefined {
   switch (message.type) {
+    case 'diagnostics':
+    case 'game-performance':
     case 'init':
     case 'state':
     case 'guest-speed-flag':
@@ -245,6 +250,14 @@ export class VmWorkerController {
             type: 'game-performance-reply',
             requestId: message.requestId,
             value: (await this.core?.getGamePerformance()) ?? null,
+          });
+          break;
+        case 'diagnostics':
+          if (!this.core) throw new Error('VM 尚未 init');
+          this.post({
+            type: 'diagnostics-reply',
+            requestId: message.requestId,
+            value: await this.core.getDiagnostics(message.action),
           });
           break;
         case 'state':
@@ -405,8 +418,10 @@ export class VmWorkerController {
       },
       onShellPage: (title) => this.post({ type: 'shell-page', title }),
     };
+    const probe = new BrowserEmulatorProbe();
     const platform: VmCorePlatform = {
-      createEmulator: createBrowserEmulator,
+      createEmulator: (options) => createBrowserEmulator(options, probe),
+      executionProbe: probe,
       ...gameVmConfiguration(
         source.game,
         callbacks.onNetworkStatus,

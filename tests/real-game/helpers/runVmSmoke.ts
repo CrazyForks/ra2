@@ -43,7 +43,7 @@ import { Win32Shim } from '../../../src/games/win32Shim';
 import { guestFileSearch } from '../../../src/vm86/shim/fileSearch';
 import { RGB565_TO_RGBA32 } from '../../../src/vm86/pixels';
 import { SUPPORTED_GAMES, type SupportedGameId } from '../../../src/games/catalog';
-import { REPO_ROOT, gameResourcesAvailable, resolveGameDir } from './gameDir';
+import { REPO_ROOT, requireGameResources, resolveGameDir } from './gameDir';
 
 export type VmClick = readonly [number, number];
 
@@ -105,7 +105,9 @@ export function describeVmSmoke(
   options: VmSmokeOptions,
   itName = '原版 EXE 启动并进入主消息循环',
 ): void {
-  describe.skipIf(!gameResourcesAvailable(options.gameId))(title, () => {
+  // Fail at collection time: the missing executable must surface as a failure, never as a silently removed suite.
+  requireGameResources(options.gameId);
+  describe(title, () => {
     it(itName, () => runVmSmoke(options), vmSmokeTestTimeout(options));
   });
 }

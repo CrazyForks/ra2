@@ -1,7 +1,7 @@
 /**
  * Win32Shim file-layer unit tests with fake guest memory: mounting/_lopen/_lread/_llseek/_lclose, CreateFileA dispositions and error codes, onFileWrite writeback, and guest fast-mirror tables.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { FAST_FILE_ENTRY_BYTES, FAST_FILE_HANDLE_BASE, FAST_FILE_TABLE } from '../../src/vm86/shim/state';
 import {
   callShim,
@@ -9,6 +9,7 @@ import {
   createTestShim,
   readU32,
   writeAsciiZ,
+  writeU32,
   type FakeGuestMemory,
 } from '../helpers/guestMemory';
 import type { Win32Shim } from '../../src/games/win32Shim';
@@ -17,6 +18,44 @@ const INVALID = 0xffff_ffff;
 /** Store test strings here, away from the low-address area used internally by the shim. */
 const STR = 0x0010_0000;
 const BUF = 0x0011_0000;
+/** FILETIME counts 100ns intervals since 1601-01-01; the shim uses the same epoch constant. */
+const FILETIME_UNIX_EPOCH = 116_444_736_000_000_000n;
+/** Scratch areas for FILETIME/SYSTEMTIME/DOS date-time/BY_HANDLE_FILE_INFORMATION round trips. */
+const FT_A = 0x0012_0000;
+const FT_B = 0x0012_0010;
+const ST = 0x0012_0020;
+const DOS_DATE = 0x0012_0030;
+const DOS_TIME = 0x0012_0032;
+const INFO = 0x0012_0100;
+/** Format picture and formatted-output buffers for GetDateFormatA/GetTimeFormatA. */
+const FMT = 0x0012_0040;
+const FMT_OUT = 0x0012_0080;
+
+function writeFileTime(memory: FakeGuestMemory, address: number, value: bigint): void {
+  writeU32(memory, address, Number(value & 0xffff_ffffn));
+  writeU32(memory, address + 4, Number((value >> 32n) & 0xffff_ffffn));
+}
+function readFileTime(memory: FakeGuestMemory, address: number): bigint {
+  return BigInt(readU32(memory, address)) | (BigInt(readU32(memory, address + 4)) << 32n);
+}
+function fileTimeFromUnixMilliseconds(milliseconds: number): bigint {
+  return BigInt(milliseconds) * 10_000n + FILETIME_UNIX_EPOCH;
+}
+function readU16(memory: FakeGuestMemory, address: number): number {
+  const b = memory.read_memory(address, 2);
+  return b[0]! | (b[1]! << 8);
+}
+/** SYSTEMTIME is eight consecutive WORDs; date 2024-06-07 is a Friday (weekday index 5). */
+function writeSystemTimeFields(memory: FakeGuestMemory, address: number, values: readonly number[]): void {
+  for (let i = 0; i < values.length; i++) {
+    memory.write_memory([values[i]! & 0xff, (values[i]! >>> 8) & 0xff], address + i * 2);
+  }
+}
+function readAsciiZ(memory: FakeGuestMemory, address: number, max = 64): string {
+  const bytes = memory.read_memory(address, max);
+  const end = bytes.indexOf(0);
+  return String.fromCharCode(...bytes.subarray(0, end < 0 ? bytes.length : end));
+}
 
 function lopen(shim: Win32Shim, memory: FakeGuestMemory, path: string, flags = 0): number {
   writeAsciiZ(memory, STR, path);
@@ -243,5 +282,205 @@ describe('客体内快速镜像（fast _lread 表）', () => {
     expect(lread(shim, second, 5)).toBe(5);
     expect(memory.read_memory(BUF, 5)).toEqual(original);
     expect(shim.getMountedFileBytes('archive.mix')).toEqual(original);
+  });
+});
+
+describe('FILETIME 族（保存游戏路径）', () => {
+  it.each([
+    [-480, Date.UTC(2026, 8, 21, 13, 48, 30)],
+    [330, Date.UTC(2026, 8, 21, 0, 18, 30)],
+    [0, Date.UTC(2026, 8, 21, 5, 48, 30)],
+  ])('local save time uses the full timezone offset (%i minutes)', (offset, expected) => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory);
+    writeFileTime(memory, FT_A, fileTimeFromUnixMilliseconds(Date.UTC(2026, 8, 21, 5, 48, 30)));
+    const timezone = vi.spyOn(Date.prototype, 'getTimezoneOffset').mockReturnValue(offset);
+    try {
+      expect(callShim(shim, 'KERNEL32.DLL!FileTimeToLocalFileTime', [FT_A, FT_B]).eax).toBe(1);
+      expect(readFileTime(memory, FT_B)).toBe(fileTimeFromUnixMilliseconds(expected));
+    } finally {
+      timezone.mockRestore();
+    }
+  });
+
+  it('FileTimeToLocalFileTime 按该时刻的宿主时区偏移换算', () => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory);
+    const instant = Date.UTC(2024, 0, 15, 3, 4, 5);
+    const utc = fileTimeFromUnixMilliseconds(instant);
+    writeFileTime(memory, FT_A, utc);
+    expect(callShim(shim, 'KERNEL32.DLL!FileTimeToLocalFileTime', [FT_A, FT_B]).eax).toBe(1);
+    const local = new Date(instant);
+    const localFieldsAsUtc = Date.UTC(
+      local.getFullYear(),
+      local.getMonth(),
+      local.getDate(),
+      local.getHours(),
+      local.getMinutes(),
+      local.getSeconds(),
+    );
+    expect(readFileTime(memory, FT_B)).toBe(fileTimeFromUnixMilliseconds(localFieldsAsUtc));
+    expect(callShim(shim, 'KERNEL32.DLL!GetLastError').eax).toBe(0);
+
+    expect(callShim(shim, 'KERNEL32.DLL!FileTimeToLocalFileTime', [0, FT_B]).eax).toBe(0);
+    expect(callShim(shim, 'KERNEL32.DLL!GetLastError').eax).toBe(87);
+  });
+
+  it('CompareFileTime 返回 -1/0/1，且比较完整的 64 位值', () => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory);
+    writeFileTime(memory, FT_A, 1000n);
+    writeFileTime(memory, FT_B, 2000n);
+    expect(callShim(shim, 'KERNEL32.DLL!CompareFileTime', [FT_A, FT_B]).eax).toBe(0xffff_ffff);
+    expect(callShim(shim, 'KERNEL32.DLL!CompareFileTime', [FT_B, FT_A]).eax).toBe(1);
+    expect(callShim(shim, 'KERNEL32.DLL!CompareFileTime', [FT_A, FT_A]).eax).toBe(0);
+
+    // 高位参与比较：0x1_0000_0000 > 0xffff_ffff，只看低 32 位会得到错误结论。
+    writeFileTime(memory, FT_A, 0x1_0000_0000n);
+    writeFileTime(memory, FT_B, 0x0_ffff_ffffn);
+    expect(callShim(shim, 'KERNEL32.DLL!CompareFileTime', [FT_A, FT_B]).eax).toBe(1);
+    expect(callShim(shim, 'KERNEL32.DLL!CompareFileTime', [FT_B, FT_A]).eax).toBe(0xffff_ffff);
+  });
+
+  it('FileTimeToSystemTime 与 SystemTimeToFileTime 往返一致', () => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory);
+    const instant = Date.UTC(2024, 5, 7, 8, 9, 10, 123);
+    writeFileTime(memory, FT_A, fileTimeFromUnixMilliseconds(instant));
+    expect(callShim(shim, 'KERNEL32.DLL!FileTimeToSystemTime', [FT_A, ST]).eax).toBe(1);
+    expect([
+      readU16(memory, ST),
+      readU16(memory, ST + 2),
+      readU16(memory, ST + 6),
+      readU16(memory, ST + 8),
+      readU16(memory, ST + 10),
+      readU16(memory, ST + 12),
+      readU16(memory, ST + 14),
+    ]).toEqual([2024, 6, 7, 8, 9, 10, 123]);
+    expect(callShim(shim, 'KERNEL32.DLL!SystemTimeToFileTime', [ST, FT_B]).eax).toBe(1);
+    expect(readFileTime(memory, FT_B)).toBe(fileTimeFromUnixMilliseconds(instant));
+  });
+
+  it('FileTimeToDosDateTime 与 DosDateTimeToFileTime 往返一致（2 秒分辨率）', () => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory);
+    const instant = Date.UTC(2024, 5, 7, 8, 9, 10); // 偶数秒，避免 FAT 舍入
+    writeFileTime(memory, FT_A, fileTimeFromUnixMilliseconds(instant));
+    expect(callShim(shim, 'KERNEL32.DLL!FileTimeToDosDateTime', [FT_A, DOS_DATE, DOS_TIME]).eax).toBe(1);
+    expect(readU16(memory, DOS_DATE)).toBe(((2024 - 1980) << 9) | (6 << 5) | 7);
+    expect(readU16(memory, DOS_TIME)).toBe((8 << 11) | (9 << 5) | (10 >> 1));
+
+    expect(
+      callShim(shim, 'KERNEL32.DLL!DosDateTimeToFileTime', [readU16(memory, DOS_DATE), readU16(memory, DOS_TIME), FT_B])
+        .eax,
+    ).toBe(1);
+    expect(readFileTime(memory, FT_B)).toBe(fileTimeFromUnixMilliseconds(instant));
+
+    // 非法月份（0）被拒绝。
+    expect(callShim(shim, 'KERNEL32.DLL!DosDateTimeToFileTime', [((2024 - 1980) << 9) | 7, 0, FT_B]).eax).toBe(0);
+    expect(callShim(shim, 'KERNEL32.DLL!GetLastError').eax).toBe(87);
+  });
+
+  it('GetFileTime/SetFileTime 通过路径共享，且只更新非空字段', () => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory);
+    shim.mountFile('C:\\GAME\\times.bin', new Uint8Array([1]));
+    const handle = lopen(shim, memory, 'C:\\GAME\\times.bin');
+    expect(handle).not.toBe(INVALID);
+
+    expect(callShim(shim, 'KERNEL32.DLL!GetFileTime', [handle, FT_A, FT_B, INFO]).eax).toBe(1);
+    const mounted = readFileTime(memory, FT_A);
+    expect(mounted).toBeGreaterThan(0n);
+
+    const custom = fileTimeFromUnixMilliseconds(Date.UTC(2001, 0, 2, 3, 4, 5));
+    writeFileTime(memory, FT_B, custom);
+    expect(callShim(shim, 'KERNEL32.DLL!SetFileTime', [handle, FT_B, 0, 0]).eax).toBe(1);
+    expect(callShim(shim, 'KERNEL32.DLL!GetFileTime', [handle, FT_A, FT_B, INFO]).eax).toBe(1);
+    expect(readFileTime(memory, FT_A)).toBe(custom); // 已更新
+    expect(readFileTime(memory, FT_B)).toBe(mounted); // 未传入的字段保持原值
+
+    expect(callShim(shim, 'KERNEL32.DLL!GetFileTime', [0xdead, FT_A, FT_B, INFO]).eax).toBe(0);
+    expect(callShim(shim, 'KERNEL32.DLL!GetLastError').eax).toBe(6); // ERROR_INVALID_HANDLE
+  });
+
+  it('GetFileInformationByHandle 报告 BY_HANDLE_FILE_INFORMATION 的大小与时间', () => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory);
+    shim.mountFile('C:\\GAME\\info.bin', new Uint8Array([1, 2, 3, 4, 5]));
+    const handle = lopen(shim, memory, 'C:\\GAME\\info.bin');
+    expect(handle).not.toBe(INVALID);
+
+    expect(callShim(shim, 'KERNEL32.DLL!GetFileInformationByHandle', [handle, INFO]).eax).toBe(1);
+    expect(readU32(memory, INFO)).toBe(0x80); // FILE_ATTRIBUTE_NORMAL
+    expect(readU32(memory, INFO + 28)).not.toBe(0); // dwVolumeSerialNumber
+    expect(readU32(memory, INFO + 32)).toBe(0); // nFileSizeHigh
+    expect(readU32(memory, INFO + 36)).toBe(5); // nFileSizeLow
+    expect(readU32(memory, INFO + 40)).toBe(1); // nNumberOfLinks
+    expect(readU32(memory, INFO + 48)).toBe(handle >>> 0); // nFileIndexLow
+    expect(readFileTime(memory, INFO + 20)).toBeGreaterThan(0n); // ftLastWriteTime
+
+    expect(callShim(shim, 'KERNEL32.DLL!GetFileInformationByHandle', [0xdead, INFO]).eax).toBe(0);
+    expect(callShim(shim, 'KERNEL32.DLL!GetLastError').eax).toBe(6);
+  });
+});
+
+describe('GetDateFormatA/GetTimeFormatA（保存日期标签）', () => {
+  /** 2024-06-07 20:09:10.123, a Friday, shared by the format tests. */
+  const DATE_VALUES = [2024, 6, 5, 7, 20, 9, 10, 123];
+
+  function setup() {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory);
+    writeSystemTimeFields(memory, ST, DATE_VALUES);
+    return { memory, shim };
+  }
+
+  it('按游戏传入的图片串格式化，引号与反斜杠字面量原样输出', () => {
+    const { memory, shim } = setup();
+    writeAsciiZ(memory, FMT, "MM'/'dd'/'yyyy");
+    expect(callShim(shim, 'KERNEL32.DLL!GetDateFormatA', [0x400, 0, ST, FMT, FMT_OUT, 32]).eax).toBe(11);
+    expect(readAsciiZ(memory, FMT_OUT)).toBe('06/07/2024');
+    expect(callShim(shim, 'KERNEL32.DLL!GetLastError').eax).toBe(0);
+
+    writeAsciiZ(memory, FMT, 'yyyy\\-MM');
+    expect(callShim(shim, 'KERNEL32.DLL!GetDateFormatA', [0x400, 0, ST, FMT, FMT_OUT, 32]).eax).toBe(8);
+    expect(readAsciiZ(memory, FMT_OUT)).toBe('2024-06');
+  });
+
+  it('未提供图片串时按 DATE_ 标志回落到短/长日期', () => {
+    const { memory, shim } = setup();
+    // dwFlags == 0 与 DATE_SHORTDATE 使用同一短日期样式。
+    expect(callShim(shim, 'KERNEL32.DLL!GetDateFormatA', [0x400, 0, ST, 0, FMT_OUT, 32]).eax).toBe(9);
+    expect(readAsciiZ(memory, FMT_OUT)).toBe('6/7/2024');
+
+    expect(callShim(shim, 'KERNEL32.DLL!GetDateFormatA', [0x400, 0x2, ST, 0, FMT_OUT, 32]).eax).toBe(21);
+    expect(readAsciiZ(memory, FMT_OUT)).toBe('Friday, June 7, 2024');
+  });
+
+  it('cchDate 为 0 返回所需长度，缓冲不足报 ERROR_INSUFFICIENT_BUFFER', () => {
+    const { memory, shim } = setup();
+    writeAsciiZ(memory, FMT, 'MM/dd/yyyy');
+    expect(callShim(shim, 'KERNEL32.DLL!GetDateFormatA', [0x400, 0, ST, FMT, 0, 0]).eax).toBe(11);
+
+    expect(callShim(shim, 'KERNEL32.DLL!GetDateFormatA', [0x400, 0, ST, FMT, FMT_OUT, 10]).eax).toBe(0);
+    expect(callShim(shim, 'KERNEL32.DLL!GetLastError').eax).toBe(122);
+
+    expect(callShim(shim, 'KERNEL32.DLL!GetDateFormatA', [0x400, 0, ST, FMT, FMT_OUT, 11]).eax).toBe(11);
+    expect(readAsciiZ(memory, FMT_OUT)).toBe('06/07/2024');
+  });
+
+  it('GetTimeFormatA 支持 12/24 小时制与 AM/PM 标记', () => {
+    const { memory, shim } = setup();
+    writeAsciiZ(memory, FMT, 'hh:mm:ss tt');
+    expect(callShim(shim, 'KERNEL32.DLL!GetTimeFormatA', [0x400, 0, ST, FMT, FMT_OUT, 32]).eax).toBe(12);
+    expect(readAsciiZ(memory, FMT_OUT)).toBe('08:09:10 PM');
+
+    writeAsciiZ(memory, FMT, 'HH:mm');
+    expect(callShim(shim, 'KERNEL32.DLL!GetTimeFormatA', [0x400, 0, ST, FMT, FMT_OUT, 32]).eax).toBe(6);
+    expect(readAsciiZ(memory, FMT_OUT)).toBe('20:09');
+
+    // TIME_FORCE24HOURFORMAT 抑制 AM/PM 标记。
+    expect(callShim(shim, 'KERNEL32.DLL!GetTimeFormatA', [0x400, 0x8, ST, 0, FMT_OUT, 32]).eax).toBe(9);
+    expect(readAsciiZ(memory, FMT_OUT)).toBe('20:09:10');
   });
 });

@@ -1,4 +1,5 @@
 import type { GamePerformanceSample } from '../games/performance';
+import type { VmDiagnosticAction, VmDiagnostics } from './vmDiagnostics';
 import type { PcmPlayOptions, PcmWaveFormat } from '../vm86/audio';
 import type { VmFrame, Win32Call, VmNetworkStatus } from '../vm86/win32';
 import type { SupportedGameId } from '../games/catalog';
@@ -54,6 +55,7 @@ export interface VmInitConfig {
 }
 
 export type MainToWorkerMessage =
+  | { type: 'diagnostics'; action: VmDiagnosticAction; requestId: number }
   | { type: 'game-performance'; requestId: number }
   | { type: 'attach-maps'; files: GameFileEntry[]; requestId: number }
   | { type: 'init'; config: VmInitConfig; requestId: number }
@@ -76,6 +78,7 @@ export type MainToWorkerMessage =
   | { type: 'control'; action: 'stop'; requestId: number };
 
 export type WorkerToMainMessage =
+  | { type: 'diagnostics-reply'; requestId: number; value: VmDiagnostics }
   | { type: 'game-performance-reply'; requestId: number; value: GamePerformanceSample | null }
   | { type: 'network-status'; status: VmNetworkStatus }
   | { type: 'attach-maps-done'; result: VmAttachResult; requestId: number }

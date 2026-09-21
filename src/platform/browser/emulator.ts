@@ -1,4 +1,5 @@
 import { V86 } from 'v86';
+import type { BrowserEmulatorProbe } from './emulatorProbe';
 
 interface CpuScheduler {
   running: boolean;
@@ -56,20 +57,28 @@ export function installWorkerCpuScheduler(candidate: unknown): boolean {
 }
 
 /** The browser host owns CPU scheduling ports; V86.destroy releases them through the existing ownership chain. */
-export function createBrowserEmulator(options: ConstructorParameters<typeof V86>[0]): V86 {
+export function createBrowserEmulator(
+  options: ConstructorParameters<typeof V86>[0],
+  probe?: BrowserEmulatorProbe,
+): V86 {
   const emulator = new V86(options);
   // Replace only nested Workers inside Dedicated Workers. Window retains the upstream timer Worker,
   // avoiding migration of positive waits to Window.setTimeout, which may be throttled in background tabs.
-  if (options.autostart !== false || typeof (globalThis as { importScripts?: unknown }).importScripts !== 'function')
-    return emulator;
+  const adaptWorker =
+    options.autostart === false && typeof (globalThis as { importScripts?: unknown }).importScripts === 'function';
+  if (!adaptWorker && !probe) return emulator;
   let disposed = false;
   const ready = () => {
     emulator.remove_listener('emulator-ready', ready);
-    if (!disposed) installWorkerCpuScheduler((emulator as unknown as { v86?: unknown }).v86);
+    if (disposed) return;
+    const engine = (emulator as unknown as { v86?: { worker?: unknown } }).v86;
+    const adapted = adaptWorker && installWorkerCpuScheduler(engine);
+    probe?.attach(engine, adapted ? 'message-channel' : engine?.worker ? 'upstream-worker' : 'upstream-other');
   };
   const destroy = emulator.destroy.bind(emulator);
   emulator.destroy = async () => {
     disposed = true;
+    probe?.detach();
     emulator.remove_listener('emulator-ready', ready);
     await destroy();
   };

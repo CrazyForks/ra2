@@ -10,7 +10,7 @@ pnpm run format:check
 pnpm run check
 ```
 
-`check` includes TypeScript, unit tests, synthetic PE/real v86 instruction tests, architecture checks, and the production build. It explicitly selects tests/basic/ and packages/relay/tests/ without reading local executables or implicitly downloading games. `pnpm test` includes all local cases; its resource-skip count cannot replace public acceptance. Asset-free download tests also use Node/TypeScript. package.json and lockfiles define dependency/command versions.
+`check` includes TypeScript, unit tests, synthetic PE/real v86 instruction tests, architecture checks, and the production build. It explicitly selects tests/basic/ and packages/relay/tests/ without reading local executables or implicitly downloading games. `pnpm test` includes all local cases, real-game regressions among them: a missing executable fails the run instead of skipping, so every developer needs the game resources to run the full suite. No test may remove itself from the report. Asset-free download tests also use Node/TypeScript. package.json and lockfiles define dependency/command versions.
 
 Formatting uses the Prettier version pinned in package.json. `pnpm run format` maintains source, tests, scripts, configuration, and documentation. `.prettierignore` excludes original third-party text, resources, and generated lockfiles. Unsupported languages such as Python/assembly are not checked by Prettier.
 
@@ -34,7 +34,7 @@ Classify by required resources, not whether filenames contain “game”:
 
 `pnpm run test:e2e` executes real-game VM files serially. CI additionally orders jobs so YR follows completed RA2 acceptance. Basic includes formatting, `check`, firmware consistency, and asset-free browser regressions; see [CI configuration](REAL_GAME_CI.md) for standalone entry points.
 
-Current asset-enabled CI requires original-executable startup, the RA2 quick-game contract, and Worker/main-thread direct battlefield startup. Same-host two-client network tests remain manual and are excluded from CI until Chromium cleanup and runner memory capacity are confirmed. Select other real-game cases according to changes. Gonghui requires separate MOD resources; cache restoration requires original packages. Neither is implicitly covered by Basic.
+Current asset-enabled CI requires original-executable startup, the RA2 quick-game and RA2/YR save/cold-load regressions, and Worker/main-thread direct battlefield startup. Same-host two-client network tests remain manual and are excluded from CI until Chromium cleanup and runner memory capacity are confirmed. Select other real-game cases according to changes. Gonghui requires separate MOD resources; cache restoration requires original packages. Neither is implicitly covered by Basic.
 
 ## Select regressions by change
 
@@ -48,9 +48,27 @@ Current asset-enabled CI requires original-executable startup, the RA2 quick-gam
 | Startup entry points                 | test:browser:startup-page, test:browser:battle-start                                                                                                |
 | Generic relay                        | Relay package check, test:browser:relay; two-client network tests for game adaptation                                                               |
 | Performance                          | Before/after comparisons with identical browser, map, resources, speed, player count, and load                                                      |
+| Performance diagnostics              | test:browser:performance; test:browser:battle-start for both games and execution modes; probe/RPC/cancellation unit tests                           |
 | CI downloads                         | tests/basic/ciResourceDownload.test.ts, tests/basic/ciGameArchive.test.ts, tests/basic/gameCiResources.test.ts, tests/basic/ciConfiguration.test.ts |
 
 Fixed-address/instruction evidence lives in game modules and their tests. Never widen architecture allowlists, modify clocks, fabricate acknowledgments, or skip defeat checks to pass tests. Preserve failure reasons; a successful rerun does not erase earlier failures.
+
+## Save and cold-load regression
+
+`pnpm run check` runs the asset-free OLE callback, storage metadata, asynchronous file-open, time conversion, and window-order regressions: `tests/basic/vm/olePersistence.e2e.test.ts`, `tests/basic/shimOleStorage.test.ts`, `tests/basic/vmCore.test.ts`, `tests/basic/shimFile.test.ts`, `tests/basic/shimWindowZOrder.test.ts`, and `tests/basic/shimScrollbarOcclusion.test.ts`. These do not replace the real RA2/YR save/load regressions:
+
+```bash
+VM_GAME_DIR=/path/to/ra2 pnpm exec vitest run tests/real-game/ra2/saveLoad.test.ts --maxWorkers=1
+VM_GAME_DIR=/path/to/yr pnpm exec vitest run tests/real-game/yr/saveLoad.test.ts --maxWorkers=1
+```
+
+On PowerShell, set `$env:VM_GAME_DIR='C:\path\to\ra2'` before running the same `pnpm exec vitest` command. Resources must include the supported RA2 1.006 or YR 1.001 executable; the test validates its hash before reading version-specific simulation state. Nothing is downloaded implicitly, and a missing executable fails collection instead of skipping the suite.
+
+The test starts a skirmish through normal menus, waits for simulation to advance, saves and closes the confirmation, flushes writes, and destroys the VM. Only serialized save bytes are carried into a new file provider and VM, via a temporary file and the production file-provider message port. Loading must restore the saved simulation frame and recreate the persisted native object counts, then advance simulation and accept the pause command. A new empty match, a successful no-op save, or a stalled loading screen is not a pass; observations and counters only assert, and must never seed the new VM or force a successful load. The installation is never modified. Temporary saves are removed even on failure. The test does not cover browser IndexedDB, campaign transitions, all maps, or long-match state.
+
+The resource-enabled RA2 and YR CI entries run this as a required step after boot tests. `check` verifies that the CI entry still references the regression. PR Basic remains asset-free; the trusted dev/main resource job retains its existing secret boundary. Wiring a test into that job is not evidence that the remote job has run successfully.
+
+The RA2 reference-fixup assertion at `0x69fcbd` reports missing or inconsistent object mappings; it is not by itself evidence of missing installation MIX files.
 
 ## Asset-free browser tests
 
@@ -85,14 +103,14 @@ Chromium network regressions explicitly grant local-network-access, covering LAN
 Ordinary local resources live in game/ra2/, with exact executables in .tmp-third-party/. Shared RA2/YR directories should be complete; zero-byte placeholders still count as existing files. `pnpm run prepare:third-party` prepares executables and accesses the network. Real-game CI imports the same original packages as the frontend outside the workspace, verifies whole-package hashes, and prepares fixed executables; see [CI configuration](REAL_GAME_CI.md).
 
 ```bash
-VM_REQUIRE_GAME_RESOURCES=1 VM_GAME_DIR=/path/to/ra2 pnpm exec vitest run tests/real-game/ra2 --exclude '**/gonghui.test.ts'
+VM_GAME_DIR=/path/to/ra2 pnpm exec vitest run tests/real-game/ra2 --exclude '**/gonghui.test.ts'
 VM_GAME_DIR=/path/to/yr pnpm run test:vm:yr
 pnpm run test:browser:battle-start
 pnpm run test:browser:network
 pnpm run test:browser:network:yr
 ```
 
-`VM_GAME_DIR` selects resources for Node real-executable tests; browsers receive files from the development resource service. `test:e2e`, `test:vm`, `test:vm:ra2`, and `test:vm:yr` already set `VM_REQUIRE_GAME_RESOURCES=1`, making missing executables fail. Full `pnpm test` still allows uninstalled games to skip with explicit warnings; skipped cases do not count toward acceptance. Assertions must still verify completeness and behavior. Gonghui additionally uses VM_GONGHUI=1 and covers China, America, and the Soviet Union; original-game startup cannot replace it. Never mix addresses/resources from different executables.
+`VM_GAME_DIR` selects resources for Node real-executable tests; browsers receive files from the development resource service. Real-game suites fail when the required executable is absent instead of skipping, with no opt-out switch: `test:e2e`, `test:vm`, `test:vm:ra2`, `test:vm:yr`, and the full `pnpm test` all behave the same, so every developer needs the game resources locally. Assertions must still verify completeness and behavior. Gonghui is an opt-in third-party MOD: it runs only with VM_GONGHUI=1 and fails if expand01.mix is missing; original-game startup cannot replace it. Never mix addresses/resources from different executables.
 
 Two-client tests use native UI for discovery, room creation/joining, map validation, match startup, and deployment commands, reading player/unit state on both clients to confirm synchronization. WS handshakes or lobby screenshots cannot replace actual game operations. Before Linux multi-VM startup, check memory and record OOM state. Logs include host total/available memory and process names/RSS on preflight failure. Renderer crashes fail immediately; diagnostic sampling has timeouts so unavailable screenshots cannot hang the test. Other processes can still contend for a shared host; preflight does not guarantee resource isolation throughout the run.
 

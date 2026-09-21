@@ -6,6 +6,8 @@ import { RA2_SHIM_PROFILE } from '../ra2/profile';
  */
 export const YR_SHIM_PROFILE: GameShimProfile = Object.freeze({
   ...RA2_SHIM_PROFILE,
+  // Native persistence is required for object references to survive a cold load.
+  skipGuestOleSaveToStream: false,
   launcher: Object.freeze({
     ...RA2_SHIM_PROFILE.launcher!,
     protectedData: 'UIDATA,3DDATA,MAPS',

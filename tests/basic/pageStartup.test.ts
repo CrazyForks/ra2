@@ -4,6 +4,10 @@ import { startSessionRuntime } from '../../src/app/session/startSessionRuntime';
 
 function shell(): VmShell {
   return {
+    runtimeInfo: { mode: 'main-thread', reason: 'default', workerProbeMs: null, fallbackReason: null },
+    getDiagnostics: async () => {
+      throw new Error('No diagnostic capture in startup tests');
+    },
     start: async () => {},
     stop: async () => {},
     flushFiles: async () => {},

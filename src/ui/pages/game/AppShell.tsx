@@ -51,7 +51,10 @@ export function AppShell() {
       </div>
       <div id="vm-touch-controls" hidden aria-label={t('触屏虚拟按键')}>
         <button className="touch-key touch-collapse" type="button" data-role="collapse" aria-label={t('折叠虚拟按键')}>
-          ⌨
+          <svg className="touch-keyboard-icon" viewBox="0 0 24 16" aria-hidden="true" focusable="false">
+            <rect x="1" y="1" width="22" height="14" rx="2" />
+            <path d="M5 5h1M9 5h1M13 5h1M17 5h1M5 9h1M9 9h1M13 9h6M7 12h10" />
+          </svg>
         </button>
         <button className="touch-key" type="button" data-code="Escape" aria-label={t('Esc 键')}>
           Esc

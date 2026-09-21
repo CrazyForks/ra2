@@ -1,4 +1,5 @@
 import type { Win32Call, Win32Result } from '../win32';
+import { GUEST_CALLBACK_STRIDE } from '../pe';
 import { shimTraceEnabled, type Constructor } from './state';
 import type { withDplayx } from './dplayx';
 import { CLSID_DIRECTPLAY, formatGuid, guidBytes, isDirectPlayIid } from './dplayx';
@@ -24,6 +25,7 @@ interface OleStreamState {
 
 interface OlePropertySetState {
   fmtid: Uint8Array;
+  values: Map<string, { type: number; data: number[] }>;
 }
 
 interface OlePropertySetStorageObject {
@@ -111,6 +113,8 @@ const IPROPERTYSTORAGE_METHODS: ReadonlyArray<readonly [string, number]> = [
 const STORAGE_MAGIC = new TextEncoder().encode('SGBYSTG1');
 /** Guest-controlled IStream sizes must not turn a corrupt save pointer into a host OOM. */
 const MAX_OLE_STREAM_BYTES = 64 * 1024 * 1024;
+const PROPERTY_POINTER_TYPES = [8, 30, 31, 72];
+const PROPERTY_SCALAR_TYPES = [0, 1, 2, 3, 4, 5, 10, 11, 16, 17, 18, 19, 20, 21, 64];
 
 /**
  * Minimal OLE32 support. CoInitialize counts COM initialization per thread, using the main thread in a single-execution model. Besides host DirectPlay, CoCreateInstance calls guest IClassFactory objects registered with CoRegisterClassObject. RA2 creates internal objects such as Locomotor through this standard COM path; registration cannot be a successful no-op.
@@ -127,6 +131,7 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
     private registeredClasses = new Map<string, { cookie: number; factory: number }>();
     private registeredClassCookies = new Map<number, string>();
     private storageVtable = 0;
+    private oleCreateInstanceStub = 0;
     private streamVtable = 0;
     private propertySetStorageVtable = 0;
     private propertyStorageVtable = 0;
@@ -239,10 +244,10 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
           return { eax: 0 };
         }
         case 'OLE32.DLL!OleLoadFromStream':
-          // Current saves use only OleSaveToStream; retain recognizable HRESULTs
-          // instead of terminating the VM on unimplemented imports.
           if (a[2]) this.writeU32(a[2], 0);
-          return { eax: 0x8000_4001 }; // E_NOTIMPL
+          if (!a[0] || !a[1] || !a[2]) return { eax: 0x8000_4003 };
+          this.redirectOleLoadFromStream(call, a[0], a[1], a[2]);
+          return { eax: 0 };
         case 'OLE32.DLL!StgCreateDocfile': {
           const out = a[3] ?? 0;
           if (!out) return { eax: 0x8000_4003 }; // E_POINTER
@@ -635,7 +640,7 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
           this.writeU32(output, 0);
           const fmtid = this.readBytes(a[1], 16).slice();
           const key = formatGuid(fmtid);
-          const propertySet: OlePropertySetState = { fmtid };
+          const propertySet: OlePropertySetState = { fmtid, values: new Map() };
           wrapper.storage.propertySets.set(key, propertySet);
           this.writeU32(output, this.createPropertyStorageObject(propertySet));
           return { eax: 0 };
@@ -684,10 +689,55 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
           return { eax: wrapper.refs };
         case 'ReadMultiple': {
           const count = a[1] ?? 0;
-          const values = a[3] ?? 0;
-          if (count && (!a[2] || !values)) return { eax: 0x8000_4003 };
-          if (values) this.zero(values, count * 16); // VT_EMPTY
-          return { eax: count ? 1 : 0 }; // S_FALSE / S_OK
+          if (count && (!a[2] || !a[3])) return { eax: 0x8000_4003 };
+          let missing = false;
+          for (let index = 0; index < count; index++) {
+            const dest = a[3]! + index * 16;
+            this.zero(dest, 16);
+            const value = wrapper.propertySet.values.get(this.propertyKey(a[2]! + index * 8));
+            if (!value) {
+              missing = true;
+              continue;
+            }
+            this.writeU32(dest, value.type);
+            if (PROPERTY_POINTER_TYPES.includes(value.type)) {
+              const prefix = value.type === 8 ? 4 : 0;
+              const buffer = this.alloc(value.data.length + prefix, true);
+              if (prefix) this.writeU32(buffer, Math.max(0, value.data.length - 2));
+              this.memory.write_memory(value.data, buffer + prefix);
+              this.writeU32(dest + 8, buffer + prefix);
+            } else this.memory.write_memory(value.data, dest + 8);
+          }
+          return { eax: missing ? 1 : 0 };
+        }
+        case 'WriteMultiple': {
+          const count = a[1] ?? 0;
+          if (count && (!a[2] || !a[3])) return { eax: 0x8000_4003 };
+          const pending: Array<[string, { type: number; data: number[] }]> = [];
+          for (let index = 0; index < count; index++) {
+            const value = a[3]! + index * 16;
+            const type = this.readU32(value) & 0xffff;
+            let data: Uint8Array;
+            if (PROPERTY_POINTER_TYPES.includes(type)) {
+              const ptr = this.readU32(value + 8);
+              const width = type === 30 ? 1 : 2;
+              let length = type === 72 ? 16 : 0;
+              if (type === 8 && ptr) length = this.readU32(ptr - 4) + 2;
+              else if (type !== 72 && ptr) {
+                do {
+                  length += width;
+                  if (length > 1024 * 1024) return { eax: 0x8003_0057 };
+                } while (this.readBytes(ptr + length - width, width).some((byte) => byte !== 0));
+              }
+              if (length > 1024 * 1024) return { eax: 0x8003_0057 };
+              data = ptr ? this.readBytes(ptr, length).slice() : new Uint8Array(width);
+            } else if (PROPERTY_SCALAR_TYPES.includes(type)) {
+              data = this.readBytes(value + 8, 8).slice();
+            } else return { eax: 0x8003_0057 };
+            pending.push([this.propertyKey(a[2]! + index * 8), { type, data: [...data] }]);
+          }
+          for (const [key, value] of pending) wrapper.propertySet.values.set(key, value);
+          return { eax: 0 };
         }
         case 'ReadPropertyNames': {
           const count = a[1] ?? 0;
@@ -704,8 +754,12 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
           this.zero(a[1], 64);
           this.memory.write_memory(wrapper.propertySet.fmtid, a[1]);
           return { eax: 0 };
-        case 'WriteMultiple':
-        case 'DeleteMultiple':
+        case 'DeleteMultiple': {
+          if (a[1] && !a[2]) return { eax: 0x8000_4003 };
+          for (let index = 0; index < (a[1] ?? 0); index++)
+            wrapper.propertySet.values.delete(this.propertyKey(a[2]! + index * 8));
+          return { eax: 0 };
+        }
         case 'WritePropertyNames':
         case 'DeletePropertyNames':
         case 'Commit':
@@ -718,6 +772,12 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
       }
     }
 
+    private propertyKey(spec: number): string {
+      return this.readU32(spec) === 1
+        ? `id:${this.readU32(spec + 4)}`
+        : `name:${this.readOleWideString(this.readU32(spec + 4))}`;
+    }
+
     private commitStorage(storage: OleStorageState): void {
       const encoded = this.encodeStorage(storage);
       this.storeFile(storage.path, encoded);
@@ -727,8 +787,15 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
     private encodeStorage(storage: OleStorageState): Uint8Array {
       const encoder = new TextEncoder();
       const entries = [...storage.streams].map(([name, bytes]) => ({ name: encoder.encode(name), bytes }));
+      const metadata = encoder.encode(
+        JSON.stringify([...storage.propertySets].map(([key, value]) => [key, [...value.fmtid], [...value.values]])),
+      );
       const size =
-        STORAGE_MAGIC.length + 4 + entries.reduce((sum, item) => sum + 8 + item.name.length + item.bytes.length, 0);
+        4 +
+        metadata.length +
+        STORAGE_MAGIC.length +
+        4 +
+        entries.reduce((sum, item) => sum + 8 + item.name.length + item.bytes.length, 0);
       const result = new Uint8Array(size);
       result.set(STORAGE_MAGIC);
       const view = new DataView(result.buffer);
@@ -744,6 +811,8 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
         result.set(item.bytes, offset);
         offset += item.bytes.length;
       }
+      view.setUint32(offset, metadata.length, true);
+      result.set(metadata, offset + 4);
       return result;
     }
 
@@ -766,12 +835,41 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
           streams.set(name, bytes.slice(offset, offset + dataLength));
           offset += dataLength;
         }
+        const propertySets = new Map<string, OlePropertySetState>();
+        if (offset < bytes.length) {
+          const length = view.getUint32(offset, true);
+          if (offset + 4 + length !== bytes.length) return undefined;
+          const metadata = JSON.parse(new TextDecoder().decode(bytes.subarray(offset + 4)));
+          for (const [key, fmtid, values] of metadata) {
+            if (typeof key !== 'string' || !Array.isArray(fmtid) || fmtid.length !== 16 || !Array.isArray(values))
+              return undefined;
+            for (const [name, value] of values) {
+              if (
+                typeof name !== 'string' ||
+                !value ||
+                !Number.isInteger(value.type) ||
+                !Array.isArray(value.data) ||
+                value.data.length > 1024 * 1024 ||
+                value.data.some((byte: number) => !Number.isInteger(byte) || byte < 0 || byte > 255)
+              )
+                return undefined;
+              if (PROPERTY_SCALAR_TYPES.includes(value.type)) {
+                if (value.data.length !== 8) return undefined;
+              } else if (PROPERTY_POINTER_TYPES.includes(value.type)) {
+                if (value.type === 72 ? value.data.length !== 16 : value.data.length < (value.type === 30 ? 1 : 2))
+                  return undefined;
+                if ((value.type === 8 || value.type === 31) && value.data.length % 2 !== 0) return undefined;
+              } else return undefined;
+            }
+            propertySets.set(key, { fmtid: Uint8Array.from(fmtid), values: new Map(values) });
+          }
+        }
         return {
           path,
           refs: 1,
           streams,
           streamCapacities: new Map(streams),
-          propertySets: new Map(),
+          propertySets,
         };
       } catch {
         return undefined;
@@ -793,8 +891,10 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
      */
     private redirectOleSaveToStream(call: Win32Call, persistStream: number, stream: number): void {
       const originalReturn = this.readU32(call.stack);
-      const clsid = this.alloc(16, true);
-      const written = this.alloc(4, true);
+      const frame = this.reserveGuestCallback();
+      const clsid = frame.trampoline + GUEST_CALLBACK_STRIDE - 32;
+      const written = clsid + 16;
+      this.zero(clsid, 20);
       const code: number[] = [];
       const emit32 = (value: number) =>
         code.push(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, value >>> 24);
@@ -836,9 +936,7 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
       code.push(0x8b, 0x11, 0xff, 0x52, 0x18);
 
       const finish = code.length;
-      code.push(0xb9);
-      emit32(originalReturn);
-      code.push(0xff, 0xe1);
+      this.appendGuestCallbackReturn(code, frame, originalReturn);
       for (const patch of failurePatches) {
         const relative = finish - (patch + 4);
         code[patch] = relative & 0xff;
@@ -846,8 +944,121 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
         code[patch + 2] = (relative >>> 16) & 0xff;
         code[patch + 3] = relative >>> 24;
       }
-      this.writeU32(call.stack, this.allocateDynamicCode(code));
+      this.memory.write_memory(code, frame.trampoline);
+      this.writeU32(call.stack, frame.trampoline);
     }
+    private redirectOleLoadFromStream(call: Win32Call, stream: number, iid: number, output: number): void {
+      const frame = this.reserveGuestCallback();
+      const scratch = frame.trampoline + GUEST_CALLBACK_STRIDE - 64;
+      const count = scratch + 16;
+      const persist = scratch + 20;
+      const persistIid = scratch + 24;
+      this.zero(scratch, 64);
+      this.memory.write_memory(guidBytes('{00000109-0000-0000-c000-000000000046}'), persistIid);
+      const create = (this.oleCreateInstanceStub ||= this.registerDynamicWin32Import(
+        'OLE32.DLL',
+        'CoCreateInstance',
+        20,
+      ));
+      const code: number[] = [];
+      const labels = new Map<string, number>();
+      const patches: Array<[number, string]> = [];
+      const emit32 = (value: number) =>
+        code.push(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, value >>> 24);
+      const push = (value: number) => {
+        code.push(0x68);
+        emit32(value);
+      };
+      const jump = (condition: number, label: string) => {
+        code.push(0x0f, condition);
+        patches.push([code.length, label]);
+        emit32(0);
+      };
+      const failed = (label: string) => {
+        code.push(0x85, 0xc0);
+        jump(0x88, label);
+      };
+      const loadPointer = (address: number) => {
+        code.push(0x8b, 0x0d);
+        emit32(address);
+      };
+      const invoke = (offset: number) => {
+        code.push(0x8b, 0x11, 0xff, 0x52, offset);
+      };
+      const release = (address: number) => {
+        loadPointer(address);
+        code.push(0x51);
+        invoke(8);
+      };
+
+      push(count);
+      push(16);
+      push(scratch);
+      push(stream);
+      code.push(0xb9);
+      emit32(stream);
+      invoke(12); // IStream::Read
+      failed('finish');
+      code.push(0x83, 0x3d);
+      emit32(count);
+      code.push(16);
+      jump(0x85, 'shortRead');
+      // CLSID_NULL represents a null object, not an unregistered class.
+      code.push(0xa1);
+      emit32(scratch);
+      for (const offset of [4, 8, 12]) {
+        code.push(0x0b, 0x05);
+        emit32(scratch + offset);
+      }
+      code.push(0x85, 0xc0);
+      jump(0x84, 'finish');
+      push(output);
+      push(iid);
+      push(1);
+      push(0);
+      push(scratch);
+      code.push(0xb8);
+      emit32(create);
+      code.push(0xff, 0xd0);
+      failed('finish');
+      push(persist);
+      push(persistIid);
+      loadPointer(output);
+      code.push(0x51);
+      invoke(0);
+      failed('releaseObject');
+      push(stream);
+      loadPointer(persist);
+      code.push(0x51);
+      invoke(20); // IPersistStream::Load
+      code.push(0x50);
+      release(persist);
+      code.push(0x58);
+      failed('releaseObject');
+      code.push(0x85, 0xc0);
+      jump(0x89, 'finish');
+      labels.set('releaseObject', code.length);
+      code.push(0x50);
+      release(output);
+      code.push(0x58);
+      code.push(0xc7, 0x05);
+      emit32(output);
+      emit32(0);
+      code.push(0x85, 0xc0);
+      jump(0x88, 'finish');
+      labels.set('shortRead', code.length);
+      code.push(0xb8);
+      emit32(0x8003_001e); // STG_E_READFAULT
+      labels.set('finish', code.length);
+      this.appendGuestCallbackReturn(code, frame, this.readU32(call.stack));
+      for (const [patch, label] of patches) {
+        const relative = labels.get(label)! - (patch + 4);
+        for (let byte = 0; byte < 4; byte++) code[patch + byte] = (relative >>> (byte * 8)) & 0xff;
+      }
+      this.memory.write_memory(code, frame.trampoline);
+      this.writeU32(call.stack, frame.trampoline);
+    }
+
     protected redirectGuestCoCreate(
       call: Win32Call,
       getClassObject: number,
@@ -914,6 +1125,7 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
       ppv: number,
     ): void {
       const originalReturn = this.readU32(call.stack);
+      const frame = this.reserveGuestCallback();
       const code: number[] = [];
       const emit32 = (value: number) =>
         code.push(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, value >>> 24);
@@ -929,10 +1141,9 @@ export function withOle32<TBase extends Constructor<DplayxChain>>(Base: TBase) {
       emit32(factory); // mov ecx,factory
       code.push(0x8b, 0x11); // mov edx,[ecx]
       code.push(0xff, 0x52, 0x0c); // call [edx+12] (IClassFactory::CreateInstance)
-      code.push(0xb9);
-      emit32(originalReturn);
-      code.push(0xff, 0xe1); // jmp originalReturn
-      this.writeU32(call.stack, this.allocateDynamicCode(code));
+      this.appendGuestCallbackReturn(code, frame, originalReturn);
+      this.memory.write_memory(code, frame.trampoline);
+      this.writeU32(call.stack, frame.trampoline);
     }
   };
 }

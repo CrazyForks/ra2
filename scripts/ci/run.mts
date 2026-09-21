@@ -74,6 +74,7 @@ async function browsers(): Promise<void> {
     'test:browser:react-ui',
     'test:custom-maps',
     'test:browser:touch-ui',
+    'test:browser:performance',
     'test:browser:archive-layers',
     'test:browser:relay',
   ]) {
@@ -141,7 +142,6 @@ try {
     Object.assign(env, {
       RA2_GAME_ROOT: roots.game,
       RA2_THIRD_PARTY_CACHE_DIR: roots.thirdParty,
-      VM_REQUIRE_GAME_RESOURCES: '1',
       VM_GAME_DIR: join(roots.game, 'ra2'),
       RA2_CI_GAME: gameId,
       RA2_BROWSER_GAME: gameId,
@@ -155,9 +155,16 @@ try {
     const boot = [`tests/real-game/${gameId}/boot.test.ts`];
     if (gameId === 'ra2') boot.push('tests/real-game/ra2/shortGame.test.ts');
     await tasks.run('boot', 4, 'pnpm', ['exec', 'vitest', 'run', ...boot, '--maxWorkers=1']);
+    await tasks.run('save-load', 6, 'pnpm', [
+      'exec',
+      'vitest',
+      'run',
+      `tests/real-game/${gameId}/saveLoad.test.ts`,
+      '--maxWorkers=1',
+    ]);
     await tasks.vite(15181);
     await tasks.run('battlefield', 15, 'pnpm', ['run', 'test:browser:battle-start']);
-    console.log('验收范围：原始 EXE 与 Worker/主线程战场启动；同机双端联机暂不纳入 CI。');
+    console.log('验收范围：原始 EXE、保存/冷启动读档与 Worker/主线程战场启动；同机双端联机暂不纳入 CI。');
   }
   console.log(`${mode}${game ? ` ${game}` : ''} PASS`);
 } catch (error) {

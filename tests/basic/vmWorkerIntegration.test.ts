@@ -632,6 +632,12 @@ describe('WorkerVmClient ↔ VmWorkerController integration', () => {
     });
 
     expect(shell).toBeInstanceOf(Win32GameVm);
+    expect(shell.runtimeInfo).toMatchObject({
+      mode: 'main-thread',
+      reason: 'probe-failed',
+      fallbackReason: 'probe failed',
+    });
+    expect(shell.runtimeInfo.workerProbeMs).toBeGreaterThanOrEqual(0);
     await shell.start();
     expect(statuses).toContain('running');
     expect(statuses).not.toContain('error');

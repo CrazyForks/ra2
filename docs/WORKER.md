@@ -6,6 +6,7 @@
 - `src/adapter/vmClient.ts` manages the main-thread Worker client; `vmWorker.ts` is the Worker entry point, and `vmWorkerController.ts` owns its lifecycle and message handling.
 - `src/adapter/vmCore.ts` runs the guest; `vmProtocol.ts` defines the cross-thread protocol.
 - The main thread retains the web UI, presentation, and browser audio while the Worker executes the VM. Startup code determines capability detection and main-thread fallback; browser names must not become hardcoded support guarantees.
+- `VmShell.runtimeInfo` records the selected execution mode and probe/fallback evidence. The on-demand `diagnostics` RPC carries start/sample/stop actions through the existing request lifecycle; the shared core reads native counters and the injected platform execution probe. See [Performance reports](GAME_PERFORMANCE.md#browser-comparison-reports).
 - File providers are not cloned directly into the Worker. Session resources are accessed on demand through file ports. The executable must be an independent copy of the exact version selected by the page, with no fallback to a different local version.
 - `src/app/session/` owns sessions; `src/graphics/` owns presentation scheduling. Do not duplicate the session controller in the Worker layer.
 
