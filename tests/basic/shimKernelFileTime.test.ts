@@ -89,6 +89,81 @@ function readAscii(memory: FakeGuestMemory, pointer: number, max = 64): string {
 }
 
 describe('KERNEL32 日期/时间格式化', () => {
+  it.each([
+    ['GetDateFormatA', "yyyy 'year' MM 'month' dd ''", "2026 year 09 month 19 '"],
+    ['GetTimeFormatA', "HH 'hours' mm 'minutes' ss ''", "16 hours 41 minutes 07 '"],
+    ['GetTimeFormatA', 'hH hhHH', '416 0416'],
+  ])('%s preserves quoted literals and token case in %s', (api, picture, expected) => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory);
+    writeSystemTime(memory, 0x3000);
+    writeAsciiZ(memory, 0x3200, picture);
+    expect(callShim(shim, `KERNEL32.DLL!${api}`, [0x400, 0, 0x3000, 0x3200, 0x3100, 64]).eax).toBe(expected.length + 1);
+    expect(readAscii(memory, 0x3100)).toBe(expected);
+  });
+
+  it.each([
+    ['GetDateFormatA', 'y'],
+    ['GetDateFormatA', 'M'],
+    ['GetTimeFormatA', 'H'],
+    ['GetTimeFormatA', 'm'],
+  ])('%s keeps a DBCS trail byte equal to %s literal', (api, trail) => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory);
+    writeSystemTime(memory, 0x3000);
+    const pair = [0x81, trail.charCodeAt(0)];
+    const suffix = api === 'GetDateFormatA' ? 'yyyy' : 'HH';
+    const expected = [...pair, 32, ...Array.from(api === 'GetDateFormatA' ? '2026' : '16', (c) => c.charCodeAt(0)), 0];
+    memory.write_memory([...pair, 32, ...Array.from(suffix, (c) => c.charCodeAt(0)), 0], 0x3200);
+    memory.write_memory(new Uint8Array(32).fill(0xa5), 0x3100);
+    const args = [0x400, 0, 0x3000, 0x3200, 0x3100, expected.length];
+    expect(callShim(shim, `KERNEL32.DLL!${api}`, args).eax).toBe(expected.length);
+    expect([...memory.read_memory(0x3100, expected.length)]).toEqual(expected);
+    expect(memory.read_memory(0x3100 + expected.length, 1)[0]).toBe(0xa5);
+  });
+
+  it.each([
+    [0, '4:41:07 PM'],
+    [1, '4 PM'],
+    [2, '4:41 PM'],
+    [4, '4:41:07'],
+    [8, '16:41:07'],
+    [9, '16'],
+    [10, '16:41'],
+  ])('honors default time flags 0x%s', (flags, expected) => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory);
+    writeSystemTime(memory, 0x3000);
+    expect(callShim(shim, 'KERNEL32.DLL!GetTimeFormatA', [0x400, flags, 0x3000, 0, 0x3100, 64]).eax).toBe(
+      expected.length + 1,
+    );
+    expect(readAscii(memory, 0x3100)).toBe(expected);
+  });
+
+  it.each(['GetDateFormatA', 'GetTimeFormatA'])(
+    '%s rejects negative capacity and preserves output on short buffers',
+    (api) => {
+      const memory = createGuestMemory();
+      const shim = createTestShim(memory);
+      writeSystemTime(memory, 0x3000);
+      const invoke = (buffer: number, capacity: number) =>
+        callShim(shim, `KERNEL32.DLL!${api}`, [0x400, 0, 0x3000, 0, buffer, capacity]).eax;
+      const required = invoke(0, 0);
+      expect(required).toBeGreaterThan(1);
+      memory.write_memory(new Uint8Array(64).fill(0xa5), 0x3100);
+      expect(invoke(0x3100, -1)).toBe(0);
+      expect(callShim(shim, 'KERNEL32.DLL!GetLastError').eax).toBe(87);
+      // Guest stack arguments arrive as unsigned DWORDs even though cch is a signed Win32 int.
+      expect(invoke(0x3100, 0xffffffff)).toBe(0);
+      expect(callShim(shim, 'KERNEL32.DLL!GetLastError').eax).toBe(87);
+      expect(invoke(0x3100, required - 1)).toBe(0);
+      expect(callShim(shim, 'KERNEL32.DLL!GetLastError').eax).toBe(122);
+      expect(memory.read_memory(0x3100, 64)).toEqual(new Uint8Array(64).fill(0xa5));
+      expect(invoke(0x3100, required)).toBe(required);
+      expect(memory.read_memory(0x3100 + required - 1, 2)).toEqual(Uint8Array.from([0, 0xa5]));
+    },
+  );
+
   it('formats time while ignoring uninitialized date fields', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory);
@@ -175,11 +250,11 @@ describe('KERNEL32 日期/时间格式化', () => {
     expect(readAscii(memory, 0x3100)).toBe('16:41');
   });
 
-  it('自定义格式串支持重复字段、12 小时制与引号字面量', () => {
+  it('formats named date fields and 12-hour time while retaining GBK bytes', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory);
     writeSystemTime(memory, 0x3000);
-    // A DBCS literal whose trail byte is ASCII 'y' must survive: 日 in GBK is 0xC8 0xD5, 迎 is 0xD3 0xAD.
+    // Retain the original GBK bytes for 日 alongside formatted ASCII fields.
     memory.write_memory(
       Uint8Array.from([
         ...'ddd dd'.split('').map((c) => c.charCodeAt(0)),

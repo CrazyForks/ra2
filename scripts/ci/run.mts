@@ -67,6 +67,7 @@ async function browsers(): Promise<void> {
     '15182',
   ]);
   for (const test of [
+    'test:browser:audio',
     'test:graphics',
     'test:graphics:upscale',
     'test:graphics:ai',

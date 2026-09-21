@@ -4,7 +4,7 @@ All CI lives in `.github/workflows/`, using `ubuntu-latest` runners. Workflow fi
 
 ## Unified pipeline and Basic test
 
-`quality-check.yml` is the only workflow, accepting PRs targeting dev/main, pushes to dev/main, and manual runs. Ordering is `Basic test → Real game RA2 → Real game YR`, with separate runners per job. Basic runs frozen installation, Prettier, type/unit/synthetic VM checks, builds, firmware consistency, and real-browser graphics, React UI, touch, maps, layered archives, and main-thread/Worker relay regressions.
+`quality-check.yml` is the only workflow, accepting PRs targeting dev/main, pushes to dev/main, and manual runs. Ordering is `Basic test → Real game RA2 → Real game YR`, with separate runners per job. Basic runs frozen installation, Prettier, type/unit/synthetic VM checks, builds, firmware consistency, and real-browser audio lifecycle, graphics, React UI, touch, maps, layered archives, and main-thread/Worker relay regressions.
 
 This runner is ephemeral and isolated, with no game directory, resource secrets, deployment credentials, host-directory mounts, or private caches. The workflow checks that game/ and .tmp-third-party/ are absent from the checkout and downloads no game executable. External PRs do not run asset-enabled jobs. Basic and game jobs share no writable cache.
 
@@ -43,8 +43,8 @@ YAML declares triggers, runners, tool installation, and secrets, then invokes pn
 
 | Entry                              | Responsibility                                                                                                                           |
 | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm run ci:basic`                | Check asset-free environment, check, firmware consistency, browser installation, nine browser regressions                                |
-| `pnpm run ci:browser`              | Use installed browsers, exclusively start Vite/relay, run nine browser regressions                                                       |
+| `pnpm run ci:basic`                | Check asset-free environment, check, firmware consistency, browser installation, and browser regressions                                 |
+| `pnpm run ci:browser`              | Use installed browsers, exclusively start Vite/relay, and run browser regressions                                                        |
 | `pnpm run ci:real-game ra2` / `yr` | Download/validate corresponding secret resources, install browser, run original-executable and battlefield startup regressions, clean up |
 | `pnpm run ci:resources --record`   | Explicit maintainer inventory creation; not called by CI                                                                                 |
 

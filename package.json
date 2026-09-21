@@ -49,6 +49,7 @@
     "test:browser:keyboard-lock": "tsx tests/basic/browser/keyboardLockBrowserSmoke.mts",
     "test:browser:touch-ui": "tsx tests/basic/browser/touchUiBrowserSmoke.mts",
     "test:browser:performance": "tsx tests/basic/browser/performanceDiagnosticsBrowserSmoke.mts",
+    "test:browser:audio": "tsx tests/basic/browser/audioLifecycleBrowserSmoke.mts",
     "test:browser:react-ui": "tsx tests/basic/browser/reactUiBrowserSmoke.mts",
     "test:browser:third-party-preload": "tsx tests/real-game/browser/thirdPartyPreloadBrowserSmoke.mts",
     "test:browser:startup-page": "tsx tests/real-game/browser/ra2StartupPageBrowserSmoke.mts",

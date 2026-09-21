@@ -309,9 +309,9 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         // The save-game screen labels its slots through the locale date/time APIs. a[0] is the LCID, which
         // the shim ignores because it carries a single (invariant) calendar; a[1] holds the DATE_/TIME_ flags.
         case 'KERNEL32.DLL!GetDateFormatA':
-          return { eax: this.getDateFormatA(a[1] ?? 0, a[2] ?? 0, a[3] ?? 0, a[4] ?? 0, a[5] ?? 0) };
+          return { eax: this.getDateFormatA(a[1] ?? 0, a[2] ?? 0, a[3] ?? 0, a[4] ?? 0, (a[5] ?? 0) | 0) };
         case 'KERNEL32.DLL!GetTimeFormatA':
-          return { eax: this.getTimeFormatA(a[1] ?? 0, a[2] ?? 0, a[3] ?? 0, a[4] ?? 0, a[5] ?? 0) };
+          return { eax: this.getTimeFormatA(a[1] ?? 0, a[2] ?? 0, a[3] ?? 0, a[4] ?? 0, (a[5] ?? 0) | 0) };
         case 'KERNEL32.DLL!CreateFileA':
           return { eax: this.openFile(a) };
         case 'KERNEL32.DLL!FindFirstFileA': {

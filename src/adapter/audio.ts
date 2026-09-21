@@ -19,15 +19,18 @@ const STREAM_PROCESSOR_FRAMES = 4_096;
 const PCM_STREAM_WORKLET_NAME = 'ra2-pcm-stream';
 
 /** AudioWorklet module cache: share one addModule call per context and allow retries after failure. */
-let workletModulePromise: Promise<void> | null = null;
+const workletModules = new WeakMap<AudioContext, Promise<void>>();
 function loadPcmStreamWorklet(context: AudioContext): Promise<void> {
-  workletModulePromise ??= context.audioWorklet
-    .addModule(new URL('./pcmStreamWorklet.js', import.meta.url))
-    .catch((error) => {
-      workletModulePromise = null;
+  let pending = workletModules.get(context);
+  if (!pending) {
+    // Processor registration belongs to one context; a later session has a new audio-thread global scope.
+    pending = context.audioWorklet.addModule(new URL('./pcmStreamWorklet.js', import.meta.url)).catch((error) => {
+      workletModules.delete(context);
       throw error;
     });
-  return workletModulePromise;
+    workletModules.set(context, pending);
+  }
+  return pending;
 }
 
 export interface PcmBufferSnapshot {
