@@ -100,6 +100,8 @@ export interface GuestCallbackFrame {
   depth: number;
   trampoline: number;
   ownerAddress: number;
+  /** Reserved data at the slot tail; generated instructions must stop before this address. */
+  scratchAddress: number;
 }
 
 export interface GuestThreadState {
@@ -540,13 +542,17 @@ export class ShimState {
   protected disposeGameNetwork(): void {}
 
   /** Reserve slots during host generation; other threads or not-yet-started bridges cannot reuse them. */
-  protected reserveGuestCallback(): GuestCallbackFrame {
+  protected reserveGuestCallback(scratchBytes = GUEST_CALLBACK_SCRATCH_BYTES): GuestCallbackFrame {
+    if (!Number.isInteger(scratchBytes) || scratchBytes < 0 || scratchBytes >= GUEST_CALLBACK_STRIDE) {
+      throw new Error(`Invalid guest callback scratch size: ${scratchBytes}`);
+    }
     for (let depth = 0; depth < GUEST_CALLBACK_SLOTS; depth++) {
       const ownerAddress = GUEST_CALLBACK_OWNERS + depth * 4;
       if (this.readU32(ownerAddress) !== 0) continue;
       this.writeU32(ownerAddress, this.readU32(HYPERCALL_THREAD_CURRENT) + 1);
       this.writeU32(HYPERCALL_CALLBACK_DEPTH, this.readU32(HYPERCALL_CALLBACK_DEPTH) + 1);
-      return { depth, trampoline: GUEST_CALLBACK_BASE + depth * GUEST_CALLBACK_STRIDE, ownerAddress };
+      const trampoline = GUEST_CALLBACK_BASE + depth * GUEST_CALLBACK_STRIDE;
+      return { depth, trampoline, ownerAddress, scratchAddress: trampoline + GUEST_CALLBACK_STRIDE - scratchBytes };
     }
     throw new Error(`客体回调槽耗尽（${GUEST_CALLBACK_SLOTS} 个活动回调）`);
   }
@@ -588,7 +594,7 @@ export class ShimState {
     code.push(0);
     code.push(0x75, 0x01, 0xfb, 0xc3); // jne ret; sti; ret, with STI's interrupt shadow covering RET.
     // Reject before the scratch tail, not at the slot end: bridges such as CoCreateInstance keep their data there.
-    if (code.length > GUEST_CALLBACK_STRIDE - GUEST_CALLBACK_SCRATCH_BYTES) {
+    if (code.length > frame.scratchAddress - frame.trampoline) {
       throw new Error(`客体回调桥超出槽位: ${code.length}`);
     }
   }

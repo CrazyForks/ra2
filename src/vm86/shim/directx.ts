@@ -347,8 +347,6 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
     /** The native battlefield loop calls BLOCKBEGIN twice consecutively; the pair should consume only one refresh period. */
     private vblankPairSecondCall = false;
     private readonly clipperWindows = new Map<number, number>();
-    /** Reused DDSURFACEDESC staging for EnumDisplayModes; the enumeration copies it before returning. */
-    private enumModesDesc = 0;
 
     dispatchDirectx(key: string, name: string, a: number[]): Win32Result | null {
       switch (key) {
@@ -427,11 +425,10 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
           case 'EnumDisplayModes': {
             const callback = a[4] ?? 0;
             if (!callback) return { eax: 0x8000_4003 };
-            // One reused staging descriptor and one reusable callback slot: the old code leaked 108 heap bytes and a
-            // dynamic stub per call, the same family of leak as the CoCreateInstance bridge.
-            this.enumModesDesc ||= this.alloc(108, true);
-            const desc = this.enumModesDesc;
-            if (!desc) return { eax: OUT_OF_MEMORY };
+            // Each suspended callback keeps its own mode snapshot, including across nested mode changes.
+            // Slot ownership releases the descriptor with the bridge, without allocating permanent heap data.
+            const frame = this.reserveGuestCallback(108); // sizeof(DDSURFACEDESC)
+            const desc = frame.scratchAddress;
             this.writeSurfaceDesc(desc, {
               object: 0,
               width: this.displayWidth,
@@ -449,7 +446,6 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
               dirty: false,
             });
             const originalReturn = this.readU32(call.stack);
-            const frame = this.reserveGuestCallback();
             const code: number[] = [];
             const emit32 = (value: number) =>
               code.push(value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, value >>> 24);

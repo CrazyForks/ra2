@@ -74,6 +74,8 @@ RA2 and YR remain separate engines. A single gamemd loading original RA2 resourc
 
 DirectPlay enumeration returns the reserved guest callback frame to the caller so its staging allocations can follow that frame's lifetime. Before another enumeration, the shim reclaims only buffers whose callback owner flag is clear; guest return tails and thread exit clear that flag. Nested or concurrent enumerations retain their own descriptors, names, and timeout pointers. An unrelated callback reusing a slot may delay collection, but cannot cause early release. Failed allocation or bridge generation rolls back unpublished buffers and reservations. Remaining staging is bounded by the callback-slot count and ends with the VM heap.
 
+Guest callback slots can reserve a caller-sized scratch tail; bridge generation checks its code against that boundary before publication. DirectDraw display-mode enumeration stores its descriptor there, keeping each active callback's mode snapshot stable across nested mode changes without permanent heap staging. The existing callback owner and return/exit paths govern both code and scratch lifetime.
+
 Date and time formatting validate only the SYSTEMTIME fields used by the respective API. Date validation checks actual month lengths and leap years before deriving the weekday; unused time fields do not invalidate a date, and unused date fields do not invalidate a time.
 
 ## Scheduling, presentation, and ownership

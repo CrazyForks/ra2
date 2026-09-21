@@ -10,6 +10,7 @@ import {
   HYPERCALL_THREAD_CURRENT,
 } from '../../src/vm86/pe';
 import { callShim, createGuestMemory, readU32, writeAsciiZ, writeU32 } from '../helpers/guestMemory';
+import type { GuestCallbackFrame } from '../../src/vm86/shim/state';
 
 class AllocationShim extends Win32Shim {
   allocateCode(bytes: Uint8Array): number {
@@ -18,8 +19,14 @@ class AllocationShim extends Win32Shim {
   createCom(): number {
     return this.createComObject('ITest', [['Invoke', 4]]);
   }
-  reserveCallback() {
-    return this.reserveGuestCallback();
+  reserveCallback(scratchBytes?: number) {
+    return this.reserveGuestCallback(scratchBytes);
+  }
+  publishCallback(frame: GuestCallbackFrame, body: number[]) {
+    const code = body.slice();
+    this.appendGuestCallbackReturn(code, frame, 0x401000);
+    this.memory.write_memory(code, frame.trampoline);
+    return code.length;
   }
   enumerate(stack: number): void {
     this.invokeGuestCallbacks(
@@ -49,6 +56,27 @@ function fixture() {
 }
 
 describe('动态客体代码内存边界', () => {
+  it.each([-1, GUEST_CALLBACK_STRIDE, 1.5, NaN])('rejects invalid scratch size %s before reserving a slot', (size) => {
+    const { memory, shim } = fixture();
+    expect(() => shim.reserveCallback(size)).toThrow(/scratch size/);
+    expect(readU32(memory, GUEST_CALLBACK_OWNERS)).toBe(0);
+    expect(readU32(memory, HYPERCALL_CALLBACK_DEPTH)).toBe(0);
+  });
+
+  it('rejects callback code before it can overwrite its variable-size scratch tail', () => {
+    const { memory, shim } = fixture();
+    const frame = shim.reserveCallback(108);
+    const scratch = new Uint8Array(108).fill(0xa5);
+    memory.write_memory(scratch, frame.scratchAddress);
+    const tailBytes = shim.publishCallback(frame, []);
+    const body = new Array(frame.scratchAddress - frame.trampoline - tailBytes).fill(0x90);
+    expect(shim.publishCallback(frame, body)).toBe(GUEST_CALLBACK_STRIDE - scratch.length);
+    expect(memory.read_memory(frame.scratchAddress, scratch.length)).toEqual(scratch);
+    const before = memory.read_memory(frame.trampoline, GUEST_CALLBACK_STRIDE).slice();
+    expect(() => shim.publishCallback(frame, [...body, 0x90])).toThrow(/回调桥超出槽位/);
+    expect(memory.read_memory(frame.trampoline, GUEST_CALLBACK_STRIDE)).toEqual(before);
+  });
+
   it.each([0x30000, 0x2fff0])('分配到固件边界 %i 后，COM 桩跳过整个 BIOS', (size) => {
     const { memory, shim } = fixture();
     const firmware = new Uint8Array(0x10000).fill(0xa5);
