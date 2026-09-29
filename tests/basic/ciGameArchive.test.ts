@@ -10,6 +10,7 @@ it('CI 复用前端提取器：嵌套包、目录扁平化、零字节、可选�
   try {
     const inner = zipSync({
       '安装目录/RA2.MIX': strToU8('fixture'),
+      '安装目录/GAME.EXE': strToU8('package-executable'),
       '安装目录/empty.mix': new Uint8Array(),
       '安装目录/ignored.txt': strToU8('ignored'),
       'taunts/test.wav': strToU8('sound'),
@@ -17,12 +18,13 @@ it('CI 复用前端提取器：嵌套包、目录扁平化、零字节、可选�
     });
     await writeFile(join(root, 'archive.bin'), zipSync({ 'data/game.zip': inner }));
     const output = join(root, 'output');
-    await extractGameArchive(join(root, 'archive.bin'), output, ['ra2.mix', 'empty.mix', 'taunts/']);
+    await extractGameArchive(join(root, 'archive.bin'), output, ['game.exe', 'ra2.mix', 'empty.mix', 'taunts/']);
+    expect(await readFile(join(output, 'game.exe'), 'utf8')).toBe('package-executable');
     expect(await readFile(join(output, 'ra2.mix'), 'utf8')).toBe('fixture');
     expect((await readFile(join(output, 'empty.mix'))).length).toBe(0);
     expect(await readFile(join(output, 'taunts/test.wav'), 'utf8')).toBe('sound');
     expect(await readFile(join(output, 'taunts/tauam01.wav'), 'utf8')).toBe('flat-sound');
-    expect(await readdir(output)).toEqual(['empty.mix', 'ra2.mix', 'taunts']);
+    expect(await readdir(output)).toEqual(['empty.mix', 'game.exe', 'ra2.mix', 'taunts']);
     expect(await readdir(root)).toEqual(['archive.bin', 'output']);
   } finally {
     await rm(root, { recursive: true, force: true });

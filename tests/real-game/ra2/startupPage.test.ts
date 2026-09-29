@@ -1,10 +1,11 @@
+import { gameResourceExe } from '../helpers/gameDir';
+import { supportedGame } from '../../../src/games/catalog';
 import { expect } from 'vitest';
 import { createHash } from 'node:crypto';
 import { describeVmSmoke, type VmSmokeOptions } from '../helpers/runVmSmoke';
-import { installRa2SkirmishStartup } from '../../../src/games/ra2/startupPage';
 
 const options: VmSmokeOptions = {
-  executablePath: '.tmp-third-party/game.exe',
+  executablePath: gameResourceExe('ra2'),
   gameId: 'ra2',
   memoryBytes: 768 * 1024 * 1024,
   timeoutMs: 60000,
@@ -16,7 +17,12 @@ const options: VmSmokeOptions = {
   clickPageTitles: ['skirmish'],
   settleMessages: 200,
   prepareGuest(memory, exe, reserve) {
-    installRa2SkirmishStartup(memory, reserve, createHash('sha256').update(exe).digest('hex'));
+    supportedGame('ra2').runtimeHooks!.resolve!(memory, exe).prepareStartupPage!(
+      memory,
+      'skirmish',
+      createHash('sha256').update(exe).digest('hex'),
+      reserve,
+    );
   },
 };
 describeVmSmoke('RA2 启动直达遭遇战', {

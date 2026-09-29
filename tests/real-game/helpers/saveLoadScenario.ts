@@ -1,4 +1,5 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { InstallationFiles, silentAudio } from './installationFiles';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -6,15 +7,13 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { describe, expect, it } from 'vitest';
 import { V86 } from 'v86';
-import { VmCore, type VmAudioSink } from '../../../src/adapter/vmCore';
+import { VmCore } from '../../../src/adapter/vmCore';
 import { PortGameFileProvider, serveFileProvider } from '../../../src/adapter/fileProviderPort';
 import type { VmStatus } from '../../../src/app/session/runtimeEvents';
 import { SUPPORTED_GAMES, type SupportedGameId } from '../../../src/games/catalog';
 import { Win32Shim } from '../../../src/games/win32Shim';
 import { RA2_YR_RESOURCE_POLICY } from '../../../src/games/shared/resourcePolicy';
 import type { GameFrameReader } from '../../../src/games/performance';
-import { MemoryGameFileProvider } from '../../../src/resources/providers/memory';
-import { normalizeGuestPath } from '../../../src/vm86/paths';
 import { requireGameResources, REPO_ROOT, resolveGameDir } from './gameDir';
 
 class InspectableShim extends Win32Shim {
@@ -26,82 +25,22 @@ class InspectableShim extends Win32Shim {
   }
 }
 
-const silentAudio: VmAudioSink = {
-  createBuffer() {},
-  duplicateBuffer: () => true,
-  setFormat: () => true,
-  writeBuffer: (_id, _offset, bytes) => bytes.byteLength,
-  play: () => true,
-  stop: () => true,
-  setCurrentPosition: () => true,
-  setVolume: () => true,
-  setPan: () => true,
-  setFrequency: () => true,
-  getState: () => null,
-  releaseBuffer: () => true,
-  setMasterVolume() {},
-  stopAll() {},
-  async destroy() {},
-};
-
-/** Read installation files lazily; never write saves into the player's installation. */
-class InstallationFiles extends MemoryGameFileProvider {
-  private readonly paths = new Map<string, string>();
-  constructor(directory: string) {
-    super();
-    const visit = (relative: string) => {
-      for (const entry of readdirSync(join(directory, relative), { withFileTypes: true })) {
-        const path = relative ? `${relative}/${entry.name}` : entry.name;
-        if (entry.isDirectory()) visit(path);
-        else if (!/\.(sav|ini)$/i.test(path)) this.paths.set(normalizeGuestPath(path), join(directory, path));
-      }
-    };
-    visit('');
-  }
-  hasKnownFile(path: string): boolean {
-    return this.files.has(normalizeGuestPath(path)) || this.paths.has(normalizeGuestPath(path));
-  }
-  override async read(path: string): Promise<Uint8Array | null> {
-    const own = await super.read(path);
-    if (own) return own;
-    const disk = this.paths.get(normalizeGuestPath(path));
-    return disk ? new Uint8Array(readFileSync(disk)) : null;
-  }
-  override async readPrefix(path: string, length: number) {
-    const bytes = await this.read(path);
-    return bytes ? { bytes: bytes.slice(0, length), totalSize: bytes.length } : null;
-  }
-  override async readRange(path: string, offset: number, length: number) {
-    return (await this.read(path))?.slice(offset, offset + length) ?? null;
-  }
-  override async list(directory: string): Promise<string[]> {
-    const prefix = normalizeGuestPath(directory);
-    const entries = new Set<string>();
-    for (const path of [...this.paths.keys(), ...this.files.keys()]) {
-      if (prefix && !path.startsWith(`${prefix}/`)) continue;
-      entries.add((prefix ? path.slice(prefix.length + 1) : path).split('/')[0]!);
-    }
-    return [...entries];
-  }
-}
-
 interface SaveSnapshot {
+  executableSha256: string;
   bytes: Uint8Array;
   frame: number;
   objects: number;
 }
 
-async function runSession(
-  gameId: SupportedGameId,
-  expectedHash: string,
-  saved?: SaveSnapshot,
-): Promise<SaveSnapshot | undefined> {
+async function runSession(gameId: SupportedGameId, saved?: SaveSnapshot): Promise<SaveSnapshot | undefined> {
   const game = SUPPORTED_GAMES.find((game) => game.id === gameId)!;
   const files = new InstallationFiles(resolveGameDir(gameId));
   if (saved) await files.write('cold.sav', saved.bytes.slice());
   const executableBytes = (await files.read(game.executable))!;
-  // The read-only frame counter is version-specific.
-  expect(createHash('sha256').update(executableBytes).digest('hex')).toBe(expectedHash);
+  const executableSha256 = createHash('sha256').update(executableBytes).digest('hex');
+  // Exercise the supplied package executable, and require an identical executable for the cold load.
+  if (saved) expect(executableSha256).toBe(saved.executableSha256);
+  console.log(`${gameId} save/load executable: ${executableSha256}`);
   const channel = new MessageChannel();
   const close = serveFileProvider(files, channel.port1);
   const remote = new PortGameFileProvider('cold-load regression', channel.port2, await files.list(''));
@@ -150,8 +89,8 @@ async function runSession(
   );
   const visible = (text: string) =>
     shim.inspectWindowState().find((window) => window.text === text && shim.isWindowVisible(window.hwnd));
-  const wait = async (label: string, condition: () => boolean) => {
-    const deadline = Date.now() + 60_000;
+  const wait = async (label: string, condition: () => boolean, timeoutMs = 60_000) => {
+    const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (status && ['error', 'blocked', 'exited'].includes(status.phase)) throw new Error(status.detail);
       if (condition()) return;
@@ -178,14 +117,18 @@ async function runSession(
     click(visible(text)!.hwnd);
   };
   const nativeFrame = () => {
-    frameReader ??= game.runtimeHooks!.createFrameReader!(vm, expectedHash)!;
+    frameReader ??= game.runtimeHooks!.createFrameReader!(vm, executableBytes)!;
     const counters = frameReader?.();
     if (!counters) throw new Error('Unsupported native frame counter');
     return counters.frame;
   };
   try {
     await core.start();
-    await wait('main menu', () => !!visible('GUI:SinglePlayer'));
+    // The bundled YR startup movie is approximately four minutes long. Let a fresh
+    // installation play it naturally; save/load UI operations retain the shorter timeout.
+    const startupAt = performance.now();
+    await wait('main menu', () => !!visible('GUI:SinglePlayer'), 300_000);
+    console.log(`${gameId} native main menu reached after ${((performance.now() - startupAt) / 1000).toFixed(1)}s`);
     await delay(8000);
     await button('GUI:SinglePlayer');
     if (saved) {
@@ -224,7 +167,7 @@ async function runSession(
     const result = [...files.files].find(([path]) => path.endsWith('.sav'))?.[1];
     expect(result).toBeDefined();
     expect(savedObjects, 'native persistence must not be a successful no-op').toBeGreaterThan(0);
-    const snapshot = { bytes: result!.slice(), frame: nativeFrame(), objects: savedObjects };
+    const snapshot = { executableSha256, bytes: result!.slice(), frame: nativeFrame(), objects: savedObjects };
     await button('GUI:OK');
     await wait('save confirmation closes', () => !visible('GUI:OK'));
     return snapshot;
@@ -239,19 +182,19 @@ async function runSession(
 }
 
 // Fail at collection time: missing game resources must surface as a failure, never as a silently removed suite.
-export function describeSaveLoad(gameId: SupportedGameId, expectedHash: string): void {
+export function describeSaveLoad(gameId: SupportedGameId): void {
   requireGameResources(gameId);
   describe(`${gameId} native save cold load`, () => {
     it('saves through the normal menus, then loads persisted bytes in a fresh VM through the file port', async () => {
-      const saved = await runSession(gameId, expectedHash);
+      const saved = await runSession(gameId);
       const directory = await mkdtemp(join(tmpdir(), 'ra2-save-load-'));
       try {
         const path = join(directory, 'cold.sav');
         await writeFile(path, saved!.bytes);
-        await runSession(gameId, expectedHash, { ...saved!, bytes: new Uint8Array(await readFile(path)) });
+        await runSession(gameId, { ...saved!, bytes: new Uint8Array(await readFile(path)) });
       } finally {
         await rm(directory, { recursive: true, force: true });
       }
-    }, 240_000);
+    }, 720_000);
   });
 }

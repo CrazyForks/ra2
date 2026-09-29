@@ -43,39 +43,6 @@ import { type PcmPlayOptions, type PcmWaveFormat } from './audio';
 import type { DplayTransportFactory } from './shim/dplayTransport';
 import type { GameShimProfile } from './shim/gameProfile';
 
-const GUEST_BINK_VIDEO_EXPORTS = new Set([
-  '_BinkSetSoundSystem@8',
-  '_BinkOpenDirectSound@4',
-  '_BinkOpen@8',
-  '_BinkClose@4',
-  '_BinkDDSurfaceType@4',
-  '_BinkGoto@12',
-  '_BinkSetVolume@8',
-  '_BinkPause@8',
-  '_BinkNextFrame@4',
-  '_BinkCopyToBuffer@28',
-  '_BinkDoFrame@4',
-  '_BinkWait@4',
-  '_BinkGetError@0',
-]);
-
-const GUEST_BINK_SOUND_SETUP_EXPORTS = new Set(['_BinkSetSoundSystem@8', '_BinkOpenDirectSound@4']);
-
-/**
- * Keep Open/Close in the host as lifecycle boundaries; connect per-frame methods directly to guest DLLs, avoiding COM1 IRQ wakeups on every CopyToBuffer, the precise panic boundary in user logs.
- */
-const DIRECT_NATIVE_BINK_EXPORTS = new Set([
-  '_BinkDDSurfaceType@4',
-  '_BinkGoto@12',
-  '_BinkSetVolume@8',
-  '_BinkPause@8',
-  '_BinkNextFrame@4',
-  '_BinkCopyToBuffer@28',
-  '_BinkDoFrame@4',
-  '_BinkWait@4',
-  '_BinkGetError@0',
-]);
-
 /** Minimal v86 interface to guest physical memory. */
 export interface GuestMemory {
   read_memory(offset: number, length: number): Uint8Array;
@@ -238,7 +205,7 @@ export interface Win32AudioSink {
   setVolume(id: number, volume: number): boolean;
   setPan(id: number, pan: number): boolean;
   setFrequency(id: number, frequency: number): boolean;
-  getState(id: number): { positionBytes: number; playing: boolean } | null;
+  getState(id: number): { positionBytes: number; writePositionBytes?: number; playing: boolean } | null;
   releaseBuffer(id: number): boolean;
 }
 
@@ -469,13 +436,6 @@ const CommonWin32Shim = withOle32(
 
 export class Win32ShimBase extends CommonWin32Shim {
   dispatch(call: Win32Call): Win32Result | null {
-    // Release the cross-call lock only after the _BinkClose redirected stub starts. If the DLL
-    // imports Win32 internally, this dispatch still holds atomicGuestCall's inner lock;
-    // otherwise it is already the next Win32 call after BinkClose returned.
-    if (this.nativeBinkThreadReleasePending) {
-      this.nativeBinkThreadReleasePending = false;
-      this.releaseNativeBinkThread();
-    }
     this.flushDestroyedWindows();
     const exclusive = this.dispatchExclusive(call);
     if (exclusive) return exclusive;
@@ -483,156 +443,6 @@ export class Win32ShimBase extends CommonWin32Shim {
     const a = call.args;
     // Register game-specific successful short circuits in profiles; unknown games still stop at boundaries even with same-named DLL imports.
     if (this.gameProfile.successfulImports?.includes(key)) return { eax: 0 };
-    // Bink transitions: return a valid handle pointing to a synthetic guest BINK structure and set FrameNum
-    // to >= Frames, immediately ending the playback loop's FrameNum < Frames condition. The game treats video as
-    // finished and advances natively. A null Open handle still creates a player that directly reads
-    // [0x8]=Frames/[0xc]=FrameNum from IVT garbage, making FrameNum<Frames
-    // permanently true and trapping BinkWait/BinkGoto so loading never completes.
-    if (key.startsWith('BINKW32.DLL!')) {
-      const exportName = key.slice(key.indexOf('!') + 1);
-      // RA2/YR call SetSoundSystem for every movie window, but old Bink backends
-      // are process-global. Reinitialization corrupts cached callbacks, reliably causing #UD in YR;
-      // retain the first DirectSound backend and report success for later calls.
-      if (exportName === '_BinkSetSoundSystem@8' && this.nativeBinkSoundSystemReady) {
-        return { eax: 1 };
-      }
-      if (exportName === '_BinkOpen@8') {
-        // The cooperative VM cannot truly run Bink background I/O alongside decoding; use public
-        // BINKNOTHREADEDIO to avoid background I/O threads while retaining original-DLL pixel conversion.
-        this.writeU32(call.stack + 8, (a[1] ?? 0) | 0x0800_0000);
-      }
-      const binkHandle = a[0] ?? 0;
-      const sourceFile =
-        exportName === '_BinkOpen@8' && (a[1] ?? 0) & 0x0080_0000 ? this.fileHandles.get(a[0] ?? 0) : undefined;
-      const sourceIsComplete =
-        !!sourceFile &&
-        (sourceFile.sharedMirror === true ||
-          sourceFile.bytes.length >= sourceFile.size ||
-          this.rangeBackedFiles.has(sourceFile.path));
-      const nativeOpenAvailable =
-        this.gameProfile.nativeBinkPlaybackLimit === undefined ||
-        this.nativeBinkPlaybackOpens < this.gameProfile.nativeBinkPlaybackLimit;
-      const useNativeBink =
-        GUEST_BINK_SOUND_SETUP_EXPORTS.has(exportName) ||
-        (exportName === '_BinkOpen@8'
-          ? (!this.gameProfile.skipIncompleteBinkPlayback || sourceIsComplete) && nativeOpenAvailable
-          : this.nativeBinkPlaybackActive);
-      if (useNativeBink && GUEST_BINK_VIDEO_EXPORTS.has(exportName)) {
-        if (exportName === '_BinkSetSoundSystem@8') {
-          // The game passes an IAT/hypercall-stub BinkOpenDirectSound address, which native Bink caches
-          // and calls from its decoding thread. Replace it with the actual guest export before BinkSetSoundSystem,
-          // or host short-circuiting returns 0 and movies display without ever creating audio buffers.
-          const openDirectSound = this.loadGuestDll('BINKW32.DLL')?.exports.get('_BinkOpenDirectSound@4');
-          if (openDirectSound) this.writeU32(call.stack + 4, openDirectSound);
-        }
-        // SetSoundSystem and BinkOpen both return from hypercalls into guest DLLs. CLI at the dynamic bridge's start
-        // still leaves one instruction after host return but before CLI, allowing PIT
-        // to switch threads and desynchronize v86 IRQ state. Pin the guest thread at sound initialization
-        // through its matching BinkClose; Open reuses the same pin depth.
-        if (exportName === '_BinkSetSoundSystem@8' || exportName === '_BinkOpen@8') {
-          this.pinNativeBinkThread();
-        }
-        if (exportName === '_BinkClose@4') {
-          this.routeStaticGuestDllExports('BINKW32.DLL', DIRECT_NATIVE_BINK_EXPORTS, false);
-          this.restoreDynamicGuestDllExports('BINKW32.DLL');
-        }
-        if (this.redirectGuestDllExport(call, 'BINKW32.DLL', exportName, true)) {
-          if (exportName === '_BinkSetSoundSystem@8') {
-            this.nativeBinkSoundSystemReady = true;
-          } else if (exportName === '_BinkOpen@8') {
-            this.nativeBinkPlaybackActive = true;
-            this.nativeBinkPlaybackOpens++;
-            this.routeStaticGuestDllExports('BINKW32.DLL', DIRECT_NATIVE_BINK_EXPORTS, true);
-          } else if (exportName === '_BinkClose@4') {
-            this.nativeBinkPlaybackActive = false;
-            // Only the return address has changed so far; guest BinkClose has not run. Keep the outer lock
-            // until cleanup enters atomicGuestCall or the next import after full return.
-            this.nativeBinkThreadReleasePending = true;
-            this.binkNextFrameAt.delete(binkHandle);
-          } else if (DIRECT_NATIVE_BINK_EXPORTS.has(exportName)) {
-            this.routeDynamicGuestDllExport(call, 'BINKW32.DLL', exportName);
-          }
-          return { eax: 0 };
-        }
-        if (exportName === '_BinkSetSoundSystem@8' || exportName === '_BinkOpen@8') {
-          this.releaseNativeBinkThread();
-        }
-      }
-      switch (key) {
-        case 'BINKW32.DLL!_BinkSetSoundSystem@8':
-          return { eax: 1 };
-        case 'BINKW32.DLL!_BinkOpenDirectSound@4':
-          return { eax: 0 };
-        case 'BINKW32.DLL!_BinkGetError@0':
-          return { eax: 0 };
-        case 'BINKW32.DLL!_BinkOpen@8': {
-          const handle = this.alloc(0x100, true);
-          if (!handle) return { eax: 0 };
-          this.writeU32(handle + 0x00, 640); // Width
-          this.writeU32(handle + 0x04, 480); // Height
-          this.writeU32(handle + 0x08, 1); // Frames
-          this.writeU32(handle + 0x0c, 1); // FrameNum >= Frames means immediate completion.
-          this.writeU32(handle + 0x10, 1); // LastFrameNum
-          this.writeU32(handle + 0x14, 15); // FrameRate
-          this.writeU32(handle + 0x18, 1); // FrameRateDiv must be nonzero to avoid division by zero when computing frame intervals.
-          this.binkVideos.add(handle);
-          this.binkNextFrameAt.set(handle, this.clock.now());
-          return { eax: handle };
-        }
-        // BinkWait paces by frame rate: return 0 when due so the game calls DoFrame/NextFrame,
-        // otherwise 1 to wait. Always returning 1 makes the video-update virtual method return al=0 forever,
-        // hanging callers waiting for one played frame, a cause of frozen battlefields.
-        case 'BINKW32.DLL!_BinkWait@4': {
-          const h = a[0] ?? 0;
-          if (!this.binkVideos.has(h) && !this.nativeBinkPlaybackActive) return { eax: 0 };
-          const now = this.clock.now();
-          const next = this.binkNextFrameAt.get(h);
-          if (next === undefined || now >= next) {
-            const rate = this.readU32(h + 0x14) || 15;
-            const div = this.readU32(h + 0x18) || 1;
-            this.binkNextFrameAt.set(h, now + Math.max(1, Math.round((1000 * div) / rate)));
-            return { eax: 0 };
-          }
-          return { eax: 1 };
-        }
-        case 'BINKW32.DLL!_BinkNextFrame@4': {
-          const h = a[0] ?? 0;
-          if (this.binkVideos.has(h)) {
-            const frame = this.readU32(h + 0x0c) + 1;
-            this.writeU32(h + 0x0c, frame);
-            this.writeU32(h + 0x10, frame - 1);
-          }
-          return { eax: 0 };
-        }
-        case 'BINKW32.DLL!_BinkGoto@12': {
-          // Looping background video seeks back to frame 1; clamp to at least Frames to retain completed-playback state.
-          const h = a[0] ?? 0;
-          if (shimTraceEnabled('VM_TRACE_BINK')) {
-            const caller = this.readU32(call.stack);
-            console.log(`🎬 BinkGoto h=0x${h.toString(16)} 跳帧=${a[1]} 调用方=0x${caller.toString(16)}`);
-          }
-          if (this.binkVideos.has(h)) {
-            const frames = this.readU32(h + 0x08);
-            this.writeU32(h + 0x0c, Math.max(a[1] ?? 0, frames));
-          }
-          return { eax: 1 };
-        }
-        case 'BINKW32.DLL!_BinkClose@4': {
-          const h = a[0] ?? 0;
-          this.nativeBinkThreadReleasePending = false;
-          this.releaseNativeBinkThread();
-          this.binkVideos.delete(h);
-          this.binkNextFrameAt.delete(h);
-          return { eax: 0 };
-        }
-        case 'BINKW32.DLL!_BinkDoFrame@4':
-          return { eax: 0 };
-        case 'BINKW32.DLL!_BinkCopyToBuffer@28':
-          return { eax: 1 };
-        default:
-          return { eax: 0 };
-      }
-    }
     if (key.startsWith('OLEAUT32.DLL!')) {
       switch (key) {
         case 'OLEAUT32.DLL!ord8': // VariantInit

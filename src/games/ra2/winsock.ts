@@ -1,4 +1,3 @@
-import { installRa2LanTiming } from './networkTiming';
 import type { Win32Result, VmNetworkStatus } from '../../vm86/win32';
 import type { Constructor } from '../../vm86/shim/state';
 import type { withDplayx } from '../../vm86/shim/dplayx';
@@ -134,13 +133,6 @@ export function formatRa2Address(addr: number): string {
  */
 export function withRa2Winsock<TBase extends Constructor<DplayChain>>(Base: TBase) {
   return class extends Base {
-    constructor(...args: any[]) {
-      super(...args);
-      if (this.options.ra2NetworkEnabled && this.options.ra2ExeHash) {
-        installRa2LanTiming(this.memory, this.options.ra2ExeHash, (code) => this.allocateDynamicCode(code));
-      }
-    }
-
     private wsaStartupCount = 0;
     private wsaError = 0;
     private readonly ra2Sockets = new Map<number, Ra2SocketState>();

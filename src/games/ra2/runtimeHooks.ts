@@ -1,12 +1,12 @@
+import { resolveRa2Movies, resolveRa2Calibration } from './adaptivePatches';
+import { resolveRa2ShortGame } from './shortGame';
+import { createAdaptiveRuntimeHooks } from '../shared/adaptiveRuntimeHooks';
 import type { GuestMemory } from '../../vm86/win32';
 import type { GameRuntimeHooks } from '../runtimeHooks';
 import { readF64, readU32, writeF64 } from '../shared/guestMemoryIO';
 import { writeGameSpeedFlag } from '../shared/gameSpeedFlag';
 import { skipStartupMovieBlock } from '../shared/startupMovieSkip';
-import { createRa2FrameReader } from './performance';
-import { patchRa2ShortGame } from './shortGame';
-import { installRa2BattleStartup } from './battleStartup';
-import { installRa2LanStartup, installRa2SkirmishStartup } from './startupPage';
+import { createRa2FrameReader, RA2_SETTINGS_SIGNATURE } from './performance';
 
 const RULES_INSTANCE_POINTER = 0x0083_9848;
 const RULES_REPAIR_RATE_OFFSET = 0x1348;
@@ -87,33 +87,20 @@ export function repairRa2InvalidRepairRate(memory: GuestMemory, message: number)
 }
 
 export const RA2_RUNTIME_HOOKS: GameRuntimeHooks = Object.freeze({
+  resolve(memory: GuestMemory, exe: Uint8Array): GameRuntimeHooks {
+    return createAdaptiveRuntimeHooks(memory, exe, {
+      label: 'RA2',
+      settingsSignature: RA2_SETTINGS_SIGNATURE,
+      menuRegister: 0xbd,
+      initialSendRate: 3,
+      repairInvalidRate: true,
+      createFrameReader: createRa2FrameReader,
+      patches: (layout) => [
+        resolveRa2Movies(layout.image),
+        resolveRa2Calibration(layout.image),
+        resolveRa2ShortGame(layout.image, layout.settings.pointer),
+      ],
+    });
+  },
   createFrameReader: createRa2FrameReader,
-  prepareStartupPage(memory: GuestMemory, page: string, hash: string, reserve: (size: number) => number): void {
-    if (page === 'battle') {
-      installRa2BattleStartup(memory, reserve, hash);
-      return;
-    }
-    if (page === 'lan') {
-      installRa2LanStartup(memory, reserve, hash);
-      return;
-    }
-    if (page !== 'skirmish') throw new Error(`RA2 尚不支持直达页面：${page}`);
-    installRa2SkirmishStartup(memory, reserve, hash);
-  },
-  prepareImage(memory: GuestMemory): void {
-    skipRa2StartupMovies(memory);
-    shortenRa2CpuCalibration(memory);
-    patchRa2ShortGame(memory);
-  },
-  beforeHostMessage: repairRa2InvalidRepairRate,
-  writeGameSpeedFlag: writeRa2GameSpeed,
-  crashHint(vector: number, eip: number): string {
-    // SwizzleManager's missing old-pointer mapping branch deliberately divides by zero.
-    // Saves from the former OleSaveToStream success stub omit object data; loading them
-    // in a fresh process reproduces this address even with all installation assets present.
-    if (vector === 0 && eip === 0x0069_fcbd)
-      return '；存档对象引用恢复失败：存档中的对象数据缺失或不一致。旧版保存缺陷生成的不完整存档无法补回丢失的数据；请刷新网页后开始新游戏并创建新存档。';
-    if (vector !== 0 || eip !== 0x006d_6817) return '';
-    return '；已知签名：RA2 RulesClass::RepairRate 为 0，建筑修理节拍在 0x6d6817 除零';
-  },
 });

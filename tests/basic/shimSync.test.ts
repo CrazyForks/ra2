@@ -6,6 +6,41 @@ const WAIT_OBJECT_0 = 0;
 const WAIT_TIMEOUT = 0x102;
 const WAIT_FAILED = 0xffff_ffff;
 
+describe('Guest wait handle identity', () => {
+  it.each([
+    ['ra2', 'event', false],
+    ['yr', 'event', false],
+    ['ra2', 'mutex', false],
+    ['yr', 'mutex', false],
+    ['ra2', 'event', true],
+    ['yr', 'mutex', true],
+  ] as const)('%s %s handles cannot alias later threads (closed=%s)', (gameId, kind, closed) => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory, { gameId });
+    let handle = 0;
+    // Cross the former first-thread handle through normal create/close calls, without keeping thousands of objects alive.
+    for (let count = 0; count < 5000 && handle < 0x0001_1000; count++) {
+      if (handle) callShim(shim, 'KERNEL32.DLL!CloseHandle', [handle]);
+      handle =
+        kind === 'event'
+          ? callShim(shim, 'KERNEL32.DLL!CreateEventA', [0, 1, 1, 0]).eax
+          : callShim(shim, 'KERNEL32.DLL!CreateMutexA', [0, 0, 0]).eax;
+    }
+    expect(handle).toBeGreaterThanOrEqual(0x0001_1000);
+    expect(callShim(shim, 'KERNEL32.DLL!WaitForSingleObject', [handle, 0]).eax).toBe(WAIT_OBJECT_0);
+    if (closed) callShim(shim, 'KERNEL32.DLL!CloseHandle', [handle]);
+    const thread = callShim(shim, 'KERNEL32.DLL!CreateThread', [0, 0x10000, 0x401000, 0, 0, 0]).eax;
+    expect(thread).not.toBe(0);
+    expect(thread).not.toBe(handle);
+    expect(callShim(shim, 'KERNEL32.DLL!WaitForSingleObject', [handle, 0]).eax).toBe(
+      closed ? WAIT_FAILED : WAIT_OBJECT_0,
+    );
+    if (!closed) callShim(shim, 'KERNEL32.DLL!CloseHandle', [handle]);
+    expect(callShim(shim, 'KERNEL32.DLL!WaitForSingleObject', [handle, 0]).eax).toBe(WAIT_FAILED);
+    expect(callShim(shim, 'KERNEL32.DLL!WaitForSingleObject', [thread, 0]).eax).toBe(WAIT_TIMEOUT);
+  });
+});
+
 describe('Win32 event 语义', () => {
   it('auto-reset event 只消费一次，manual-reset event 保持到 ResetEvent', () => {
     const memory = createGuestMemory();

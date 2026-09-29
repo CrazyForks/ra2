@@ -1,10 +1,11 @@
+import { gameResourceExe } from '../helpers/gameDir';
+import { supportedGame } from '../../../src/games/catalog';
 import { expect } from 'vitest';
 import { createHash } from 'node:crypto';
 import { describeVmSmoke, type VmSmokeOptions } from '../helpers/runVmSmoke';
-import { installYrSkirmishStartup } from '../../../src/games/yr/startupPage';
 
 const options: VmSmokeOptions = {
-  executablePath: '.tmp-third-party/gamemd.exe',
+  executablePath: gameResourceExe('yr'),
   gameId: 'yr',
   memoryBytes: 768 * 1024 * 1024,
   timeoutMs: 60000,
@@ -15,7 +16,12 @@ const options: VmSmokeOptions = {
   clickPageTitles: ['skirmish'],
   settleMessages: 200,
   prepareGuest(memory, exe, reserve) {
-    installYrSkirmishStartup(memory, reserve, createHash('sha256').update(exe).digest('hex'));
+    supportedGame('yr').runtimeHooks!.resolve!(memory, exe).prepareStartupPage!(
+      memory,
+      'skirmish',
+      createHash('sha256').update(exe).digest('hex'),
+      reserve,
+    );
   },
 };
 describeVmSmoke('YR 启动直达遭遇战', {

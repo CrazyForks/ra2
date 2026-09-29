@@ -1,9 +1,7 @@
-/* Place the temporary project background independently on the stage; preserve its aspect ratio and leave the base color visible when ratios differ. */
+/* First screen presentation: the RA2 main-menu theme from components/ra2menu/ra2menu.css covers the whole viewport.
+   This file keeps the .game-home stage integration and the picker's interior content, checklist, and network styling. */
 .game-home #stage {
-  background:
-    linear-gradient(#0003, #0003),
-    url(/backgrounds/ra2vm-launcher-background.jpg) center / contain no-repeat,
-    #121315;
+  background: #0d0d0d;
 }
 .game-home #screen-frame {
   visibility: hidden;
@@ -11,177 +9,195 @@
 .game-home #vm-controls {
   display: none;
 }
-/* Keep content within the image's inner screen, scrolling independently without covering the top logo or surrounding metal frame. */
+/* The menu screen replaces the inner-screen overlay and owns its scrolling; #ui stays a pass-through layer. */
 .game-home #ui {
-  inset: auto;
-  top: 52%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  width: min(80vw, 114.2857vh);
-  height: min(70vh, 49vw);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  overflow-y: auto;
-  padding: 8px;
-  box-sizing: border-box;
+  position: fixed;
+  inset: 0;
+  transform: none;
+  width: auto;
+  height: auto;
+  overflow: visible;
 }
 .game-home #ui > .game-source-picker {
-  position: relative;
-  inset: auto;
-  transform: none;
-  flex: 0 0 auto;
-  box-sizing: border-box;
-  width: min(760px, 100%);
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
   max-height: none;
-  margin: auto 0;
-  padding: 28px;
-  overflow: visible;
-  color: #e9e3d7;
-  background: #1b1c1e;
-  border: 1px solid #66543b;
-  box-shadow: 0 16px 60px #0008;
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  box-shadow: none;
 }
-.game-source-picker .source-picker-brand {
-  color: #bda575;
-  font-size: 12px;
-  letter-spacing: 0.12em;
+/* Interior text follows the menu's condensed scale: yellow headings, muted body lines, all with a hard shadow for the art behind. */
+.game-source-picker [hidden] {
+  display: none !important;
 }
-.game-source-picker.message-box h3 {
-  margin: 10px 0;
-  color: #ffe39a;
-  font-size: 24px;
+.ra2-content h3 {
+  margin: 0 0 2px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: #ff0;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-align: left;
+  text-shadow: 1px 1px #000;
 }
 .game-source-picker p.source-picker-description {
-  margin: 0 0 22px;
-  color: #b9b7b2;
+  margin: 0;
+  color: #ded59a;
   font-weight: 400;
+  font-size: 13px;
   text-align: left;
-  line-height: 1.7;
+  line-height: 1.6;
+  text-shadow: 1px 1px #000;
 }
-.game-source-picker p.source-picker-error {
-  color: #ff9292;
+/* The guide sits below the menu art's radar on the left, in the same condensed yellow-on-dark voice. */
+.game-guide h4 {
+  margin: 0 0 3px;
+  color: #ff0;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-shadow: 1px 1px #000;
+}
+.game-guide ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.game-guide li {
+  color: #ded59a;
+  font-size: 12px;
+  line-height: 1.5;
   text-align: left;
+  text-shadow: 1px 1px #000;
 }
-.game-source-picker .source-picker-error[hidden] {
+.game-source-picker .portrait-orientation-hint {
   display: none;
-}
-.game-source-picker > .manifest-checklist {
-  max-height: 220px;
-  overflow: auto;
-}
-.game-source-picker .download-links .game-package-block {
-  padding: 16px;
-  background: #141517;
-  border: 1px solid #45423c;
-}
-.game-source-picker .download-links .game-package-header {
-  min-height: 40px;
-  color: #f0dfb5;
-  font-size: 15px;
-}
-.game-source-picker .download-links .game-icon {
-  width: 36px;
-  height: 36px;
-}
-.game-source-picker .download-import-title {
-  color: #aaa69d;
+  margin: 0;
+  color: #ff0;
   font-size: 12px;
   font-weight: 400;
+  line-height: 1.5;
+  text-align: center;
+  text-shadow: 1px 1px #000;
 }
-.game-source-picker .game-package-picks {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+@media (max-width: 560px) and (orientation: portrait) {
+  .game-source-picker .portrait-orientation-hint {
+    display: block;
+  }
+}
+/* Multiplayer row: LED toggle plus a muted hint so the section reads like a settings line, not a bare switch. */
+.network-toggle-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.network-toggle-hint {
+  color: #a9a493;
+  font-size: 12px;
+  text-shadow: 1px 1px #000;
+}
+.relay-tech-note {
+  color: #a9a493;
+}
+.game-source-picker p.source-picker-error {
+  margin: 0;
+  color: #ff9292;
+  font-weight: 400;
+  font-size: 13px;
+  text-align: left;
+  line-height: 1.5;
+}
+.manifest-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 130px;
+  overflow-y: auto;
+}
+.manifest-line {
+  color: #ff9292;
+  font-size: 12px;
+  line-height: 1.4;
+  text-shadow: 1px 1px #000;
+}
+.manifest-line.ok {
+  color: #ff0;
+}
+.manifest-line.optional {
+  color: #ded59a;
+}
+/* Multiplayer toggle: a text line in the interior whose LED lights up in the site's hover-glow orange when enabled. */
+.network-toggle {
+  position: relative;
+  display: flex;
+  align-items: center;
   gap: 8px;
+  width: fit-content;
+  color: #ff0;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  text-shadow: 1px 1px #000;
 }
-.game-source-picker .game-package-picks .dialog-button {
-  min-height: 40px;
-  padding: 8px 4px;
-  width: 100%;
+.network-toggle input {
+  position: absolute;
+  left: 0;
+  top: 4px;
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.network-toggle:focus-within {
+  outline: 2px solid #ff0;
+  outline-offset: 3px;
+}
+.network-toggle-led {
   box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  border: 1px solid #e5dfc8;
+  border-radius: 50%;
+  background: #aaa79a;
+  box-shadow: 0 0 2px #000 inset;
 }
-.game-source-picker .game-package-picks .development-source {
-  grid-column: 1 / -1;
+.network-toggle input:checked + .network-toggle-led {
+  border-color: #ffd879;
+  background: #ffa500;
+  box-shadow: 0 0 6px #ffa500;
 }
-.game-source-picker p.disclaimer {
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px solid #3b3832;
+.network-settings {
+  padding: 10px 12px;
+  border: 2px inset #888;
+  background: rgba(0, 0, 0, 0.45);
 }
-@media (max-width: 560px) {
-  .game-home #ui > .game-source-picker {
-    padding: 20px 16px;
-  }
-  .game-source-picker.message-box h3 {
-    font-size: 21px;
-  }
-  .game-source-picker .download-links .game-package-block {
-    padding: 12px;
-  }
-}
-
 .relay-settings {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-block: 12px;
+  color: #ff0;
+  font-size: 12px;
 }
 .relay-settings input {
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
-  padding: 8px;
-}
-.relay-settings small {
-  opacity: 0.8;
-}
-.relay-settings [role='alert'] {
-  color: #ff9090;
-  margin: 0;
-}
-
-.network-settings {
-  margin-block: 16px;
-  padding: 12px 16px;
-  border: 1px solid #66543b;
-  background: #141517;
-}
-.network-toggle {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: #f0dfb5;
-  cursor: pointer;
-}
-.network-toggle input {
-  appearance: none;
-  width: 18px;
-  height: 18px;
-  margin: 0;
-  border: 1px solid #bda575;
-  background: #080909;
-  display: grid;
-  place-content: center;
-}
-.network-toggle input:checked::after {
-  content: '✓';
-  color: #ffe39a;
-  font-size: 17px;
-  line-height: 1;
-}
-.network-toggle input:focus-visible,
-.relay-settings input:focus-visible {
-  outline: 2px solid #ffe39a;
-  outline-offset: 3px;
-}
-.network-settings .relay-settings {
-  margin-bottom: 0;
-  color: #f0dfb5;
-}
-.relay-settings input {
-  color: #ffe39a;
-  background: #080909;
-  border: 1px solid #66543b;
+  padding: 6px 8px;
+  color: #ff0;
+  background: #1a1a1a;
+  border: 2px inset #aaa;
   border-radius: 0;
   font: inherit;
 }
@@ -191,181 +207,71 @@
 .relay-settings input[aria-invalid='true'] {
   border-color: #ff9090;
 }
-
-/* Share the game dialogs' beveled red buttons, gray panels, and yellow text instead of the web form's beige-gold palette. */
-.game-home #ui > .game-source-picker {
-  background: #262626;
-  border: 2px outset #aaa;
+.relay-settings input:focus-visible {
+  outline: 2px solid #ff0;
+  outline-offset: 3px;
 }
-.game-source-picker.message-box h3,
-.game-source-picker .source-picker-brand {
-  color: #ff0;
-}
-.game-source-picker .resource-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-.game-source-picker .resource-actions .dialog-button,
-.game-source-picker .detected-games .dialog-button {
-  min-height: 44px;
-  align-self: stretch;
-  padding: 10px 14px;
-}
-.game-source-picker .game-download-entry {
-  grid-column: 1 / -1;
-  background: #8b0000;
-  color: #ff0;
-  border: 1px outset #f00;
-}
-.game-source-picker .game-download-entry:hover {
-  background: #a80000;
-}
-.game-source-picker .network-settings {
-  background: #363636;
-  border: 2px inset #888;
-  padding: 12px;
-}
-.game-source-picker .network-toggle {
-  color: #ff0;
-  font-weight: 700;
-}
-.game-source-picker .network-toggle input {
-  width: 20px;
-  height: 20px;
-  border: 2px inset #aaa;
-  background: #202020;
-}
-.game-source-picker .network-toggle input:checked::after {
-  color: #ff0;
-}
-.game-source-picker .relay-settings {
-  color: #ff0;
-}
-.game-source-picker .relay-settings input {
-  color: #ff0;
-  border: 2px inset #aaa;
-  background: #1a1a1a;
-}
-.game-source-picker .relay-settings small {
+.relay-settings small {
   color: #ded59a;
-  opacity: 1;
   line-height: 1.5;
 }
-.game-source-picker .detected-games {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin-top: 16px;
+.relay-settings [role='alert'] {
+  margin: 0;
+  color: #ff9090;
 }
-.game-source-picker .detected-games button {
+@media (max-width: 560px) and (orientation: portrait) {
+  .network-settings {
+    border: 2px ridge #8c784b;
+    background: linear-gradient(180deg, rgba(30, 26, 22, 0.86), rgba(8, 8, 8, 0.9));
+    box-shadow:
+      inset 0 1px rgba(255, 229, 164, 0.12),
+      0 2px 5px #0009;
+  }
+  .relay-settings input {
+    border: 2px inset #8c784b;
+    background: linear-gradient(180deg, #26221c, #11100e);
+    box-shadow: inset 0 2px 5px #000b;
+  }
+  .relay-settings input:focus-visible {
+    border-color: #c4a85f;
+    outline-color: #bd3a28;
+    box-shadow:
+      inset 0 2px 5px #000b,
+      0 0 7px #b6382788;
+  }
+  .relay-settings input[aria-invalid='true'] {
+    border-color: #d65b4d;
+    box-shadow:
+      inset 0 2px 5px #000b,
+      0 0 6px #c9433688;
+  }
+}
+/* Detected-game commands stack above the ordinary actions. */
+.detected-games {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
 }
-.game-source-picker .detected-games .game-icon {
+.detected-games .game-icon {
   display: block;
-  width: 32px;
-  height: 32px;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
   object-fit: contain;
 }
-.game-source-picker .development-sources {
-  margin-top: 18px;
-  color: #aaa;
-}
-
-.game-source-picker .development-source {
-  width: 100%;
-}
-
-/* On narrow screens, place the full background above the scrolling form instead of squeezing the form into a shrunken inner screen. */
+/* Touch targets and supporting copy follow the shared narrow-screen panel. */
 @media (max-width: 560px) {
-  .game-home #stage {
-    background: #121315;
+  .ra2-footer {
+    padding: 0;
+    font-size: 12px;
+    line-height: 1.6;
   }
-  .game-home #ui {
-    inset: 0;
-    transform: none;
-    width: 100%;
-    height: 100%;
-    padding: 16px;
+  .network-toggle {
+    min-height: 44px;
   }
-  .game-home #ui::before {
-    content: '';
-    display: block;
-    flex: 0 0 auto;
-    width: 100%;
-    aspect-ratio: 800 / 560;
-    background: url(/backgrounds/ra2vm-launcher-background.jpg) center / contain no-repeat;
-  }
-  .game-home #ui > .game-source-picker {
-    margin: 16px 0 0;
-  }
-}
-
-/* Keep portrait phones on the desktop-style continuous backdrop; do not split the artwork above the picker. */
-@media (max-width: 560px) and (orientation: portrait) {
-  .game-home #stage {
-    background:
-      linear-gradient(#0003, #0003),
-      url(/backgrounds/ra2vm-launcher-background.jpg) center / cover no-repeat,
-      #121315;
-  }
-  .game-home #ui::before {
-    display: none;
-  }
-  .game-home #ui > .game-source-picker {
-    margin: auto 0;
-  }
-}
-
-/* iOS landscape needs the home overlay itself to own the vertical gesture; the document body is intentionally non-scrolling. */
-@media (max-width: 560px) and (orientation: landscape) {
-  .game-home #ui {
-    position: absolute;
-    inset: 0;
-    transform: none;
-    width: 100%;
-    height: auto;
-    max-height: none;
-    overflow: hidden;
-    pointer-events: auto;
-    touch-action: pan-y;
-    -webkit-overflow-scrolling: touch;
-  }
-  .game-home #ui > .game-source-picker {
-    margin: 16px 0;
-    max-height: calc(100% - 32px);
-    overflow-y: auto;
-    overscroll-behavior-y: contain;
-    touch-action: pan-y;
-    -webkit-overflow-scrolling: touch;
-  }
-}
-
-/* Phone landscape is usually wider than 560px; use the short viewport as the reliable mobile breakpoint. */
-@media (orientation: landscape) and (max-height: 600px) {
-  .game-home #ui {
-    position: fixed;
-    inset: auto;
-    top: calc(50% - 8px);
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: min(72vw, 102vh);
-    height: min(70vh, 49vw);
-    max-height: none;
-    overflow: hidden;
-    pointer-events: auto;
-    touch-action: pan-y;
-    -webkit-overflow-scrolling: touch;
-  }
-  .game-home #ui > .game-source-picker {
-    margin: 16px 0;
-    max-height: calc(100% - 32px);
-    overflow-y: auto;
-    overscroll-behavior-y: contain;
-    touch-action: pan-y;
-    -webkit-overflow-scrolling: touch;
+  .relay-settings input {
+    min-height: 44px;
+    font-size: 16px;
   }
 }

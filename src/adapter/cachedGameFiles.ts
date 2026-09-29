@@ -1,7 +1,7 @@
 /**
  * Browser persistence for imported game files: once all required manifest entries are present, write the session's file set to IndexedDB (ra2-vm-game-files), restoring it automatically next time without another selection.
  *
- * thirdPartyFiles.ts persists executables (game.exe / gamemd.exe) separately; this stores only player-supplied files. If quota is insufficient, fall back to required startup files only; optional packages will still be missing next time.
+ * Executables and data belong to the same imported file set; restore both without a separate download. If quota is insufficient, fall back to required startup files only; optional packages will still be missing next time.
  */
 
 import { SessionGameFileProvider } from '../platform/browser/files/sessionFiles';
@@ -59,6 +59,8 @@ async function writeGameFiles(gameId: string, files: ReadonlyMap<string, Uint8Ar
     await new Promise<void>((resolve, reject) => {
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () =>
+        reject(transaction.error ?? new DOMException('Resource cache transaction aborted', 'AbortError'));
     });
   } finally {
     database.close();
@@ -245,6 +247,26 @@ export async function clearCachedGameFiles(): Promise<void> {
       transaction.objectStore(STORE).clear();
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error);
+    });
+  } finally {
+    database.close();
+  }
+}
+
+/** Drop imported packages without deleting independently persisted custom maps or save writeback. */
+export async function clearCachedImportedGameFiles(gameIds: readonly string[]): Promise<void> {
+  const database = await openDatabase();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(STORE, 'readwrite');
+      const store = transaction.objectStore(STORE);
+      for (const gameId of gameIds) {
+        const prefix = `${gameId}/`;
+        store.delete(IDBKeyRange.bound(prefix, `${prefix}\uffff`));
+      }
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
     });
   } finally {
     database.close();

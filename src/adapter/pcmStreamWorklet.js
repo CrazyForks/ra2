@@ -8,7 +8,7 @@
  * - update {offsetFrames, data: Float32Array}: overwrite interleaved data at a frame offset.
  * - play / stop / set-loop {loop} / set-position {frame} / set-frequency {frequency}
  * - destroy
- * Replies (worklet -> main thread): position {frame} reports the playback cursor about every 100ms; the main thread extrapolates using currentTime.
+ * Replies (worklet -> main thread): position {frame, at, revision, playing} reports the playback cursor about every 100ms; the main thread extrapolates using currentTime.
  *
  * Note: new URL(..., import.meta.url) emits this file unchanged as a build asset. Vite does not transpile TS here, so keep plain JS syntax without type annotations, declare, or generics.
  */
@@ -25,7 +25,7 @@ class Ra2PcmStreamProcessor extends AudioWorkletProcessor {
     super();
     liveProcessors++;
     /** @type {{ channels: number, frames: number, pcm: Float32Array, frame: number,
-     *   playing: boolean, loop: boolean, step: number, lastPositionAt: number } | null} */
+     *   playing: boolean, loop: boolean, step: number, revision: number, lastPositionAt: number } | null} */
     this.state = null;
     /**
      * Set by destroy. process() must then return false: while it returns true the node keeps "active processing"
@@ -38,7 +38,7 @@ class Ra2PcmStreamProcessor extends AudioWorkletProcessor {
 
   /**
    * @param {{ kind: string, channels?: number, frames?: number, frequency?: number,
-   *   loop?: boolean, frame?: number, offsetFrames?: number, data?: Float32Array }} message
+   *   loop?: boolean, frame?: number, revision?: number, offsetFrames?: number, data?: Float32Array }} message
    */
   onMessage(message) {
     switch (message.kind) {
@@ -50,6 +50,7 @@ class Ra2PcmStreamProcessor extends AudioWorkletProcessor {
           frames,
           pcm: new Float32Array(Math.max(1, frames) * channels),
           frame: message.frame,
+          revision: message.revision ?? 0,
           playing: true,
           loop: message.loop,
           step: Math.max(0, message.frequency) / sampleRate,
@@ -68,7 +69,13 @@ class Ra2PcmStreamProcessor extends AudioWorkletProcessor {
       case 'stop': {
         if (this.state) {
           this.state.playing = false;
-          this.port.postMessage({ kind: 'position', frame: this.state.frame });
+          this.port.postMessage({
+            kind: 'position',
+            frame: this.state.frame,
+            at: currentTime,
+            revision: this.state.revision,
+            playing: false,
+          });
         }
         break;
       }
@@ -77,11 +84,17 @@ class Ra2PcmStreamProcessor extends AudioWorkletProcessor {
         break;
       }
       case 'set-position': {
-        if (this.state) this.state.frame = message.frame;
+        if (this.state) {
+          this.state.frame = message.frame;
+          this.state.revision = message.revision;
+        }
         break;
       }
       case 'set-frequency': {
-        if (this.state) this.state.step = Math.max(0, message.frequency) / sampleRate;
+        if (this.state) {
+          this.state.step = Math.max(0, message.frequency) / sampleRate;
+          this.state.revision = message.revision;
+        }
         break;
       }
       case 'destroy': {
@@ -119,12 +132,24 @@ class Ra2PcmStreamProcessor extends AudioWorkletProcessor {
       }
       frame += state.step;
     }
+    if (!state.loop && frame >= state.frames) {
+      state.playing = false;
+      frame = state.frames;
+    }
     state.frame = frame;
 
     // Report the cursor about every 100ms as the main thread's extrapolation baseline.
-    if (currentTime - state.lastPositionAt >= 0.1) {
+    if (!state.playing || currentTime - state.lastPositionAt >= 0.1) {
       state.lastPositionAt = currentTime;
-      this.port.postMessage({ kind: 'position', frame: state.frame, live: liveProcessors });
+      // frame is at the end of this render quantum; currentTime marks its beginning.
+      this.port.postMessage({
+        kind: 'position',
+        frame: state.frame,
+        at: currentTime + length / sampleRate,
+        revision: state.revision,
+        playing: state.playing,
+        live: liveProcessors,
+      });
     }
     return true;
   }

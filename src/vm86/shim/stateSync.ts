@@ -17,8 +17,8 @@ export type ShimSyncChain = InstanceType<ReturnType<typeof withShimSync>>;
 
 export function withShimSync<TBase extends Constructor<ShimGuestDllChain>>(Base: TBase) {
   return class extends Base {
-    /** Synchronization handles start after any launcher sentinel reserved by the profile. */
-    protected nextSyncHandle: number;
+    /** Threads, events, and mutexes share one non-reused identity space after the profile's launcher sentinel. */
+    private nextWaitHandle: number;
     protected readonly guestEvents = new Map<number, GuestEventObject>();
     protected readonly namedGuestEvents = new Map<string, GuestEventObject>();
     protected readonly guestMutexes = new Map<number, GuestMutexObject>();
@@ -26,21 +26,17 @@ export function withShimSync<TBase extends Constructor<ShimGuestDllChain>>(Base:
 
     constructor(...args: any[]) {
       super(...args);
-      this.nextSyncHandle = (this.gameProfile.launcher?.handle ?? 0x0001_001f) + 1;
+      this.nextWaitHandle = (this.gameProfile.launcher?.handle ?? 0x0001_001f) + 1;
     }
 
-    private allocateGuestSyncHandle(): number {
-      while (
-        this.guestEvents.has(this.nextSyncHandle) ||
-        this.guestMutexes.has(this.nextSyncHandle) ||
-        this.guestThreadHandles.has(this.nextSyncHandle)
-      )
-        this.nextSyncHandle++;
-      return this.nextSyncHandle++;
+    protected allocateGuestWaitHandle(): number {
+      // Never wrap into stale handles or the current-thread/current-process pseudo handles.
+      if (this.nextWaitHandle >= 0xffff_fffe) throw new Error('Guest wait handle space exhausted');
+      return this.nextWaitHandle++;
     }
 
     private duplicateGuestEvent(object: GuestEventObject): number {
-      const handle = this.allocateGuestSyncHandle();
+      const handle = this.allocateGuestWaitHandle();
       object.handles.add(handle);
       this.guestEvents.set(handle, object);
       return handle;
@@ -98,7 +94,7 @@ export function withShimSync<TBase extends Constructor<ShimGuestDllChain>>(Base:
     }
 
     private duplicateGuestMutex(object: GuestMutexObject): number {
-      const handle = this.allocateGuestSyncHandle();
+      const handle = this.allocateGuestWaitHandle();
       object.handles.add(handle);
       this.guestMutexes.set(handle, object);
       return handle;

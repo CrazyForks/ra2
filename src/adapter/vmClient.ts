@@ -1,3 +1,4 @@
+import { AudioStateFeedback } from './audioFeedback';
 import type { GamePerformanceSample } from '../games/performance';
 import type { VmDiagnosticAction, VmDiagnostics, VmRuntimeInfo } from './vmDiagnostics';
 import { normalizeGameClockRate } from '../vm86/clock';
@@ -58,6 +59,7 @@ export class WorkerVmClient implements VmShell {
   private readonly worker: Worker;
   private readonly onTerminated: (() => void) | undefined;
   private readonly audio: WebAudioPcmSink;
+  private readonly audioFeedback: AudioStateFeedback;
   private readonly requests = new Map<number, PendingRequest>();
   private readonly callbacks: GameVmCallbacks;
   private readonly initConfig: VmInitConfig;
@@ -91,6 +93,9 @@ export class WorkerVmClient implements VmShell {
         onError: (error) => console.warn('[VM audio]', error),
         diagnosticsIntervalMs: AUDIO_DIAGNOSTICS_INTERVAL_MS,
       });
+    this.audioFeedback = new AudioStateFeedback(this.audio, (states) => {
+      if (this.lifecycle === 'active') this.send({ type: 'audio-state', states });
+    });
     this.worker =
       options.workerFactory?.() ?? new Worker(new URL('./vmWorker.ts', import.meta.url), { type: 'module' });
     this.worker.onmessage = (event: MessageEvent<WorkerToMainMessage>) => {
@@ -348,12 +353,17 @@ export class WorkerVmClient implements VmShell {
         this.resolveRequest(message.requestId, message.result);
         break;
       case 'audio':
+        if (this.lifecycle !== 'active') break;
         this.applyAudioOp(message.op);
+        this.audioFeedback.applied(message.op, message.revision);
         break;
       case 'audio-control':
         if (message.action === 'master-volume') this.audio.setMasterVolume(message.linear);
         else if (message.action === 'stop-all') this.audio.stopAll();
-        else if (message.action === 'destroy') void this.audio.destroy();
+        else if (message.action === 'destroy') {
+          this.audioFeedback.clear();
+          void this.audio.destroy();
+        }
         break;
       case 'init-done':
         this.resolveRequest(message.requestId, undefined);
@@ -418,6 +428,8 @@ export class WorkerVmClient implements VmShell {
   }
 
   private async finalizeDestroy(flushBeforeTerminate: boolean): Promise<void> {
+    this.audioFeedback.clear();
+    this.audio.stopAll();
     if (this.probeTimer !== null) globalThis.clearTimeout(this.probeTimer);
     this.probeTimer = null;
     this.removeAudioUnlock?.();

@@ -12,6 +12,12 @@ export interface ArchiveExtractResult {
   missing: string[];
 }
 
+/** File delivery progress; a missing catalog cannot provide a reliable denominator. */
+export interface ArchiveExtractProgress {
+  completedFiles: number;
+  totalFiles: number | null;
+}
+
 export interface ArchiveExtractOptions {
   /** Required top-level filenames, compared individually without case sensitivity. */
   wanted: string[];
@@ -22,6 +28,7 @@ export interface ArchiveExtractOptions {
   directoryRules?: readonly ArchiveDirectoryRule[];
   /** Phase-text callback, such as extraction depth. */
   onStatus?: (message: string) => void;
+  onProgress?: (progress: ArchiveExtractProgress) => void;
   signal?: AbortSignal;
   /** Two-stage extraction for base games, not add-on maps; fall back to full extraction if the directory cannot establish a complete base game. */
   layers?: { required: string[]; startup: string[] };
@@ -41,6 +48,7 @@ export function extractArchiveFiles(
   return new Promise((resolve, reject) => {
     const { wanted, extensions, onStatus, signal } = options;
     const files = new Map<string, Uint8Array>();
+    let totalFiles: number | null = null;
     let worker: Worker | undefined;
     let settled = false;
     // All exits share one cleanup; invalidate queued messages and retained prioritize callbacks after completion.
@@ -85,12 +93,15 @@ export function extractArchiveFiles(
           if (message.type === 'status') {
             onStatus?.(message.message);
           } else if (message.type === 'catalog') {
+            totalFiles = new Set(message.names.map((name) => name.toLowerCase())).size;
+            options.onProgress?.({ completedFiles: files.size, totalFiles });
             options.onCatalog?.(message.names);
           } else if (message.type === 'startup-ready') {
             options.onStartupReady?.();
           } else if (message.type === 'file') {
             files.set(message.name, message.bytes);
             options.onFile?.(message.name, message.bytes);
+            options.onProgress?.({ completedFiles: files.size, totalFiles });
             if (!settled) onStatus?.(`已提取 ${message.name}（${formatArchiveBytes(message.bytes.length)}）`);
           } else if (message.type === 'done') {
             const found = message.found;
@@ -174,6 +185,7 @@ function extractArchiveByBatch(
           found.add(message.name.toLowerCase());
           batchBytes += message.bytes.byteLength;
           options.onFile?.(message.name, message.bytes);
+          options.onProgress?.({ completedFiles: found.size, totalFiles: null });
         } else if (message.type === 'done') {
           for (const name of message.found) found.add(name.toLowerCase());
           finish();

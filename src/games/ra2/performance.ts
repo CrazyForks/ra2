@@ -1,18 +1,46 @@
 import type { GuestMemory } from '../../vm86/win32';
 import { createFrameCounterReader } from '../shared/frameCounter';
-import { RA2_STARTUP_PAGE_HASH } from './startupPage';
 
-/** RA2 1.006: read the frame counter at 0x540676, INC EDX at 0x540681, and write back at 0x540684. */
-export function createRa2FrameReader(memory: GuestMemory, hash: string) {
-  return createFrameCounterReader(memory, hash, {
-    hash: RA2_STARTUP_PAGE_HASH,
-    site: 0x540676,
-    signature: [
-      0x8b, 0x15, 0x2c, 0x0d, 0xa4, 0, 0xa1, 0x74, 0x91, 0xab, 0, 0x42, 0x3b, 0xc7, 0x89, 0x15, 0x2c, 0x0d, 0xa4, 0,
-    ],
-    frame: 0xa40d2c,
-    gameSpeed: 0xa40b18,
-    sessionSpeed: 0xa3d2c8,
-    requestedFps: 0xa3d568,
-  });
+/** RA2 1.006 layout evidence: settings at EAX+0x1108, independently copied into Session.GameSpeed. */
+export function createRa2FrameReader(memory: GuestMemory, exe: Uint8Array) {
+  return createFrameCounterReader(memory, exe, RA2_SETTINGS_SIGNATURE);
 }
+
+export const RA2_SETTINGS_SIGNATURE = [
+  0x8b,
+  0x90,
+  0x08,
+  0x11,
+  0,
+  0,
+  0x89,
+  0x15,
+  null,
+  null,
+  null,
+  null,
+  0x8b,
+  0x88,
+  0x0c,
+  0x11,
+  0,
+  0,
+  0x89,
+  0x0d,
+  null,
+  null,
+  null,
+  null,
+  0x8b,
+  0x90,
+  0x10,
+  0x11,
+  0,
+  0,
+  0x89,
+  0x15,
+  null,
+  null,
+  null,
+  null,
+] as const;

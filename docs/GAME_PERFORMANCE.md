@@ -8,7 +8,7 @@ GameRuntimeHooks.createFrameReader exposes read-only native simulation counters.
 - sampledAtMs and intervalMs represent the sampling host's monotonic timestamp and actual interval. Different Workers may have different time origins; compute each player's values independently.
 - requestedFps is a native LAN negotiation variable. In single-player or before negotiation it may be only an initial value, not measured FPS or a single-player cap. gameSpeed and sessionSpeed are native speed settings.
 - status is baseline for the first reading, sample for normal readings, reset for counter rollback or invalid time, and inactive in menus or when stopped. FPS is null outside sample status; a running simulation with no advancement reports 0.
-- Unknown executables, signature mismatch, short reads, and unloaded/destroyed VMs return null and cannot count as passes.
+- Missing or ambiguous structural evidence, conflicting references, signature mismatch, short reads, and unloaded/destroyed VMs return null and cannot count as passes. A different executable hash alone does not disable this reader.
 
 Existing DirectDraw boundary counts, frame-upload FPS, and browser rAF retain their own meanings. They do not replace native simulation FPS. This probe does not record a completion timestamp for every guest simulation frame.
 
@@ -46,9 +46,31 @@ development server. A small synthetic BIOS checks the real v86 scheduler and met
 Worker modes; synthetic UI reports check cancellation and copying. Real-game startup and diagnostics use
 `pnpm run test:browser:battle-start`. These checks do not establish iOS performance; the phone reports provide that evidence.
 
-## Version evidence
+## Automatic detection and evidence
 
-RA2 1.006 uses the executable hash in src/games/ra2/startupPage.ts; YR 1.001 uses src/games/yr/startupPage.ts. src/games/ra2/performance.ts verifies read/increment/write instructions from 0x540676 through 0x540689 and reads counter 0xa40d2c. The independent YR 1.001 implementation in src/games/yr/performance.ts verifies 0x55de73 through 0x55de86 and reads 0xa8ed84. Each checks its SHA-256 before instruction signatures. See [Network reliability](RA2_NETWORK_RELIABILITY.md) for LAN timing version binding, signatures, and limitations.
+The factory receives guest memory and the original executable bytes. On the first explicit sample, `src/vm86/peProbe.ts` checks PE32/i386 section bounds and scans initialized, readable, nonwritable executable sections. It rejects overlapping/truncated sections. It uses the same preferred image base as the PE loader; this is not a relocation or unpacking implementation. Discovery results, including unavailable results, are cached for that VM and discarded on destruction.
+
+Game policy in `src/games/shared/frameCounter.ts` resolves instruction operands instead of looking up addresses by whole-file SHA-256. Every required signature must have one unique qualifying match. It checks:
+
+- The frame read/increment/write sequence, repeated counter and stop-frame references, branches, and call targets.
+- The session-to-global speed copy against a separate settings initializer. RA2 and YR supply their own initializer signatures in their respective `performance.ts` modules, so selecting one game does not silently enable the other's layout.
+- RequestedFPS against both a debug-format call referencing the UTF-16 `Req fps : %d` label and the native pacing branch that divides 60 by this variable. Stack-local displacements may differ, but both branches must reference the same local. Other labels using the same formatter do not count as matches.
+- Distinct, aligned counters inside writable, nonexecutable data sections, and all matched instructions/labels against the loaded guest image before publishing a reader.
+
+The following disassembly locations document the reference layouts, not required runtime addresses:
+
+The inspected reference images have SHA-256 `fe67fdac5073530a79baec14c4e072b5e7e4c0c462cee9659870c5330e9e6e3e` (RA2) and `7b8a068535d6af06845edf95ae829b113d00c02909330e16f197426cd7db94b6` (YR). These identify the reverse-engineering evidence only; the detector does not compare hashes.
+
+| Evidence                                   | RA2 1.006                            | YR 1.001                             |
+| ------------------------------------------ | ------------------------------------ | ------------------------------------ |
+| Frame loop / counter                       | `0x540676` / `0xa40d2c`              | `0x55de73` / `0xa8ed84`              |
+| Speed copy / GameSpeed / Session.GameSpeed | `0x598131` / `0xa40b18` / `0xa3d2c8` | `0x5b6ad1` / `0xa8eb60` / `0xa8b268` |
+| Settings initializer / source offset       | `0x512db5` / `EAX+0x1108`            | `0x52d177` / `EAX+0x14a0`            |
+| RequestedFPS display / pacing / variable   | `0x541c72` / `0x53fd01` / `0xa3d568` | `0x55f472` / `0x55d491` / `0xa8b558` |
+
+This recognizes compatible instruction/layout families even when file metadata or code/data addresses differ. Recompiled, packed, localized, or modified code may lack the evidence and remain unavailable. Detection is structural evidence for these four read-only counters, not proof of arbitrary executable compatibility, native object layouts, or safe command injection. All four fields must validate; there is no fixed-address fallback. Counter discovery alone does not authorize writes. Separate [adaptive runtime capabilities](ADAPTIVE_EXECUTABLES.md) validate startup hooks, speed writes and compatibility patches. Resource selection and download integrity checks remain unchanged. See [Network reliability](RA2_NETWORK_RELIABILITY.md) for LAN timing version binding and limitations.
+
+Asset-free regressions in `tests/basic/gamePerformance.test.ts` and `tests/basic/peProbe.test.ts` cover moved addresses, changed metadata, wrong-game selection, ambiguous matches, conflicting references, section bounds, changed live instructions, and short/failed reads. `tests/real-game/frameCounter.test.ts` checks static discovery against locally supplied RA2 1.006/YR 1.001 layouts without downloading or executing games. Use the browser battle-start regression below to establish live frame advancement separately.
 
 ## Multiplayer performance tests
 

@@ -6,7 +6,7 @@ import { withUser32Windowing } from './user32Windowing';
 import { withUser32MessageLoop } from './user32MessageLoop';
 import { GUEST_PROCESS_ID, shimTraceEnabled } from './state';
 import type { Constructor } from './state';
-import { mapVirtualKey, toAscii } from './keyboard';
+import { keyNameText, mapVirtualKey, toAscii } from './keyboard';
 
 type Gdi32Chain = InstanceType<ReturnType<typeof withGdi32>>;
 
@@ -38,6 +38,15 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
       switch (key) {
         case 'USER32.DLL!MapVirtualKeyA':
           return { eax: mapVirtualKey(a[0] ?? 0, a[1] ?? 0) };
+        case 'USER32.DLL!GetKeyNameTextA': {
+          const destination = a[1] ?? 0;
+          const capacity = a[2] ?? 0;
+          if (!destination || capacity <= 0) return { eax: 0 };
+          const name = keyNameText(a[0] ?? 0);
+          const written = name.slice(0, capacity - 1);
+          this.writeAscii(destination, written);
+          return { eax: written.length };
+        }
         case 'USER32.DLL!ToAscii': {
           if (!a[3]) return { eax: 0 };
           const state = a[2] ? this.memory.read_memory(a[2], 256) : new Uint8Array(256);
@@ -277,13 +286,15 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
               `🧭 ComboDropWin hwnd=0x${hwnd.toString(16)} parent=0x${(this.windowParents.get(hwnd) ?? 0).toString(16)} rect=${rect ? `${rect.x},${rect.y},${rect.width},${rect.height}` : '-'}`,
             );
           }
-          // RA2 ComboDropWin stores its owning NewCombo HWND from CREATESTRUCT.lpCreateParams
-          // during WM_CREATE. Omitting this creation semantic later sends CB_GETITEMHEIGHT
-          // to NULL, returning 0 and causing a divide-by-zero
-          // at 0x5ecac7.
+          // Registered game windows initialize native state during WM_CREATE.
+          // The main window constructs its tooltip manager; ComboDropWin reads
+          // its owner from CREATESTRUCT.lpCreateParams before CB_GETITEMHEIGHT.
           if (
-            this.gameProfile.shell?.initializeComboDropWindow &&
-            this.windowClassNames.get(hwnd)?.toLowerCase() === 'combodropwin' &&
+            ((!(a[8] ?? 0) &&
+              (this.gameProfile.shell?.topLevelCreateClassNames?.includes(this.windowClassNames.get(hwnd) ?? '') ??
+                false)) ||
+              (this.gameProfile.shell?.initializeComboDropWindow &&
+                this.windowClassNames.get(hwnd)?.toLowerCase() === 'combodropwin')) &&
             (this.windows.get(hwnd) ?? 0)
           ) {
             return this.beginCustomWindowCreation(call, hwnd, a);
@@ -821,8 +832,8 @@ export function withUser32<TBase extends Constructor<Gdi32Chain>>(Base: TBase) {
             const delayMs = this.peekTimerDelay();
             // PeekMessage is nonblocking, but real Win9x schedulers still preempt the following loop.
             // An endless browser VM WASM/JS chain would starve macrotasks needed by
-            // 10/34ms UI timers. Only when a timer is pending, yield until its nearest deadline,
-            // capped at 10ms, preserving timer-free game loops.
+            // imminent 10/34ms UI timers. Long tooltip timers must leave the
+            // battle loop nonblocking until their deadline approaches.
             if (delayMs > 0) this.invalidateFastPeek();
             else this.refreshFastPeekBudget();
             return delayMs > 0 ? { eax: 0, delayMs } : { eax: 0 };

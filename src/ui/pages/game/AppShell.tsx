@@ -1,7 +1,7 @@
 import { t } from '../../shared/i18n/translate';
 import { useEffect, useRef } from 'react';
 import { BootRegion, DebugRegion, Dialogs, MainRegion, ScreenStatus, Toolbar } from './components/AppRegions';
-import { gameRunning, mainPanel, sourceRequest } from './state/uiState';
+import { bootState, gameRunning, mainPanel, sourceRequest } from './state/uiState';
 import { useStore } from '../../shared/state/useStore';
 import { usePanelWheelAcceleration } from './hooks/usePanelWheelAcceleration';
 
@@ -9,6 +9,7 @@ import { usePanelWheelAcceleration } from './hooks/usePanelWheelAcceleration';
 export function AppShell() {
   usePanelWheelAcceleration();
   const running = useStore(gameRunning);
+  const booting = useStore(bootState) !== null;
   const choosingSource = useStore(sourceRequest) !== null;
   const canvas = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
@@ -32,7 +33,7 @@ export function AppShell() {
     };
   }, []);
   return (
-    <div className={choosingSource ? 'game-home' : running ? 'game-running' : undefined}>
+    <div className={choosingSource || booting ? 'game-home' : running ? 'game-running' : undefined}>
       <Toolbar />
       <div id="app-layout">
         <div id="stage">

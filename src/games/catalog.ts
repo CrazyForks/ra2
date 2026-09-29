@@ -1,4 +1,4 @@
-import { DRIVE_CDROM, DRIVE_FIXED } from '../vm86/win32';
+import { DRIVE_FIXED } from '../vm86/win32';
 import { RA2_ABI, ra2Win32ArgBytes } from './ra2/abi';
 import { YR_ABI, yrWin32ArgBytes } from './yr/abi';
 import type { ImportArgBytes } from '../vm86/pe';
@@ -43,7 +43,7 @@ export interface SupportedGame {
   shimProfile: GameShimProfile;
   runtimeHooks?: GameRuntimeHooks;
   /**
-   * Files to mount synchronously before VM creation. initializeBeforeEntry only runs DLL entry points early; linkBeforeEntry also connects the main module's IAT directly to DLL exports.
+   * Files to mount synchronously before VM creation. initializeBeforeEntry only runs DLL entry points early; linkBeforeEntry requires a loadable DLL and connects the main module's IAT directly to its exports.
    */
   preloadFiles?: readonly {
     path: string;
@@ -56,7 +56,7 @@ export interface SupportedGame {
   unsupportedExecutableReason?: (bytes: Uint8Array) => string | undefined;
 }
 
-// Players import game packages locally; manifest.ts registers verified executables separately.
+// Players supply executables with their local game bundles; runtime hooks resolve their native capabilities.
 export const SUPPORTED_GAMES: readonly SupportedGame[] = [
   {
     id: 'ra2',
@@ -69,7 +69,11 @@ export const SUPPORTED_GAMES: readonly SupportedGame[] = [
     abi: RA2_ABI,
     shimProfile: RA2_SHIM_PROFILE,
     runtimeHooks: RA2_RUNTIME_HOOKS,
-    driveTypes: { C: DRIVE_FIXED, D: DRIVE_CDROM },
+    driveTypes: {
+      C: DRIVE_FIXED,
+      // Temporarily disabled after no-CD skirmish validation; retain for compatibility fallback.
+      // D: DRIVE_CDROM,
+    },
     stackTop: 0x00d0_0000,
     heapBase: 0x00d0_0000,
     guestMemoryBytes: 640 * 1024 * 1024,
@@ -77,11 +81,7 @@ export const SUPPORTED_GAMES: readonly SupportedGame[] = [
     fastFileMirrorBase: 0x1200_0000,
     fastFileMirrorTop: 0x27f0_0000,
     fastFileMirrorFiles: ['ra2.mix', 'language.mix', 'subtitle.txt', 'game.fnt', 'maps01.mix'],
-    preloadFiles: [
-      { path: 'config.txt' },
-      { path: 'Blowfish.dll' },
-      { path: 'BINKW32.DLL', initializeBeforeEntry: true },
-    ],
+    preloadFiles: [{ path: 'config.txt' }, { path: 'Blowfish.dll' }, { path: 'BINKW32.DLL', linkBeforeEntry: true }],
     sparseFilePrefixes: { 'movies01.mix': 1024 * 1024, 'movies02.mix': 1024 * 1024 },
     smokeEntry: 0x0078_5aa0,
     smokeImports: 368,
@@ -98,7 +98,11 @@ export const SUPPORTED_GAMES: readonly SupportedGame[] = [
     abi: YR_ABI,
     shimProfile: YR_SHIM_PROFILE,
     runtimeHooks: YR_RUNTIME_HOOKS,
-    driveTypes: { C: DRIVE_FIXED, D: DRIVE_CDROM },
+    driveTypes: {
+      C: DRIVE_FIXED,
+      // Temporarily disabled after no-CD skirmish validation; retain for compatibility fallback.
+      // D: DRIVE_CDROM,
+    },
     stackTop: 0x00d0_0000,
     heapBase: 0x00d0_0000,
     guestMemoryBytes: 640 * 1024 * 1024,
@@ -106,11 +110,7 @@ export const SUPPORTED_GAMES: readonly SupportedGame[] = [
     fastFileMirrorBase: 0x1200_0000,
     fastFileMirrorTop: 0x27f0_0000,
     fastFileMirrorFiles: ['ra2md.mix', 'langmd.mix', 'subtitlemd.txt', 'game.fnt', 'mapsmd03.mix'],
-    preloadFiles: [
-      { path: 'config.txt' },
-      { path: 'Blowfish.dll' },
-      { path: 'BINKW32.DLL', initializeBeforeEntry: true },
-    ],
+    preloadFiles: [{ path: 'config.txt' }, { path: 'Blowfish.dll' }, { path: 'BINKW32.DLL', linkBeforeEntry: true }],
     sparseFilePrefixes: {
       'movies01.mix': 1024 * 1024,
       'movies02.mix': 1024 * 1024,

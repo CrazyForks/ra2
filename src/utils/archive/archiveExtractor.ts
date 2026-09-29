@@ -369,11 +369,13 @@ export function createArchiveExtractor(options: ArchiveExtractorOptions) {
         if (extensions.length) throw new Error('附加包无法确认解压大小，请先转换为 ZIP 或 7z');
         post({
           type: 'status',
-          message: `第 ${depth} 层：7z 无法列出载荷尺寸，改走 NSIS 整流解码（大包约 1-2 分钟）…`,
+          message: `第 ${depth} 层：7z 无法列出载荷尺寸，改走 NSIS 整流解码…`,
         });
         try {
           const onProgress = (percent: number): void => {
-            if (percent >= 0) post({ type: 'status', message: `正在解码 NSIS：${Math.floor(percent * 100)}%` });
+            const displayPercent = Math.floor(percent * 100);
+            if (percent < 0 || displayPercent <= 0) return;
+            post({ type: 'status', message: `正在解码 NSIS：${displayPercent}%` });
           };
           const decoded = await decodeAndParseNsis(bytes, nsis, onProgress);
           const layerFound: string[] = [];

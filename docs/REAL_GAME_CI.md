@@ -27,15 +27,15 @@ Extraction requires successful whole-package SHA-256 validation. Without a hash,
 
 ## Resource import shared with the frontend
 
-Supply the original ZIP, RAR, 7z, or NSIS/SFX installer selected by players in the frontend. Repackaging, game/thirdParty directories, and a supplied inventory.json are unnecessary. Supported formats are defined by the shared extractor.
+Supply the original ZIP, RAR, 7z, or NSIS/SFX installer selected by players in the frontend. Repackaging, a pre-extracted directory layout, and a supplied inventory.json are unnecessary. Supported formats are defined by the shared extractor.
 
 Browser Workers and CI both call `src/utils/archive/archiveExtractor.ts`. It detects formats using 7z-wasm, handles nested archives recursively, extracts `ARCHIVE_WANTED_NAMES`, and uses existing NSIS/LZMA fallbacks when needed. Browsers mount File through WORKERFS; CI mounts the validated download through NODEFS. File selection/extraction algorithms stay identical. CI waits for full extraction without browser startup-layer early launch and never executes installers. Zero-byte files and present optional files are retained; extracting nothing is not success.
 
 NSIS two-stream variants decode files independently: one corrupt stream skips only that file and reports it in status, without blocking later required resources. Resource acceptance still rejects missing required files.
 
-Executables use the same `GAME_MANIFESTS` download locations and fixed SHA-256 as the frontend; packages need not contain the exact executable. This download occurs only in real-game workflows, never public acceptance. Extracted resources go into the run's temporary game/ra2/; executables go into both thirdParty/ and the game directory. Original packages are capped at 16 GiB, extracted resources at 200,000 entries and 32 GiB. Out-of-root output paths are rejected.
+Executables come from the same authenticated bundle as the data files and are extracted into the run's temporary game/ra2/. No separate EXE is downloaded or overlaid. A bundle missing its required executable fails preparation. Original packages are capped at 16 GiB, extracted resources at 200,000 entries and 32 GiB. Out-of-root output paths are rejected.
 
-Trust comes from secret whole-package hashes and source-registered executable hashes. The inventory.json recorded after import only verifies the file set/content before execution. It is a derived artifact, not user-supplied input or a substitute for input hashes. Resource changes require review and corresponding secret updates. Original packages and test screenshots stay outside the repository.
+Trust comes from secret whole-package hashes, covering executables as well as resources. The inventory.json recorded after import verifies the complete file set/content before execution. It is a derived artifact, not user-supplied input or a substitute for input hashes. Resource changes require review and corresponding secret updates. Original packages and test screenshots stay outside the repository.
 
 ## Runners and execution order
 
@@ -50,7 +50,7 @@ YAML declares triggers, runners, tool installation, and secrets, then invokes pn
 
 `ci:quality` remains a compatibility alias for `ci:basic`.
 
-`scripts/ci/run.mts` is the sole orchestration entry. downloadResources.ts handles only download/hash verification; prepareGame.ts invokes the frontend's shared extractor in a separate process and prepares executables; gameResources.ts owns resource contracts; processes.ts centralizes logs, timeouts, and process-group cleanup.
+`scripts/ci/run.mts` is the sole orchestration entry. downloadResources.ts handles only download/hash verification; prepareGame.ts invokes the frontend's shared extractor in a separate process including the package executables; gameResources.ts owns resource contracts; processes.ts centralizes logs, timeouts, and process-group cleanup.
 
 NODEFS stages extraction output on disk, avoiding retention of whole packages in MEMFS. Success and failure both clean staging. Only after extraction exits does the parent read imported results and verify inventory, releasing WASM memory before starting the VM. Validated/extracted original packages are then removed. Subprocess failure, timeout, or absent inventory fails the job. Browser and real-game entries build relay exports independently of other jobs' dist output.
 
@@ -61,8 +61,8 @@ Each game job owns its runner, resources, and ports. Job dependencies serialize 
 Real-game sequence:
 
 1. Download and validate the original package, then import with the shared extractor outside the checkout.
-2. Prepare fixed executables, check required resources, and record/validate the imported inventory.
-3. Run the game's original-executable startup in strict mode; RA2 also runs its quick-game regression. Both games run `tests/real-game/<gameId>/saveLoad.test.ts` as a separate required `save-load` step. The latter saves through native menus, destroys the VM, then loads disk-backed saved bytes in a fresh VM without starting a match first. It checks restored simulation state and native object counts, continued simulation, and menu interaction. Missing resources, a wrong executable hash, timeouts, or assertions fail the step; no skip or continue-on-error is accepted in this resource-enabled job.
+2. Check required package executables and resources, and record/validate the imported inventory.
+3. Run the game's original-executable startup in strict mode; RA2 also runs its quick-game regression. Both games run `tests/real-game/<gameId>/saveLoad.test.ts` as a separate required `save-load` step. Its 14-minute process deadline covers the suite's 12-minute bound, including two clean boots with the original YR startup movie; no movie is marked complete by the shim. The latter saves through native menus, destroys the VM, then loads disk-backed saved bytes in a fresh VM without starting a match first. It checks restored simulation state and native object counts, continued simulation, and menu interaction. Missing resources, an integrity mismatch, timeouts, or assertions fail the step; no skip or continue-on-error is accepted in this resource-enabled job.
 4. Own a dedicated development port and verify Worker/main-thread direct battlefield startup. Battlefield startup waits are per game (RA2 150 s, YR 300 s): CI observed YR startup near the 2.5-minute mark against the RA2-derived limit, so the shared timeout was widened instead of treating a slow healthy start as a failure.
 5. Clean download directories on normal/failure paths; ephemeral runner destruction handles forced termination.
 
@@ -74,7 +74,6 @@ With installed browsers and existing resources, explicitly use --local. It neith
 
 ```bash
 export RA2_GAME_ROOT=/path/to/resources/game
-export RA2_THIRD_PARTY_CACHE_DIR=/path/to/resources/thirdParty
 export RA2_CI_RESOURCE_MANIFEST=/path/to/resources/inventory.json
 export RA2_CI_RESOURCE_MANIFEST_SHA256="${APPROVED_MANIFEST_SHA256:?Set the reviewed hash}"
 pnpm run ci:real-game ra2 --local # Use yr for YR.

@@ -5,8 +5,8 @@ import { le32 } from './bytes';
 export interface StartupTrampolineSpec {
   /** Human-readable game/page label for errors; not used in code generation. */
   readonly label: string;
-  /** SHA-256 of the EXE containing the overwrite point; reject installation on mismatch. */
-  readonly expectedHash: string;
+  /** Optional reference-baseline hash. Adaptive callers must first validate the linked layout and loaded evidence. */
+  readonly expectedHash?: string;
   readonly site: number;
   /** Initial original instruction bytes at the overwrite point, used to verify the version and prevent repeated installation. */
   readonly signature: readonly number[];
@@ -26,7 +26,7 @@ export function installStartupTrampoline(
   spec: StartupTrampolineSpec,
 ): number {
   const { label, site, signature, movOperand, target } = spec;
-  if (hash !== spec.expectedHash) throw new Error(`${label}：EXE 哈希不匹配`);
+  if (spec.expectedHash !== undefined && hash !== spec.expectedHash) throw new Error(`${label}：EXE 哈希不匹配`);
   const current = memory.read_memory(site, signature.length);
   if (current.length !== signature.length || !current.every((byte, index) => byte === signature[index])) {
     throw new Error(`${label}：EXE 指令签名不匹配或重复安装`);

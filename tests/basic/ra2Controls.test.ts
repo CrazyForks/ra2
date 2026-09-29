@@ -306,6 +306,41 @@ describe('RA2 Westwood Gadget 消息路径', () => {
     expect(hasPush(0x000a)).toBe(true);
   });
 
+  it.each([
+    ['ra2', 'Red Alert 2', 0x73_75a0],
+    ['yr', "Yuri's Revenge", 0x00f0_1000],
+  ] as const)(
+    'delivers %s WM_CREATE to the registered top-level WndProc before CreateWindowExA returns',
+    (gameId, name, callback) => {
+      const memory = createGuestMemory();
+      const shim = createTestShim(memory, { gameId });
+      const className = nextString;
+      nextString += 0x100;
+      const windowClass = nextString;
+      nextString += 0x100;
+      writeAsciiZ(memory, className, name);
+      writeU32(memory, windowClass + 4, callback);
+      writeU32(memory, windowClass + 36, className);
+      callShim(shim, 'USER32.DLL!RegisterClassA', [windowClass]);
+
+      const stack = 0x31_000;
+      writeU32(memory, stack, 0x1234_5678);
+      const result = callShim(
+        shim,
+        'USER32.DLL!CreateWindowExA',
+        [0, className, 0, 0x1000_0000, 0, 0, 800, 600, 0, 0, 0x400000, 0],
+        stack,
+      );
+
+      expect(result.eax).toBe(0);
+      expect(shim.inspectCallbackState()).toMatchObject({ hwnd: 0x2000, message: 0x0001, callback });
+      const createStruct = 0x22_0000 + 4096 - 48;
+      expect(readU32(memory, createStruct + 20)).toBe(800);
+      expect(readU32(memory, createStruct + 16)).toBe(600);
+      expect(readU32(memory, createStruct + 40)).toBe(className);
+    },
+  );
+
   it('ComboDropWin 创建前同步投递带 lpCreateParams 的 WM_CREATE', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory, { gameId: 'ra2' });

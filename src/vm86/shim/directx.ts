@@ -1,6 +1,12 @@
 import type { PaletteState, SoundBufferState, SurfaceState, Win32Call, Win32Result } from '../win32';
 import { DEFAULT_PCM_FORMAT, parsePcmWaveFormatEx, type PcmWaveFormat } from '../audio';
-import { HYPERCALL_ACTIVE_SHELL_SURFACE, makeConstantImportStub, makeImportStub, type PeImport } from '../pe';
+import {
+  GUEST_SCHEDULER_TICKS,
+  HYPERCALL_ACTIVE_SHELL_SURFACE,
+  makeConstantImportStub,
+  makeImportStub,
+  type PeImport,
+} from '../pe';
 import { win32ModuleOf } from './text';
 import { withWinmm } from './winmm';
 import type { Constructor } from './state';
@@ -150,9 +156,11 @@ const DDSCAPS_PRIMARYSURFACE = 0x0000_0200;
 /** Playback-cursor cache at the tail of guest IDirectSoundBuffer objects; vtable/refcount still occupy the first eight bytes. */
 const SOUND_POSITION_CACHE = 8;
 const SOUND_POSITION_BUDGET = 12;
-// Bink polls playback cursors heavily in its decoding thread. A 63-hit cache still causes about
-// 2,300 Worker-to-main-thread queries per second; 1023 hits reduce that to about 140 per second while refreshing
-// within a frame, avoiding WebAudio-message flooding and intermittent audio dropouts.
+const SOUND_POSITION_TICK = 16;
+const SOUND_WRITE_POSITION_CACHE = 20;
+// Bound both hot polling and infrequent queries. A call-count budget alone can replay the same
+// cursor for seconds when voices are polled once per frame, preventing ring refill/completion.
+// PIT epochs only invalidate the cache; the refreshed cursor still uses host/audio time.
 const SOUND_POSITION_FAST_BUDGET = 1023;
 /** Cache the full DDSURFACEDESC at the RA2 surface-object tail for direct copying by guest Lock stubs. */
 const SURFACE_DESC_CACHE = 8;
@@ -196,7 +204,7 @@ function comTagOf(interfaceName: string): number | undefined {
 }
 
 /**
- * Cached GetCurrentPosition fast stub: most polls replay the latest host-computed cursor; exhausted budgets fall back to hypercall refresh. Host monotonic time/WebAudio remains authoritative while avoiding thousands of RA2 music-thread VM/JS round trips per second.
+ * Cached GetCurrentPosition fast stub: polls within one scheduler tick replay the latest host-computed cursor; a new tick or exhausted budget falls back to hypercall refresh. Host monotonic time/WebAudio remains authoritative while avoiding thousands of RA2 music-thread VM/JS round trips per second.
  */
 function makeCachedSoundPositionStub(id: number, argBytes: number): Uint8Array {
   const code: number[] = [];
@@ -204,6 +212,10 @@ function makeCachedSoundPositionStub(id: number, argBytes: number): Uint8Array {
   code.push(0x85, 0xc9); // test ecx, ecx
   code.push(0x0f, 0x84, 0, 0, 0, 0); // jz fallback
   const nullPatch = code.length - 4;
+  code.push(0xa1, ...[0, 8, 16, 24].map((shift) => (GUEST_SCHEDULER_TICKS >>> shift) & 255));
+  code.push(0x3b, 0x41, SOUND_POSITION_TICK); // cmp eax, [ecx + cached tick]
+  code.push(0x0f, 0x85, 0, 0, 0, 0); // jne fallback
+  const tickPatch = code.length - 4;
   code.push(0x83, 0x79, SOUND_POSITION_BUDGET, 0x00); // cmp dword [ecx + budget], 0
   code.push(0x0f, 0x84, 0, 0, 0, 0); // je fallback
   const budgetPatch = code.length - 4;
@@ -216,6 +228,7 @@ function makeCachedSoundPositionStub(id: number, argBytes: number): Uint8Array {
   code.push(0x89, 0x02); // mov [edx], eax
   const second = code.length;
   code[firstNull + 1] = (second - (firstNull + 2)) & 0xff;
+  code.push(0x8b, 0x41, SOUND_WRITE_POSITION_CACHE); // mov eax, [ecx + write position]
   code.push(0x8b, 0x54, 0x24, 0x0c); // mov edx, [esp + 12]（write cursor out）
   code.push(0x85, 0xd2); // test edx, edx
   const secondNull = code.length;
@@ -227,7 +240,7 @@ function makeCachedSoundPositionStub(id: number, argBytes: number): Uint8Array {
   code.push(0xc2, argBytes & 0xff, (argBytes >>> 8) & 0xff);
   const fallback = code.length;
   code.push(...makeImportStub(id, argBytes));
-  for (const patch of [nullPatch, budgetPatch]) {
+  for (const patch of [nullPatch, tickPatch, budgetPatch]) {
     const relative = fallback - (patch + 4);
     code[patch] = relative & 0xff;
     code[patch + 1] = (relative >>> 8) & 0xff;
@@ -792,11 +805,12 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
             return { eax: 0 };
           case 'GetCurrentPosition':
             {
-              const position =
-                this.options.audio?.getState(buffer.object)?.positionBytes ?? this.soundBufferPosition(buffer);
+              const state = this.options.audio?.getState(buffer.object);
+              const position = state?.positionBytes ?? this.soundBufferPosition(buffer);
+              const writePosition = state?.writePositionBytes ?? position;
               if (a[1]) this.writeU32(a[1], position);
-              if (a[2]) this.writeU32(a[2], position);
-              this.cacheSoundBufferPosition(buffer, position);
+              if (a[2]) this.writeU32(a[2], writePosition);
+              this.cacheSoundBufferPosition(buffer, position, writePosition);
             }
             return { eax: 0 };
           case 'GetFormat':
@@ -826,13 +840,13 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
             // DSBLOCK_FROMWRITECURSOR (1) and DSBLOCK_ENTIREBUFFER (2): RA2 streaming music
             // uses these to maintain ring buffers. Ignoring ENTIREBUFFER with bytes=0
             // returns an empty lock, so only the prefilled portion plays.
-            if ((flags & 1) !== 0) {
-              buffer.position =
-                this.options.audio?.getState(buffer.object)?.positionBytes ?? this.soundBufferPosition(buffer);
-              buffer.startedAt = this.audioNow();
-              this.invalidateSoundBufferPosition(buffer);
-            }
-            const offset = Math.min((flags & 1) !== 0 ? buffer.position : (a[1] ?? 0), buffer.size);
+            const state = (flags & 1) !== 0 ? this.options.audio?.getState(buffer.object) : null;
+            const writePosition =
+              state?.writePositionBytes ??
+              state?.positionBytes ??
+              ((flags & 1) !== 0 ? this.soundBufferPosition(buffer) : 0);
+            // Locking from the write cursor must not seek or restart playback.
+            const offset = Math.min((flags & 1) !== 0 ? writePosition : (a[1] ?? 0), buffer.size);
             const requested = (flags & 2) !== 0 ? buffer.size : Math.min(a[2] ?? 0, buffer.size);
             const first = Math.min(requested, buffer.size - offset);
             const second = requested - first;
@@ -844,6 +858,7 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
           }
           case 'Play':
             {
+              this.soundBufferPosition(buffer);
               const nextLooping = ((a[3] ?? 0) & 1) !== 0;
               // DirectSound Play is a no-op when already playing with unchanged flags. Bink repeats it each frame;
               // do not keep messaging the main thread for identical state.
@@ -992,7 +1007,7 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
       format: PcmWaveFormat = { ...DEFAULT_PCM_FORMAT },
     ): SoundBufferState | null {
       const safeSize = Math.max(1, Math.min(size || 65_536, 4 * 1024 * 1024));
-      const object = this.createComObject('IDirectSoundBuffer', SOUND_BUFFER_METHODS, 'DSOUND.COM', 16);
+      const object = this.createComObject('IDirectSoundBuffer', SOUND_BUFFER_METHODS, 'DSOUND.COM', 24);
       if (!object) return null;
       const data = this.alloc(safeSize, true);
       if (!data) {
@@ -1018,8 +1033,10 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
       return buffer;
     }
 
-    private cacheSoundBufferPosition(buffer: SoundBufferState, position: number): void {
+    private cacheSoundBufferPosition(buffer: SoundBufferState, position: number, writePosition: number): void {
+      this.writeU32(buffer.object + SOUND_WRITE_POSITION_CACHE, writePosition);
       this.writeU32(buffer.object + SOUND_POSITION_CACHE, position >>> 0);
+      this.writeU32(buffer.object + SOUND_POSITION_TICK, this.readU32(GUEST_SCHEDULER_TICKS));
       this.writeU32(buffer.object + SOUND_POSITION_BUDGET, SOUND_POSITION_FAST_BUDGET);
     }
 
@@ -1028,9 +1045,15 @@ export function withDirectx<TBase extends Constructor<WinmmChain>>(Base: TBase) 
       this.writeU32(buffer.object + SOUND_POSITION_BUDGET, 0);
     }
     /**
-     * In the normal browser path the VM runs in a Worker while WebAudio runs on the main thread, preventing synchronous getState. Maintain DirectSound cursors from host monotonic time and PCM frame rate so RA2's streaming decoder can identify consumed ring regions and refill them promptly.
+     * Use output observations when available, including the Worker's latest asynchronous report. Only headless sinks without playback observations use the monotonic fallback.
      */
     protected soundBufferPosition(buffer: SoundBufferState): number {
+      const state = this.options.audio?.getState(buffer.object);
+      if (state) {
+        buffer.position = state.positionBytes;
+        buffer.playing = state.playing;
+        return buffer.position;
+      }
       if (!buffer.playing || buffer.size <= 0) return buffer.position;
       const now = this.audioNow();
       const elapsedSeconds = Math.max(0, now - buffer.startedAt) / 1000;

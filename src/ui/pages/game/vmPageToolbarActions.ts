@@ -180,7 +180,7 @@ export function createVmPageToolbarActions(deps: VmPageToolbarActionDeps): Runti
       // An exported package missing in-game saves cannot resume gameplay:
       // the receiver hits the native divide-by-zero crash when map files are absent. Warn early instead of exporting an incomplete package.
       const paths = await listSavePaths(gameSource.files);
-      if (!paths.some((path) => path.startsWith('save/'))) {
+      if (!hasPlayerSlotSaves(paths)) {
         window.alert(
           t('游戏目录中没有局内存档（Save 目录缺失或为空）：\n') +
             t('导出的内容只有进度表文件，无法在其他浏览器继续游戏。\n') +
@@ -194,6 +194,7 @@ export function createVmPageToolbarActions(deps: VmPageToolbarActionDeps): Runti
       if (
         !window.confirm(
           t('导出包内容（共 {0} 个文件）：\n\n{1}\n\n', paths.length, summary) +
+            t('以上按文件数量统计，不等于游戏内可见的存档槽位数。\n\n') +
             t('请确认包含你实际游玩的槽位。若没有，说明当前浏览器/网址里不存在那些存档') +
             t('（存档在各浏览器自己的 IndexedDB 里），应换到实际玩的那个浏览器重新导出。\n\n是否下载？'),
         )

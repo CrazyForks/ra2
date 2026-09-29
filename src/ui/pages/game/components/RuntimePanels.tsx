@@ -1,8 +1,11 @@
 import { t, localizeLabel, localizeText } from '../../../shared/i18n/translate';
 import { useState, type CSSProperties } from 'react';
 import { forgetGameDirectory } from '../../../../platform/browser/files/directoryAccess';
-import { clearCachedGameFiles } from '../../../../adapter/cachedGameFiles';
+import { clearCachedGameFiles, clearCachedImportedGameFiles } from '../../../../adapter/cachedGameFiles';
+import { SUPPORTED_GAMES } from '../../../../games/catalog';
 import type { BootState, StatusState } from '../state/uiState';
+import { Ra2LoadingView } from './ra2menu/Ra2LoadingView';
+import { Ra2MenuButton } from './ra2menu/Ra2MenuButton';
 
 const panelStyle: CSSProperties = {
   left: '50%',
@@ -14,6 +17,8 @@ const panelStyle: CSSProperties = {
 const reasonText = (reason: unknown) => (reason instanceof Error ? reason.message : String(reason));
 export function ProblemPanel({ phase, detail }: { phase: 'blocked' | 'error'; detail: string }) {
   const [copied, setCopied] = useState(t('复制错误详情'));
+  const [busy, setBusy] = useState(false);
+  const [recoveryError, setRecoveryError] = useState('');
   return (
     <section className="panel game-folder-panel bad-page" style={panelStyle}>
       <h3 style={{ color: '#f00', fontSize: 24 }}>
@@ -50,7 +55,25 @@ export function ProblemPanel({ phase, detail }: { phase: 'blocked' | 'error'; de
         <button type="button" className="folder-button" onClick={() => window.location.reload()}>
           {t('重新启动游戏')}{' '}
         </button>
+        <button
+          type="button"
+          className="folder-button"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            void clearCachedImportedGameFiles(SUPPORTED_GAMES.map((game) => game.id)).then(
+              () => window.location.reload(),
+              (error) => {
+                setBusy(false);
+                setRecoveryError(t('无法清除资源缓存：{0}', reasonText(error)));
+              },
+            );
+          }}
+        >
+          {t('重新选择游戏资源')}
+        </button>
       </div>
+      {recoveryError && <p role="alert">{recoveryError}</p>}
     </section>
   );
 }
@@ -89,31 +112,27 @@ export function BootView({ game, status, cancel }: BootState) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   return (
-    <div id="vm-boot">
-      <div className="vm-boot-icon" aria-hidden="true">
-        {game.id.toUpperCase()}
-      </div>
-      <div className="vm-boot-title">{localizeLabel(game.title)}</div>
-      <div className="vm-boot-loading" aria-hidden="true" />
-      <div className="vm-boot-phase">
-        {status.phase === 'running' ? t('加载资源') : status.phase === 'ready' ? t('内存就绪') : t('启动中')}
-      </div>
-      <div className="vm-boot-detail">{localizeText(error || status.detail)}</div>
-      <button
-        type="button"
-        className="toolbar-button"
-        disabled={busy}
-        onClick={() => {
-          setBusy(true);
-          void cancel().catch((reason) => {
-            setBusy(false);
-            setError(reasonText(reason));
-          });
-        }}
-      >
-        {busy ? t('正在停止…') : t('取消启动')}
-      </button>
-    </div>
+    <section id="vm-boot" className="game-folder-panel game-source-picker" aria-label={t('启动中')}>
+      <Ra2LoadingView
+        title={localizeLabel(game.title)}
+        phase={status.phase === 'running' ? t('加载资源') : status.phase === 'ready' ? t('内存就绪') : t('启动中')}
+        detail={localizeText(error || status.detail)}
+        action={
+          <Ra2MenuButton
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              void cancel().catch((reason) => {
+                setBusy(false);
+                setError(reasonText(reason));
+              });
+            }}
+          >
+            {busy ? t('正在停止…') : t('取消启动')}
+          </Ra2MenuButton>
+        }
+      />
+    </section>
   );
 }
 export function StatusView({ value, id, bottom }: { value: StatusState; id: string; bottom: number }) {

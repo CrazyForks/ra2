@@ -6,6 +6,7 @@ import { zipSync } from 'fflate';
 import { chromium } from '@playwright/test';
 
 const files = {
+  'game.exe': new Uint8Array([77, 90, 9]),
   'ra2.mix': new Uint8Array([1, 2, 3]),
   'language.mix': new Uint8Array([4]),
   'blowfish.dll': new Uint8Array([5]),

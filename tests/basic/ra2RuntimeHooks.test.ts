@@ -1,3 +1,4 @@
+import { adaptiveImage } from '../fixture/adaptiveImage';
 import { describe, expect, it } from 'vitest';
 import {
   RA2_RUNTIME_HOOKS,
@@ -32,16 +33,26 @@ function readF64(memory: FakeGuestMemory, address: number): number {
 
 describe('RA2 运行态护栏', () => {
   it('identifies save reference restoration failures without misdiagnosing missing installation assets', () => {
-    expect(RA2_RUNTIME_HOOKS.crashHint!(0, 0x0069_fcbd)).toContain('存档对象引用恢复失败');
-    expect(RA2_RUNTIME_HOOKS.crashHint!(13, 0x0069_fcbd)).toBe('');
-    expect(RA2_RUNTIME_HOOKS.crashHint!(0, 0x0069_fcbe)).toBe('');
+    const f = adaptiveImage('ra2');
+    const address = f.base + 0x1d00;
+    f.patch(
+      address,
+      [
+        0x3b, 0x01, 0x74, 0x16, 0xc7, 0x44, 0x24, 0x10, 0, 0, 0, 0, 0xb8, 1, 0, 0, 0, 0x99, 0xf7, 0x7c, 0x24, 0x10,
+        0x89, 0x44, 0x24, 0x10, 0x85, 0xed, 0x7f, 0xbf,
+      ],
+    );
+    const hooks = RA2_RUNTIME_HOOKS.resolve!(f.memory, f.exe);
+    expect(hooks.crashHint!(0, address + 18)).toContain('存档对象引用恢复失败');
+    expect(hooks.crashHint!(13, address + 18)).toBe('');
+    expect(hooks.crashHint!(0, address + 19)).toBe('');
   });
   it('RA2 启动缩短测速时长及轮数，保留函数其余字节且可重复应用', () => {
     const memory = createGuestMemory();
     writeCpuCalibration(memory);
     const original = memory.read_memory(0x005a_bf70, 0x200).slice();
 
-    RA2_RUNTIME_HOOKS.prepareImage!(memory);
+    shortenRa2CpuCalibration(memory);
 
     const expected = original.slice();
     new DataView(expected.buffer).setUint32(0x5abfef - 0x5abf70, 100, true);

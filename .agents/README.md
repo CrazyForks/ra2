@@ -1,11 +1,14 @@
-# 仓库级 Skills
+# Repository skills
 
-从 nathankim0/clean-architecture-skills 的 plugins 目录复制，来源提交为
-`725cbeeb12e3f731445e7688dee3bbfe5e149c8e`。SKILL.md 保留上游原文，各目录附带原始 MIT 许可。
+These skills follow user instructions and the [repository collaboration rules](../AGENTS.md).
 
-- [clean-architecture](skills/clean-architecture/SKILL.md)：依赖方向、分层与架构审查。
-- [kent-beck-style](skills/kent-beck-style/SKILL.md)：代码可读性、简单设计与渐进重构。
+## Third-party skills
 
-对应上游路径分别为 `plugins/clean-architecture/skills/clean-architecture/` 和
-`plugins/kent-beck-style/skills/kent-beck-style/`。这里只安装 skill 内容，不启用 Claude 插件配置。
-应用时仍遵守用户指令和 [仓库协作规范](../AGENTS.md)。
+Copied from the `plugins` directory of `nathankim0/clean-architecture-skills` at commit
+`725cbeeb12e3f731445e7688dee3bbfe5e149c8e`. Their SKILL.md files retain the upstream text, and each directory includes the original MIT license.
+
+- [clean-architecture](skills/clean-architecture/SKILL.md): dependency direction, layering, and architecture review.
+- [kent-beck-style](skills/kent-beck-style/SKILL.md): readability, simple design, and incremental refactoring.
+
+The respective upstream paths are `plugins/clean-architecture/skills/clean-architecture/` and
+`plugins/kent-beck-style/skills/kent-beck-style/`. Only skill contents are installed; Claude plugin configuration is not enabled.

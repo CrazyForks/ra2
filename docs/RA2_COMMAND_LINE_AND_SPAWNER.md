@@ -4,7 +4,7 @@
 
 `?network=1&start-page=lan` supports RA2/YR and enters the native LAN lobby after resource selection. For a self-hosted service, append `relay=127.0.0.1:15176`. `network=1` enables the host relay; `start-page=lan` controls only initial guest navigation. Without navigation parameters, startup still enters the main menu. This entry point does not create rooms, select maps, start matches, or bypass connection failures.
 
-The implementation reuses the hash, 20-byte signature, and one-shot trampoline described for skirmish below, changing only the first target to 3 and restoring 18 after consumption. Independent disassembly of both executables establishes:
+The implementation reuses the structurally resolved menu entry and one-shot trampoline described for skirmish below, changing only the first target to 3 and restoring 18 after consumption. Independent disassembly of both executables establishes:
 
 - RA2's main-menu LAN button ID `0x578` returns state 3 at `0x5172C1`. Dispatch table `0x5146F4` indexes by state plus one to `0x5139C2`, sets Session=3 and network protocol=1, then transitions to state 16 so native session initialization creates the lobby.
 - YR's corresponding return point is `0x532051`, dispatch table `0x52EB58`, and state branch `0x52DD75`. It uses its own Session address and ESI state register. Setting the initial target directly to 16 would skip network-mode initialization.
@@ -23,13 +23,13 @@ This single-client check does not replace two-client discovery, actual match sta
 
 This is not a complete CnCNet Spawner. It uses native INI/default skirmish settings without URL configuration for maps, players, seeds, or networking, and does not guarantee identical matches across resource/cache environments. It skips manual menu navigation but cannot replace deterministic replay or multiplayer synchronization tests. Without valid maps/settings, the native handler still validates and may remain on the settings page; tests must fail on timeout rather than force success.
 
-`src/games/shared/battleStartup.ts` generates the trampoline. `src/games/ra2/battleStartup.ts` and `src/games/yr/battleStartup.ts` independently register addresses and validate versions based on executable disassembly:
+`src/games/shared/battleStartup.ts` generates the trampoline. `src/games/shared/nativeLayout.ts` resolves the setup entry and handler from the loaded executable. The original RA2/YR baseline helpers retain the following disassembly evidence for instruction regressions:
 
 - Reuse first-state-11 navigation without skipping skirmish-settings creation or configuration initialization.
 - RA2 `0x683C79` and YR `0x6AE34E` follow settings-window initialization. Original instructions are `mov eax,[esp+4]; cmp eax,0x617`. The settings page may appear briefly during initialization.
 - A one-shot x86 trampoline calls each native start handler, RA2 `0x6829F0` / YR `0x6ACEE0`, with `ECX=ESI` (window), `EDX=0x617`, and two zero stack arguments. The handler uses `RET 8`. This is neither a click script nor a posted WM_COMMAND; native code still parses options, loads the scenario, and cleans up windows.
 - Preserve/restore registers and flags, replay both overwritten instructions, and retain the subsequent native conditional branch. Consume the flag before calling so later skirmish entry does not auto-start again.
-- Validate the full executable hash, 11-byte site signature, exclusive stub space, and allocation overlap. Modify guest memory only, leaving disk executables and the VM clock unchanged.
+- Validate the unique setup signature, linked callback/handler, loaded instructions, exclusive stub space, and allocation overlap. Modify guest memory only, leaving disk executables and the VM clock unchanged.
 
 ```bash
 # Requires local game resources and a running development server; defaults to RA2/YR × Worker/main-thread.
@@ -48,10 +48,10 @@ During a game, the sidebar's quick-start action asks for confirmation, safely cl
 
 With `?start-page=skirmish`, the first native page after selecting RA2/YR resources is skirmish settings. Append `&start-page=skirmish` when a query already exists. Omitting it preserves default behavior. This settings entry neither starts matches automatically nor bypasses resource loading. Use `battle` above for automatic startup; unknown targets produce an explicit error.
 
-- Implementation lives in `src/games/ra2/startupPage.ts` and `src/games/yr/startupPage.ts`, sharing `src/games/shared/startupTrampoline.ts` without copying third-party patch code. Original executable disassembly shows the skirmish button at `0x513363` returning state 11; dispatch table `0x5146F4` jumps to `0x513D93`, where native code sets the Skirmish session and creates settings.
+- Runtime resolution lives in `src/games/shared/nativeLayout.ts` and `adaptiveRuntimeHooks.ts`, sharing `src/games/shared/startupTrampoline.ts` without copying third-party patch code. The RA2/YR startup modules retain fixed-baseline regression entry points. Original executable disassembly shows the skirmish button at `0x513363` returning state 11; dispatch table `0x5146F4` jumps to `0x513D93`, where native code sets the Skirmish session and creates settings.
 - `0x513762` originally selects initial-menu EBP=18. Only this location receives a five-byte JMP. The final 48 bytes of exclusive static stub space use MOV to read one-shot target 11, restore it to 18, and jump to the native continuation. No persistent polling flag, simulated button, or VM-clock modification is used; native settings creation/destruction still runs.
-- YR independently validates gamemd.exe SHA-256 `7b8a068535d6af06845edf95ae829b113d00c02909330e16f197426cd7db94b6` and its 20-byte signature. Its skirmish button at `0x52D713` returns 11; `0x52EB58` indexes by state+1 to `0x52E10F` and sets Session=5. Patch entry `0x52DB12` was MOV ESI,18; only the first execution uses 11, then restores 18. The generator is shared, but RA2 addresses and EBP are not reused.
-- Accept only each registered executable SHA-256 and 20-byte entry signature. After page-side validation, send an independent copy of the selected executable to the Worker and place it into the memory filesystem before game rediscovery. Reject executable-version mismatches. Matching a few instructions does not justify relaxing version validation; local game files are never overwritten.
+- The YR reference baseline is gamemd.exe SHA-256 `7b8a068535d6af06845edf95ae829b113d00c02909330e16f197426cd7db94b6` with its 20-byte signature. Its skirmish button at `0x52D713` returns 11; `0x52EB58` indexes by state+1 to `0x52E10F` and sets Session=5. Patch entry `0x52DB12` was MOV ESI,18; only the first execution uses 11, then restores 18. The generator is shared, but RA2 addresses and EBP are not reused.
+- Runtime navigation requires unique menu-selection evidence, coherent register use and an independent Session reference, then verifies loaded bytes before installation. A hash difference alone does not reject navigation. Worker transfer still uses an independent executable copy; local game files are never overwritten. See [Adaptive executables](ADAPTIVE_EXECUTABLES.md) for capability and resource-selection boundaries.
 - startupPage flows from creation options through Worker init or main-thread fallback to shared VmCore; concrete addresses remain in game directories. Install before first execution, keeping static stubs below the 0xC0000 dynamic-stub boundary.
 - Unit tests execute real x86, verifying first state 11, second state 18, stack/flag preservation, and rejection of wrong versions, signatures, duplicates, and conflicts. Three real-executable regressions cover direct entry, selecting the last country, and selecting a map then returning to the single-player and main menus. First-click gating respects an explicitly expected page instead of always waiting for MainMenu.
 - Browser scripts separately verify Worker, `vm-worker=0`, and default startup without navigation parameters, recording the first page. They use normal development entry and executable caching without intercepting/replacing executable requests, verifying that the entire page-selected executable reaches the Worker. Screenshots remain in test-configured temporary directories; game assets are not committed.
@@ -65,6 +65,14 @@ RA2_BROWSER_ORIGIN=https://127.0.0.1:15175 pnpm run test:browser:startup-page
 ## Current startup configuration
 
 Both RA2/YR catalogs pass `-SPEEDCONTROL` and default in-memory INI `[Options]` and `[Skirmish] GameSpeed` to **0 (fastest)** before VM creation. Imported resources, `[LAN]` / `[WonlinePref]` room speeds, and the VM clock are unchanged. Native options still adjust speed during play; restarting the VM reapplies startup defaults.
+
+The same in-memory `[Options]` overlay defaults a missing `ToolTips` setting to `yes` for both games, preserving an explicit value such as `no`. Hover text, its delay, and its rendering remain owned by the original game.
+
+RA2 1.006 also requires a synchronous `WM_CREATE` callback for its registered `Red Alert 2` top-level window. The native WndProc at `0x7375a0` handles that message at `0x737760`, constructs `CCToolTip`, and stores its pointer at `0x8399b0`. Without the callback, the pointer remains zero during battle even when `[Options] ToolTips=yes` is parsed and unit hover still shows selection brackets and health. The window class is registered by the RA2 profile; the shared User32 shim supplies the normal creation callback.
+
+YR 1.001 creates its top-level window with the distinct registered class `Yuri's Revenge`. Its profile supplies that class to the same `WM_CREATE` mechanism; inheriting RA2's class name leaves the YR creation callback disabled.
+
+The tooltip manager schedules 1-second and 10-second Win32 timers. `PeekMessageA` must keep returning promptly while those deadlines are distant; suspending the VM for every empty poll cuts native simulation throughput. The shared message shim only yields for UI timers within 34 host milliseconds of expiry, while `GetMessageA` and `WaitMessage` retain their blocking behavior.
 
 The generic shim assembles the command line without game-specific decisions. Module paths remain the original executable path; arguments do not enter `GetModuleFileNameA`. Tests cover argument boundaries, RA2/YR propagation, and INI overlays.
 

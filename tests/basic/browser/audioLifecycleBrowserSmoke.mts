@@ -20,6 +20,9 @@ try {
         const entry = { count: null, messages: 0, detach: null };
         const observe = event => {
           if(event.data.kind === 'position') {
+            if(!Number.isFinite(event.data.at) || !Number.isInteger(event.data.revision)) {
+              errors.push('Audio cursor report omitted its timestamp or revision');
+            }
             entry.count = event.data.live;
             entry.messages++;
           }

@@ -6,6 +6,10 @@ import { RA2_SHIM_PROFILE } from '../ra2/profile';
  */
 export const YR_SHIM_PROFILE: GameShimProfile = Object.freeze({
   ...RA2_SHIM_PROFILE,
+  shell: Object.freeze({
+    ...RA2_SHIM_PROFILE.shell,
+    topLevelCreateClassNames: Object.freeze(["yuri's revenge"] as const),
+  }),
   // Native persistence is required for object references to survive a cold load.
   skipGuestOleSaveToStream: false,
   launcher: Object.freeze({

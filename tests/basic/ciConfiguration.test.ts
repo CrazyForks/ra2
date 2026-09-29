@@ -67,7 +67,7 @@ it('Basic 显式选择无素材目录，有资源入口仍执行原始 EXE 契�
   expect(script).toContain("existsSync('game') || existsSync('.tmp-third-party')");
   expect(script).toContain("VM_GAME_DIR: join(roots.game, 'ra2')");
   expect(script).toContain('tests/real-game/ra2/shortGame.test.ts');
-  expect(script).toContain("await tasks.run('save-load', 6, 'pnpm', [");
+  expect(script).toContain("await tasks.run('save-load', 14, 'pnpm', [");
   expect(script).toContain('tests/real-game/${gameId}/saveLoad.test.ts');
   for (const gameId of ['ra2', 'yr']) expect(existsSync(`tests/real-game/${gameId}/saveLoad.test.ts`)).toBe(true);
   // Do not inherit local VM_* debug switches; identify missing secret variables instead of falling into a generic download-failure branch.

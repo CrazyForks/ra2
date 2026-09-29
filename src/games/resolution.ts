@@ -99,7 +99,7 @@ export function patchGameResolutionIni(bytes: Uint8Array, resolution: GameResolu
 /** Default menu resolution when an online package has no INI: the standard RA2 menu setting. */
 const FALLBACK_RESOLUTION: GameResolution = { width: 800, height: 600 };
 
-/** Read the INI actually used by the game, then overlay a read-only memory layer; if unreadable, provide an openable empty configuration. */
+/** Overlay the game's INI for this session, retaining guest writes locally; supply defaults only when the file is missing. */
 export async function withGameResolutionOverride(
   source: GameSource,
   resolution: GameResolution | null | undefined,

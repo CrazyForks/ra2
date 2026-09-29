@@ -1,6 +1,6 @@
 import { GAME_ARCHIVE_DIRECTORY_RULES, gameArchiveLayers } from '../games/archivePolicy';
 import type { SupportedGameId } from '../games/catalog';
-import { extractArchiveFiles } from '../utils/archive/archiveExtract';
+import { extractArchiveFiles, type ArchiveExtractProgress } from '../utils/archive/archiveExtract';
 import { SessionGameFileProvider } from '../platform/browser/files/sessionFiles';
 import { ProgressiveGameFileProvider } from './progressiveFiles';
 
@@ -11,6 +11,7 @@ export function openGameArchive(
   bytes: Uint8Array | Blob,
   gameId: SupportedGameId | undefined,
   onStatus: (message: string) => void,
+  onProgress?: (progress: ArchiveExtractProgress) => void,
 ): Promise<SessionGameFileProvider> {
   return new Promise((resolve, reject) => {
     const controller = new AbortController();
@@ -26,6 +27,7 @@ export function openGameArchive(
       directoryRules: GAME_ARCHIVE_DIRECTORY_RULES,
       layers,
       signal: controller.signal,
+      onProgress,
       onStatus(message) {
         onStatus(message);
         provider?.updateStatus(message);

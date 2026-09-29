@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mapVirtualKey, toAscii } from '../../src/vm86/shim/keyboard';
+import { keyNameText, mapVirtualKey, toAscii } from '../../src/vm86/shim/keyboard';
 import { callShim, createGuestMemory, createTestShim, writeAsciiZ } from '../helpers/guestMemory';
 
 describe('客体键盘转换', () => {
@@ -26,6 +26,24 @@ describe('客体键盘转换', () => {
     expect(toAscii(0x48, 0x23, state)).toEqual([8]);
     expect(toAscii(0x70, 0x3b, state)).toEqual([]);
     expect(toAscii(0x48, 0x8023, state)).toEqual([]);
+  });
+  it('从 GetKeyNameTextA 的 lParam 识别普通与扩展按键', () => {
+    expect(keyNameText(0x001e0000)).toBe('A');
+    expect(keyNameText(0x003f0000)).toBe('F5');
+    expect(keyNameText(0x004b0000)).toBe('Num 4');
+    expect(keyNameText(0x014b0000)).toBe('Left');
+    expect(keyNameText(0x011d0000)).toBe('Right Ctrl');
+    expect(keyNameText(0x00ff0000)).toBe('');
+  });
+  it('真实 shim 按目标容量写入 GetKeyNameTextA，未知键返回空名称', () => {
+    const memory = createGuestMemory(),
+      shim = createTestShim(memory);
+    memory.write_memory([0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa], 0x2000);
+    expect(callShim(shim, 'USER32.DLL!GetKeyNameTextA', [0x011d0000, 0x2000, 6]).eax).toBe(5);
+    expect([...memory.read_memory(0x2000, 6)]).toEqual([82, 105, 103, 104, 116, 0]);
+    expect(callShim(shim, 'USER32.DLL!GetKeyNameTextA', [0x00ff0000, 0x2000, 6]).eax).toBe(0);
+    expect([...memory.read_memory(0x2000, 6)]).toEqual([0, 105, 103, 104, 116, 0]);
+    expect(callShim(shim, 'USER32.DLL!GetKeyNameTextA', [0x001e0000, 0, 6]).eax).toBe(0);
   });
   it('真实 shim 导入写回 WORD，不覆盖相邻内存', () => {
     const memory = createGuestMemory(),

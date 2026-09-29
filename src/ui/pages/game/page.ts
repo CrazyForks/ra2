@@ -139,6 +139,12 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
     targetSize: () => ({ width: canvas.width, height: canvas.height }),
     transform: (frame) => effects.transform(frame),
     presented: () => {
+      // Hide the boot menu only after a real frame reaches the canvas; removing it earlier
+      // exposes a blank canvas for one paint and makes startup flash before the game appears.
+      if (!firstFramePresented) {
+        firstFramePresented = true;
+        hideBootOverlay();
+      }
       effects.publishStatus(frameRenderer.upscaleStatus);
       toolbar.recordPresentedFrame();
     },
@@ -209,6 +215,7 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
   // The as assertion prevents TS narrowing a variable assigned only inside closures to null, then never after a null check.
   let gameTitle = 'Red Alert 2';
   let lastDebugUpdate = 0;
+  let firstFramePresented = false;
   const renderDebug = () => {
     if (!panelCreated || !debugVisible.getSnapshot() || performance.now() - lastDebugUpdate < 200) return;
     lastDebugUpdate = performance.now();
@@ -316,7 +323,7 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
   presenter.render();
   // Restore and start directly from the last persisted complete import without showing the picker;
   // missing/incomplete caches, such as quota-reduced sets, return to the picker.
-  const cachedSource = await restoreCachedGameSource().catch(() => null);
+  const cachedSource = await restoreCachedGameSource();
   if (generation !== pageGeneration) return;
   gameSource = cachedSource ?? (await selectGameFiles());
   if (generation !== pageGeneration) {
@@ -342,12 +349,6 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
       progressive.cancel();
     };
   } else activeResourceCleanup = null;
-  // Base-game caches and add-ons are independent; development HTTP and restored caches share the same startup mount path.
-  gameSource.additionalFiles = await loadCustomMapFiles(gameSource.game.id).catch((error) => {
-    console.warn(t('[自定义地图] 无法读取已保存的附加包'), error);
-    return new Map<string, Uint8Array>();
-  });
-  if (generation !== pageGeneration) return;
   gameTitle = gameSource.game.executable;
   activeNetworkCleanup?.();
   const networkIndicator = networkStatus;
@@ -455,6 +456,13 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
     };
   };
 
+  // Base-game caches and add-ons are independent; development HTTP and restored caches share the same startup mount path.
+  gameSource.additionalFiles = await loadCustomMapFiles(gameSource.game.id).catch((error) => {
+    console.warn(t('[自定义地图] 无法读取已保存的附加包'), error);
+    return new Map<string, Uint8Array>();
+  });
+  if (generation !== pageGeneration || exitHandled) return;
+
   vm = await startSessionRuntime(
     () =>
       pageController.start(({ isCurrent }) =>
@@ -487,7 +495,6 @@ export async function startVmPage(canvas: HTMLCanvasElement): Promise<void> {
               getRefitActiveCanvas: () => refitActiveCanvas,
               onUpdateBootOverlay: updateBootOverlay,
               onScheduleRender: scheduleRender,
-              onHideBootOverlay: hideBootOverlay,
               onFinishExited: finishExitedRuntime,
               onExposeRuntimeCallProbe: exposeRuntimeCallProbe,
               onAppendCall: appendCall,

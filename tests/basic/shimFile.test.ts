@@ -114,6 +114,34 @@ describe('_lopen/_lread/_llseek/_lclose', () => {
     expect(memory.read_memory(BUF, 4)).toEqual(new Uint8Array([0x5a, 0x5a, 0x5a, 0x5a]));
   });
 
+  it.each([false, true])(
+    'rejects unavailable range-backed bytes before copying (fast mirrors=%s)',
+    (enableFastFileMirror) => {
+      const memory = createGuestMemory();
+      const shim = createTestShim(memory, { enableFastFileMirror });
+      shim.mountFile('paged.bin', new Uint8Array([1, 2]), true, 8);
+      shim.markFileRangeBacked('paged.bin');
+      const handle = lopen(shim, memory, 'paged.bin');
+      const entry = FAST_FILE_TABLE + (handle - FAST_FILE_HANDLE_BASE) * FAST_FILE_ENTRY_BYTES;
+      expect(readU32(memory, entry)).toBe(0);
+      memory.write_memory([0xcc, 0xcc, 0xcc, 0xcc], BUF);
+      const countPtr = BUF + 16;
+      writeU32(memory, countPtr, 99);
+      expect(callShim(shim, 'KERNEL32.DLL!ReadFile', [handle, BUF, 4, countPtr, 0]).eax).toBe(0);
+      expect(callShim(shim, 'KERNEL32.DLL!GetLastError').eax).toBe(30);
+      expect(readU32(memory, countPtr)).toBe(0);
+      expect(lread(shim, handle, 4)).toBe(-1);
+      expect(memory.read_memory(BUF, 4)).toEqual(new Uint8Array([0xcc, 0xcc, 0xcc, 0xcc]));
+      expect(callShim(shim, 'KERNEL32.DLL!_llseek', [handle, 0, 1]).eax).toBe(0);
+      expect(lread(shim, handle, 0)).toBe(0);
+      shim.mountFileRange('paged.bin', 2, new Uint8Array([3, 4, 5, 6, 7, 8]));
+      expect(lread(shim, handle, 4)).toBe(4);
+      expect(memory.read_memory(BUF, 4)).toEqual(new Uint8Array([1, 2, 3, 4]));
+      expect(callShim(shim, 'KERNEL32.DLL!_llseek', [handle, 0, 2]).eax).toBe(8);
+      expect(lread(shim, handle, 4)).toBe(0);
+    },
+  );
+
   it('打开缺失文件返回 HFILE_ERROR 并置 GetLastError=2', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory);

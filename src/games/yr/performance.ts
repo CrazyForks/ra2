@@ -1,18 +1,46 @@
 import type { GuestMemory } from '../../vm86/win32';
 import { createFrameCounterReader } from '../shared/frameCounter';
-import { YR_STARTUP_PAGE_HASH } from './startupPage';
 
-/** YR 1.001: read the frame counter at 0x55de73, INC EDX at 0x55de7e, and write back at 0x55de81. */
-export function createYrFrameReader(memory: GuestMemory, hash: string) {
-  return createFrameCounterReader(memory, hash, {
-    hash: YR_STARTUP_PAGE_HASH,
-    site: 0x55de73,
-    signature: [
-      0x8b, 0x15, 0x84, 0xed, 0xa8, 0, 0xa1, 0x84, 0x77, 0xb0, 0, 0x42, 0x3b, 0xc7, 0x89, 0x15, 0x84, 0xed, 0xa8, 0,
-    ],
-    frame: 0xa8ed84,
-    gameSpeed: 0xa8eb60,
-    sessionSpeed: 0xa8b268,
-    requestedFps: 0xa8b558,
-  });
+/** YR 1.001 layout evidence: settings at EAX+0x14a0, independently copied into Session.GameSpeed. */
+export function createYrFrameReader(memory: GuestMemory, exe: Uint8Array) {
+  return createFrameCounterReader(memory, exe, YR_SETTINGS_SIGNATURE);
 }
+
+export const YR_SETTINGS_SIGNATURE = [
+  0x8b,
+  0x88,
+  0xa0,
+  0x14,
+  0,
+  0,
+  0x89,
+  0x0d,
+  null,
+  null,
+  null,
+  null,
+  0x8b,
+  0x90,
+  0xa4,
+  0x14,
+  0,
+  0,
+  0x89,
+  0x15,
+  null,
+  null,
+  null,
+  null,
+  0x8b,
+  0x88,
+  0xa8,
+  0x14,
+  0,
+  0,
+  0x89,
+  0x0d,
+  null,
+  null,
+  null,
+  null,
+] as const;

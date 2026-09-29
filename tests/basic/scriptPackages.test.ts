@@ -75,7 +75,7 @@ describe('Node 游戏包工具', () => {
     expect(result.code, result.output).toBe(1);
     expect(result.output).toContain('RA2_PACKAGE_URL');
     expect(result.output).toContain('未同步任何游戏包');
-    expect(result.output).toContain('pnpm run prepare:third-party');
+    expect(result.output).toContain('资源包需包含原始游戏主程序');
   });
 
   it('下载失败保留 HTTP 状态', async () => {

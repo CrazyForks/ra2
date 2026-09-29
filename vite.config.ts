@@ -8,7 +8,6 @@ import type { Duplex } from 'node:stream';
 import type { PreviewServer, ViteDevServer } from 'vite';
 import { createGameRelay } from 'relay-package/server';
 import { parseRelayFaultConfig } from 'relay-package/faults';
-import { createThirdPartyCacheHandler } from './src/server/thirdPartyCache';
 
 type ViteHttpServer = NonNullable<ViteDevServer['httpServer']> | NonNullable<PreviewServer['httpServer']>;
 
@@ -22,15 +21,6 @@ function gameAssetsPlugin(): Plugin {
   return {
     name: 'ra2:game-assets',
     configureServer(server) {
-      // The cache stays outside public/dist; production builds and preview do not expose this endpoint.
-      server.middlewares.use(
-        '/__third-party',
-        createThirdPartyCacheHandler(
-          resolve(
-            process.env.RA2_THIRD_PARTY_CACHE_DIR || fileURLToPath(new URL('./.tmp-third-party', import.meta.url)),
-          ),
-        ),
-      );
       server.middlewares.use('/game', serveGameAsset);
     },
     configurePreviewServer(server) {

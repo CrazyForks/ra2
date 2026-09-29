@@ -5,7 +5,7 @@ Use root `package.json` for everyday commands. Tests belong in `tests/`; this di
 | Directory      | Purpose                                                                                                 |
 | -------------- | ------------------------------------------------------------------------------------------------------- |
 | `ci/`          | CI orchestration, process cleanup, trusted resource download/validation                                 |
-| `resources/`   | Executable preparation, local ZIP archival, shared download modules                                     |
+| `resources/`   | Local ZIP archival and shared package download modules                                                  |
 | `assets/`      | Extract icons/scrollbar sprites from original game assets, retaining provenance/pixel evidence          |
 | `reverse/`     | Search PE addresses, imports, calls, and writes; requires supplied executables and reads originals only |
 | `benchmarks/`  | Fixed-workload host microbenchmarks, not full-match FPS                                                 |

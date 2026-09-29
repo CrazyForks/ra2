@@ -46,6 +46,7 @@ it('初始化回调抛错时终止 Worker 并移除取消监听', async () => {
 
 it.each([
   ['onStatus', { type: 'status', message: '进度' }],
+  ['onProgress', { type: 'catalog', names: ['file'] }],
   ['onCatalog', { type: 'catalog', names: ['file'] }],
   ['onStartupReady', { type: 'startup-ready' }],
   ['onFile', { type: 'file', name: 'file', bytes: new Uint8Array([1]) }],
@@ -138,4 +139,29 @@ it('成功后不再响应取消或消息，只转移源字节的独占副本', a
   controller.abort();
   expect(worker.terminate).toHaveBeenCalledOnce();
   expect(source).toEqual(new Uint8Array([1, 2, 3]));
+});
+
+it('reports delivered files against the catalog without treating startup readiness as completion', async () => {
+  const onProgress = vi.fn();
+  const task = extractArchiveFiles(new Uint8Array(), { wanted: ['a', 'b'], onProgress });
+  const worker = latest();
+  worker.emit({ type: 'catalog', names: ['a', 'b'] });
+  worker.emit({ type: 'file', name: 'a', bytes: new Uint8Array() });
+  worker.emit({ type: 'startup-ready' });
+  expect(onProgress).toHaveBeenLastCalledWith({ completedFiles: 1, totalFiles: 2 });
+  worker.emit({ type: 'file', name: 'a', bytes: new Uint8Array([1]) });
+  expect(onProgress).toHaveBeenLastCalledWith({ completedFiles: 1, totalFiles: 2 });
+  worker.emit({ type: 'file', name: 'b', bytes: new Uint8Array([2]) });
+  expect(onProgress).toHaveBeenLastCalledWith({ completedFiles: 2, totalFiles: 2 });
+  worker.emit({ type: 'done', found: ['a', 'b'] });
+  await task;
+});
+
+it('keeps the total unknown for extraction without a complete catalog', async () => {
+  const onProgress = vi.fn();
+  const task = extractArchiveFiles(new Uint8Array(), { wanted: ['a', 'missing'], onProgress });
+  latest().emit({ type: 'file', name: 'a', bytes: new Uint8Array([1]) });
+  expect(onProgress).toHaveBeenLastCalledWith({ completedFiles: 1, totalFiles: null });
+  latest().emit({ type: 'done', found: ['a'] });
+  expect((await task).missing).toEqual(['missing']);
 });

@@ -1,10 +1,11 @@
 import type { GameFileProvider } from '../contracts';
 import { normalizeGuestPath } from '../../vm86/paths';
 
-/** Overlay memory files over underlying provider reads; writes and persistence still use the underlying provider. */
+/** Overlay memory files; writes use the parent unless overlay hits are explicitly shadowed within this session. */
 export class OverlayGameFileProvider implements GameFileProvider {
   readonly label: string;
   private readonly overlay: ReadonlyMap<string, Uint8Array>;
+  private readonly sessionWrites = new Map<string, Uint8Array>();
 
   constructor(
     readonly parent: GameFileProvider,
@@ -15,7 +16,7 @@ export class OverlayGameFileProvider implements GameFileProvider {
     /** With copy=false, retain input bytes directly; the caller guarantees no later modification. */
     copy = true,
     /**
-     * Parent-first: read the player's full installation, including localized assets, before filling missing files from the online-package overlay. Default false means overlay-first. Writes are unaffected and always use the parent.
+     * Parent-first: read the player's full installation, including localized assets, before filling missing files from the online-package overlay. Default false means overlay-first. Explicit session writes take precedence in either mode.
      */
     private readonly parentFirst = false,
   ) {
@@ -27,7 +28,7 @@ export class OverlayGameFileProvider implements GameFileProvider {
 
   /** Normalized files in this overlay, exposed for Worker init serialization. */
   get overlays(): ReadonlyMap<string, Uint8Array> {
-    return this.overlay;
+    return this.sessionWrites.size ? new Map([...this.overlay, ...this.sessionWrites]) : this.overlay;
   }
 
   invalidateCache(): void {
@@ -46,6 +47,8 @@ export class OverlayGameFileProvider implements GameFileProvider {
   }
 
   async read(path: string): Promise<Uint8Array | null> {
+    const written = this.sessionWrites.get(normalizeGuestPath(path));
+    if (written) return written.slice();
     if (this.parentFirst) {
       const base = await this.parent.read(path);
       if (base) return base;
@@ -57,6 +60,8 @@ export class OverlayGameFileProvider implements GameFileProvider {
   }
 
   async readPrefix(path: string, maxBytes: number): Promise<{ bytes: Uint8Array; totalSize: number } | null> {
+    const written = this.sessionWrites.get(normalizeGuestPath(path));
+    if (written) return { bytes: written.slice(0, maxBytes), totalSize: written.length };
     if (this.parentFirst) {
       const base = this.parent.readPrefix
         ? await this.parent.readPrefix(path, maxBytes)
@@ -75,6 +80,8 @@ export class OverlayGameFileProvider implements GameFileProvider {
   }
 
   async readRange(path: string, offset: number, length: number): Promise<Uint8Array | null> {
+    const written = this.sessionWrites.get(normalizeGuestPath(path));
+    if (written) return written.slice(offset, offset + length);
     if (this.parentFirst) {
       const base = this.parent.readRange
         ? await this.parent.readRange(path, offset, length)
@@ -91,7 +98,12 @@ export class OverlayGameFileProvider implements GameFileProvider {
   }
 
   write(path: string, bytes: Uint8Array): Promise<void> {
-    if (this.shadowOverlayWrites && this.overlay.has(normalizeGuestPath(path))) return Promise.resolve();
+    const normalized = normalizeGuestPath(path);
+    if (this.shadowOverlayWrites && this.overlay.has(normalized)) {
+      // Reopens must observe guest writes without modifying imported assets or retaining borrowed guest memory.
+      this.sessionWrites.set(normalized, bytes.slice());
+      return Promise.resolve();
+    }
     return this.parent.write(path, bytes);
   }
 

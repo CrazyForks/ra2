@@ -5,6 +5,8 @@ dist/
 *.log
 .DS_Store
 /game/
+# Local executable compatibility corpus; never distribute original game binaries.
+/ra2-exe/
 .claude/
 .worktrees/
 .vercel/

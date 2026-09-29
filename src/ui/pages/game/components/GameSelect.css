@@ -4,6 +4,8 @@
   min-width: 0;
 }
 .game-select-value {
+  box-sizing: border-box;
+  min-width: 0;
   appearance: none;
   width: 100%;
   min-height: 26px;

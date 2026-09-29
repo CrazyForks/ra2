@@ -10,6 +10,12 @@ on:
 permissions:
   contents: read
 
+# At most one pipeline runs repository-wide at a time; a newly triggered
+# run cancels the in-flight one, including PR checks vs real-game runs.
+concurrency:
+  group: ci
+  cancel-in-progress: true
+
 jobs:
   basic:
     name: Basic test

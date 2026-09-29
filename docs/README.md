@@ -10,6 +10,7 @@ These maintained guides describe the current code, scripts, and test boundaries.
 | Repository collaboration rules                                        | [AGENTS.md](../AGENTS.md)                                                                              |
 | Development and player features                                       | [Project README](../README.md)                                                                         |
 | Architecture constraints, module boundaries, and dependency checks    | [Requirements](ARCHITECTURE_REQUIREMENTS.md), [Implementation](ARCHITECTURE.md)                        |
+| Adaptive executable addresses and local corpus validation             | [Adaptive executables](ADAPTIVE_EXECUTABLES.md)                                                        |
 | Native simulation FPS and performance testing                         | [Game performance](GAME_PERFORMANCE.md), [Architecture](ARCHITECTURE.md)                               |
 | Developer tools                                                       | [Scripts](../scripts/README.md)                                                                        |
 | Historical resource trimming evidence                                 | [Resource evidence](RESOURCE_PACKAGE_EVIDENCE.md)                                                      |

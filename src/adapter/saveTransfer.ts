@@ -103,13 +103,45 @@ export async function listSavePaths(provider: GameFileProvider): Promise<string[
   return [...paths].sort();
 }
 
+/** Read the save's embedded FILETIME from the SGBYSTG1 stream table when host file metadata is absent. */
+export function readSaveFileLastWriteTime(bytes: Uint8Array): bigint | null {
+  const magic = 'SGBYSTG1';
+  if (bytes.length < magic.length + 4) return null;
+  for (let index = 0; index < magic.length; index++) {
+    if (bytes[index] !== magic.charCodeAt(index)) return null;
+  }
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const streamCount = view.getUint32(magic.length, true);
+  if (streamCount > 1024) return null;
+  let offset = magic.length + 4;
+  const decoder = new TextDecoder();
+  for (let index = 0; index < streamCount; index++) {
+    if (offset + 8 > bytes.length) return null;
+    const nameLength = view.getUint32(offset, true);
+    const dataLength = view.getUint32(offset + 4, true);
+    offset += 8;
+    const nameEnd = offset + nameLength;
+    if (nameEnd > bytes.length || dataLength > bytes.length - nameEnd) return null;
+    const name = decoder.decode(bytes.subarray(offset, nameEnd));
+    const dataOffset = nameEnd;
+    if (name === 'last save time') {
+      if (dataLength !== 8) return null;
+      const fileTime = BigInt(view.getUint32(dataOffset, true)) | (BigInt(view.getUint32(dataOffset + 4, true)) << 32n);
+      return fileTime > 0n ? fileTime : null;
+    }
+    offset = nameEnd + dataLength;
+  }
+  return null;
+}
+
 /** Summarize save-file paths in a human-readable form. */
 export function summarizeSavePaths(paths: string[]): string {
   const rootSav = paths.filter((path) => /^[^/]+\.sav$/i.test(path)).sort();
   const nested = paths.filter((path) => /^save\//i.test(path)).sort();
   const lines: string[] = [];
-  if (rootSav.length) lines.push(`根目录存档 ${rootSav.length} 个：${rootSav.join(', ')}`);
-  if (nested.length) lines.push(`Save 目录 ${nested.length} 个：${nested.join(', ')}`);
+  if (rootSav.length) lines.push(`根目录 .sav 文件 ${rootSav.length} 个：${rootSav.join(', ')}`);
+  if (nested.length) lines.push(`Save 目录文件 ${nested.length} 个：${nested.join(', ')}`);
   return lines.join('\n');
 }
 

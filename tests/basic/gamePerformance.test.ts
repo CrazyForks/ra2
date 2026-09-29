@@ -2,43 +2,83 @@ import { expect, it, vi } from 'vitest';
 import { GamePerformanceMeter } from '../../src/adapter/gamePerformance';
 import { createRa2FrameReader } from '../../src/games/ra2/performance';
 import { createYrFrameReader } from '../../src/games/yr/performance';
-import { RA2_STARTUP_PAGE_HASH } from '../../src/games/ra2/startupPage';
-import { YR_STARTUP_PAGE_HASH } from '../../src/games/yr/startupPage';
-import { createGuestMemory, writeU32 } from '../helpers/guestMemory';
+import { writeU32 } from '../helpers/guestMemory';
 import { summarizeGamePerformance } from '../helpers/gamePerformance';
 
-const profiles = [
-  {
-    create: createRa2FrameReader,
-    hash: RA2_STARTUP_PAGE_HASH,
-    other: YR_STARTUP_PAGE_HASH,
-    site: 0x540676,
-    frame: 0xa40d2c,
-    bytes: [
-      0x8b, 0x15, 0x2c, 0x0d, 0xa4, 0, 0xa1, 0x74, 0x91, 0xab, 0, 0x42, 0x3b, 0xc7, 0x89, 0x15, 0x2c, 0x0d, 0xa4, 0,
-    ],
+import { frameCounterImage } from '../fixture/frameCounterImage';
+
+const readers = { ra2: createRa2FrameReader, yr: createYrFrameReader };
+it.each(['ra2', 'yr'] as const)(
+  'detects %s after code/data movement without a hash and never writes guest memory',
+  (game) => {
+    for (const [base, shift] of [
+      [0x400000, 0],
+      [0x600000, 0x40],
+    ]) {
+      const fixture = frameCounterImage(game, base, shift);
+      const { memory, exe } = fixture;
+      const write = vi.spyOn(memory, 'write_memory');
+      const reader = readers[game](memory, exe);
+      expect(reader?.()).toEqual({ frame: 321, gameSpeed: 2, sessionSpeed: 3, requestedFps: 45 });
+      expect(write).not.toHaveBeenCalled();
+      expect(readers[game === 'ra2' ? 'yr' : 'ra2'](memory, exe)).toBeNull();
+      writeU32(memory, fixture.frame, 351);
+      expect(reader?.()?.frame).toBe(351);
+      exe[0x88] ^= 1; // COFF timestamp changes file identity but not executable structure.
+      expect(readers[game](memory, exe)?.()?.frame).toBe(351);
+    }
   },
-  {
-    create: createYrFrameReader,
-    hash: YR_STARTUP_PAGE_HASH,
-    other: RA2_STARTUP_PAGE_HASH,
-    site: 0x55de73,
-    frame: 0xa8ed84,
-    bytes: [
-      0x8b, 0x15, 0x84, 0xed, 0xa8, 0, 0xa1, 0x84, 0x77, 0xb0, 0, 0x42, 0x3b, 0xc7, 0x89, 0x15, 0x84, 0xed, 0xa8, 0,
-    ],
-  },
-];
-it.each(profiles)('帧计数仅接受自己的 EXE 和指令签名，采样不写内存：$site', (p) => {
-  const memory = createGuestMemory();
-  memory.write_memory(p.bytes, p.site);
-  writeU32(memory, p.frame, 321);
-  const write = vi.spyOn(memory, 'write_memory');
-  expect(p.create(memory, p.other)).toBeNull();
-  expect(p.create(memory, p.hash)!()?.frame).toBe(321);
-  expect(write).not.toHaveBeenCalled();
-  memory.write_memory([0x90], p.site);
-  expect(p.create(memory, p.hash)).toBeNull();
+);
+
+it.each([
+  ['different frame writeback', (f: Fixture) => f.patchWord(f.sites.frame + 16, f.frame + 4)],
+  ['conflicting session references', (f: Fixture) => f.patchWord(f.sites.settings + 8, f.session + 4)],
+  ['conflicting FPS references', (f: Fixture) => f.patchWord(f.sites.timing + 2, f.fps + 4)],
+  [
+    'counter in code',
+    (f: Fixture) => {
+      f.patchWord(f.sites.frame + 2, f.base + 0x1800);
+      f.patchWord(f.sites.frame + 16, f.base + 0x1800);
+    },
+  ],
+  ['aliased counters', (f: Fixture) => f.patchWord(f.sites.speed + 8, f.frame)],
+  ['unaligned counter', (f: Fixture) => f.patchWord(f.sites.speed + 8, f.speed + 1)],
+  ['call outside code', (f: Fixture) => f.patchWord(f.sites.frame + 29, 0x7fffffff)],
+  ['wrong FPS label', (f: Fixture) => f.patch(f.base + 0x3000, [0x58])],
+  ['wrong timing division', (f: Fixture) => f.patch(f.sites.timing + 0x6b, [30])],
+  ['duplicate frame loop', (f: Fixture) => f.patch(f.base + 0x1500, f.memory.read_memory(f.sites.frame, 54))],
+  ['duplicate labelled display', (f: Fixture) => f.patch(f.base + 0x1500, f.memory.read_memory(f.sites.display, 25))],
+  ['changed live instructions', (f: Fixture) => f.memory.write_memory([0x90], f.sites.frame)],
+] as const)('rejects %s', (_name, mutate) => {
+  for (const game of ['ra2', 'yr'] as const) {
+    const f = frameCounterImage(game);
+    mutate(f);
+    expect(readers[game](f.memory, f.exe)).toBeNull();
+  }
+});
+type Fixture = ReturnType<typeof frameCounterImage>;
+
+it('ignores instruction-like data and unrelated formatting calls, but requires the counter loop in code', () => {
+  const f = frameCounterImage('ra2');
+  f.patch(f.base + 0x2500, f.memory.read_memory(f.sites.frame, 54));
+  f.patch(f.base + 0x1500, f.memory.read_memory(f.sites.display, 25));
+  f.patchWord(f.base + 0x150c, f.base + 0x3050);
+  expect(createRa2FrameReader(f.memory, f.exe)?.()?.frame).toBe(321);
+  f.patch(f.sites.frame, [0x90]);
+  expect(createRa2FrameReader(f.memory, f.exe)).toBeNull();
+});
+
+it('returns unavailable for short or failed live reads, including failures after detection', () => {
+  const f = frameCounterImage('ra2');
+  const reader = createRa2FrameReader(f.memory, f.exe)!;
+  const read = vi.spyOn(f.memory, 'read_memory').mockReturnValue(new Uint8Array(3));
+  expect(reader()).toBeNull();
+  expect(createRa2FrameReader(f.memory, f.exe)).toBeNull();
+  read.mockImplementation(() => {
+    throw new Error('unmapped');
+  });
+  expect(reader()).toBeNull();
+  expect(createRa2FrameReader(f.memory, f.exe)).toBeNull();
 });
 const counters = (frame: number) => ({ frame, gameSpeed: 0, sessionSpeed: 0, requestedFps: 60 });
 it('目标 60 不冒充实际 FPS；停滞为零，菜单/重置/同时间不产生假峰值', () => {

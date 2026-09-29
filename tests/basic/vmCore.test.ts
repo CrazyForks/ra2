@@ -7,8 +7,16 @@ import { type GameSource } from '../../src/games/source';
 import { SUPPORTED_GAMES, type SupportedGame } from '../../src/games/catalog';
 import { EMPTY_GAME_SHIM_PROFILE } from '../../src/vm86/shim/gameProfile';
 import type { V86 } from 'v86';
-import type { Win32Shim } from '../../src/games/win32Shim';
-import { HYPERCALL_EXCEPTION, HYPERCALL_HALTED, HYPERCALL_REQUEST, HYPERCALL_STACK } from '../../src/vm86/pe';
+import { Win32Shim } from '../../src/games/win32Shim';
+import {
+  HYPERCALL_EAX,
+  HYPERCALL_EXCEPTION,
+  HYPERCALL_HALTED,
+  HYPERCALL_REQUEST,
+  HYPERCALL_STACK,
+} from '../../src/vm86/pe';
+import { gameResolutionIni } from '../../src/games/resolution';
+import { callShim } from '../helpers/guestMemory';
 import { FIXTURE_FILE_BYTES, FIXTURE_FILE_PATH, FIXTURE_ABI, buildFixturePe } from '../fixture/fixtureProgram';
 
 class FakeAudio implements VmAudioSink {
@@ -150,7 +158,219 @@ function writeU32(emulator: FakeEmulator, address: number, value: number): void 
   emulator.write_memory([value & 0xff, (value >>> 8) & 0xff, (value >>> 16) & 0xff, (value >>> 24) & 0xff], address);
 }
 
+function readU32(emulator: FakeEmulator, address: number): number {
+  const bytes = emulator.read_memory(address, 4);
+  return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0, true);
+}
+
+describe('VmCore guest file contracts', () => {
+  it('fails startup when a required linked DLL is missing instead of running with import stubs', async () => {
+    const emulator = new FakeEmulator();
+    const fixture = source();
+    fixture.game = { ...fixture.game, preloadFiles: [{ path: 'required.dll', linkBeforeEntry: true }] };
+    const statuses: Array<{ phase: string; detail: string }> = [];
+    const host = platform(emulator, new FakeAudio(), () => fakeShim());
+    host.createShim = (memory, options) => new Win32Shim(memory, options);
+    const core = new VmCore({ onStatus: (status) => statuses.push(status) }, fixture, host);
+    try {
+      await expect(core.start()).rejects.toThrow('Required guest DLL could not be loaded: required.dll');
+      expect(statuses.at(-1)).toMatchObject({
+        phase: 'error',
+        detail: expect.stringContaining('Required guest DLL could not be loaded: required.dll'),
+      });
+      expect(emulator.run).not.toHaveBeenCalled();
+    } finally {
+      await core.destroy();
+    }
+  });
+
+  it.each(['ra2', 'yr'] as const)('%s retains guest INI writes when reopening the startup overlay', async (id) => {
+    const emulator = new FakeEmulator();
+    const fixture = source();
+    fixture.game = { ...fixture.game, id, defaultGameSpeed: 0 };
+    const path = gameResolutionIni(id);
+    const original = new TextEncoder().encode('[Options]\nGameSpeed=3\n');
+    await fixture.files.write(path, original);
+    let shim!: Win32Shim;
+    const host = platform(emulator, new FakeAudio(), () => shim);
+    host.createShim = (memory, options) => (shim = new Win32Shim(memory, options));
+    const core = new VmCore({}, fixture, host);
+    try {
+      await core.start();
+      const sync = (core as unknown as { syncGuestFile(pointer: number): Promise<void> | null }).syncGuestFile.bind(
+        core,
+      );
+      const pathPtr = 0x0010_0000,
+        buffer = 0x0011_0000;
+      emulator.write_memory(new TextEncoder().encode(`${path}\0`), pathPtr);
+      await sync(pathPtr);
+      expect(new TextDecoder().decode(shim.getMountedFileBytes(path))).toContain('GameSpeed=0');
+      const handle = callShim(shim, 'KERNEL32.DLL!_lcreat', [pathPtr, 0]).eax;
+      const changed = new TextEncoder().encode('[Options]\nGameSpeed=5\n');
+      emulator.write_memory(changed, buffer);
+      expect(callShim(shim, 'KERNEL32.DLL!_lwrite', [handle, buffer, changed.length]).eax).toBe(changed.length);
+      callShim(shim, 'KERNEL32.DLL!_lclose', [handle]);
+      await core.flushFiles();
+      await sync(pathPtr);
+      const reopened = callShim(shim, 'KERNEL32.DLL!_lopen', [pathPtr, 0]).eax;
+      expect(callShim(shim, 'KERNEL32.DLL!_lread', [reopened, buffer, changed.length]).eax).toBe(changed.length);
+      expect(emulator.read_memory(buffer, changed.length)).toEqual(changed);
+      expect(await fixture.files.read(path)).toEqual(original);
+    } finally {
+      await core.destroy();
+    }
+  });
+
+  it.each([
+    ['ReadFile', 'missing'],
+    ['ReadFile', 'empty'],
+    ['ReadFile', 'short'],
+    ['ReadFile', 'unavailable'],
+    ['_lread', 'missing'],
+    ['_lread', 'empty'],
+    ['_lread', 'short'],
+    ['_lread', 'unavailable'],
+  ] as const)('%s rejects %s range data and can retry at the same position', async (name, outcome) => {
+    const emulator = new FakeEmulator();
+    const fixture = source();
+    const bytes = Uint8Array.from({ length: 16 }, (_, index) => index + 1);
+    fixture.files.readRange =
+      outcome === 'unavailable'
+        ? undefined
+        : vi.fn(async () => (outcome === 'missing' ? null : bytes.slice(0, outcome === 'empty' ? 0 : 4)));
+    let shim!: Win32Shim;
+    const host = platform(emulator, new FakeAudio(), () => shim);
+    host.createShim = (memory, options) => (shim = new Win32Shim(memory, options));
+    const statuses: string[] = [];
+    const core = new VmCore({ onStatus: (status) => statuses.push(status.phase) }, fixture, host);
+    try {
+      await core.start();
+      shim.mountFile('paged.bin', bytes.slice(0, 1), true, bytes.length);
+      shim.markFileRangeBacked('paged.bin');
+      const pathPtr = 0x0010_0000,
+        buffer = 0x0011_0000,
+        countPtr = buffer + 16,
+        stack = 0x2000;
+      emulator.write_memory(new TextEncoder().encode('paged.bin\0'), pathPtr);
+      const handle = callShim(shim, 'KERNEL32.DLL!_lopen', [pathPtr, 0]).eax;
+      callShim(shim, 'KERNEL32.DLL!_llseek', [handle, 8, 0]);
+      emulator.write_memory(new Uint8Array(4).fill(0xcc), buffer);
+      writeU32(emulator, countPtr, 99);
+      vi.spyOn(shim, 'resolveDynamicImport').mockReturnValue({
+        id: 999,
+        key: `KERNEL32.DLL!${name}`,
+        dll: 'KERNEL32.DLL',
+        name,
+        argBytes: name === 'ReadFile' ? 20 : 12,
+        slot: 0,
+        stub: 0,
+      });
+      writeU32(emulator, HYPERCALL_STACK, stack);
+      [handle, buffer, 4, countPtr, 0].forEach((value, index) => writeU32(emulator, stack + 4 + index * 4, value));
+      const read = async () => {
+        writeU32(emulator, HYPERCALL_REQUEST, 999);
+        await (core as unknown as { poll(): Promise<void> }).poll();
+        expect(readU32(emulator, HYPERCALL_REQUEST)).toBe(0);
+        return readU32(emulator, HYPERCALL_EAX);
+      };
+      expect(await read()).toBe(name === 'ReadFile' ? 0 : 0xffff_ffff);
+      expect(callShim(shim, 'KERNEL32.DLL!GetLastError').eax).toBe(30);
+      expect(readU32(emulator, countPtr)).toBe(name === 'ReadFile' ? 0 : 99);
+      expect(emulator.read_memory(buffer, 4)).toEqual(new Uint8Array(4).fill(0xcc));
+      expect(callShim(shim, 'KERNEL32.DLL!_llseek', [handle, 0, 1]).eax).toBe(8);
+      fixture.files.readRange = vi.fn(async () => bytes.slice());
+      expect(await read()).toBe(name === 'ReadFile' ? 1 : 4);
+      expect(emulator.read_memory(buffer, 4)).toEqual(bytes.slice(8, 12));
+      expect(callShim(shim, 'KERNEL32.DLL!_llseek', [handle, 0, 1]).eax).toBe(12);
+      expect(statuses).not.toContain('error');
+    } finally {
+      await core.destroy();
+    }
+  });
+});
+
 describe('VmCore lifecycle orchestration', () => {
+  it('resolves hooks once per VM before patches and passes only the resolved hooks to the shim', async () => {
+    const fixture = source();
+    const emulator = new FakeEmulator();
+    const order: string[] = [];
+    const prepareImage = vi.fn(() => {
+      order.push('patch');
+    });
+    const writeGameSpeedFlag = vi.fn(() => 4);
+    const resolved = { prepareImage, writeGameSpeedFlag };
+    const resolve = vi.fn((_memory: unknown, _exe: Uint8Array) => {
+      order.push('resolve');
+      return resolved;
+    });
+    fixture.game = { ...fixture.game, runtimeHooks: { resolve } };
+    const host = platform(emulator, new FakeAudio(), () => fakeShim());
+    let received: unknown;
+    host.createShim = (_memory, _options, hooks) => {
+      order.push('shim');
+      received = hooks;
+      return fakeShim();
+    };
+    const core = new VmCore({}, fixture, host);
+    try {
+      await core.start();
+      expect(order).toEqual(['resolve', 'patch', 'shim']);
+      expect(resolve).toHaveBeenCalledOnce();
+      expect(resolve.mock.calls[0]?.length).toBe(2);
+      expect(received).toBe(resolved);
+      expect(core.setGameSpeedFlag(4)).toBe(4);
+      expect(writeGameSpeedFlag).toHaveBeenCalledOnce();
+    } finally {
+      await core.destroy();
+    }
+    expect(core.setGameSpeedFlag(4)).toBeNull();
+  });
+
+  it('detects counters lazily once, passes executable bytes, and discards a pending sample on destruction', async () => {
+    const fixture = source();
+    const create = vi.fn(() => () => ({ frame: 321, gameSpeed: 2, sessionSpeed: 2, requestedFps: 30 }));
+    fixture.game = { ...fixture.game, runtimeHooks: { createFrameReader: create } };
+    const emulator = new FakeEmulator();
+    const core = new VmCore(
+      {},
+      fixture,
+      platform(emulator, new FakeAudio(), () => fakeShim()),
+    );
+    try {
+      expect(await core.getGamePerformance()).toBeNull();
+      await core.start();
+      expect(create).not.toHaveBeenCalled();
+      const samples = await Promise.all([core.getGamePerformance(), core.getGamePerformance()]);
+      expect(samples.map((sample) => sample?.frame)).toEqual([321, 321]);
+      expect(create).toHaveBeenCalledExactlyOnceWith(emulator, fixture.executableBytes);
+      const pending = core.getGamePerformance();
+      await core.destroy();
+      expect(await pending).toBeNull();
+      expect(await core.getGamePerformance()).toBeNull();
+    } finally {
+      await core.destroy();
+    }
+  });
+
+  it('caches unavailable counter detection without rescanning on every diagnostics request', async () => {
+    const fixture = source();
+    const create = vi.fn(() => null);
+    fixture.game = { ...fixture.game, runtimeHooks: { createFrameReader: create } };
+    const core = new VmCore(
+      {},
+      fixture,
+      platform(new FakeEmulator(), new FakeAudio(), () => fakeShim()),
+    );
+    try {
+      await core.start();
+      expect(await core.getGamePerformance()).toBeNull();
+      expect(await core.getGamePerformance()).toBeNull();
+      expect(create).toHaveBeenCalledOnce();
+    } finally {
+      await core.destroy();
+    }
+  });
+
   it('客体处理较慢时按墙钟让出，不必等满 128 次调用才响应输入', async () => {
     const core = new VmCore(
       {},
@@ -292,6 +512,7 @@ describe('VmCore lifecycle orchestration', () => {
           moduleName: game.executable,
           commandLineArguments: '-SPEEDCONTROL',
         }),
+        undefined,
       );
     } finally {
       await core.destroy();

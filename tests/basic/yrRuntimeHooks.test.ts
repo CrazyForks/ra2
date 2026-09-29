@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { YR_RUNTIME_HOOKS, skipYrStartupMovies, writeYrGameSpeed } from '../../src/games/yr/runtimeHooks';
+import { skipYrStartupMovies, writeYrGameSpeed } from '../../src/games/yr/runtimeHooks';
 import { createGuestMemory, readU32, writeU32 } from '../helpers/guestMemory';
 
 function writeCpuCalibration(memory: ReturnType<typeof createGuestMemory>): void {
@@ -15,7 +15,7 @@ describe('YR 运行态护栏', () => {
     writeCpuCalibration(memory);
     const original = memory.read_memory(0x005a_bf70, 0x200).slice();
 
-    YR_RUNTIME_HOOKS.prepareImage!(memory);
+    skipYrStartupMovies(memory);
 
     expect(memory.read_memory(0x005a_bf70, 0x200)).toEqual(original);
   });

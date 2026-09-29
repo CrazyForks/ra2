@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { patchRa2ShortGame } from '../../src/games/ra2/shortGame';
-import { YR_RUNTIME_HOOKS } from '../../src/games/yr/runtimeHooks';
+import { skipYrStartupMovies } from '../../src/games/yr/runtimeHooks';
 import { createGuestMemory } from './guestMemory';
 import { call32, finish, le32, PROGRAM, store32, withGuestMachine } from './guestMachine';
 
@@ -89,7 +89,7 @@ export function describeShortGameContract(readBytes: (address: number, size: num
     it('YR 启动钩子不应用 RA2 补丁', () => {
       const memory = createGuestMemory();
       memory.write_memory(original, address);
-      YR_RUNTIME_HOOKS.prepareImage!(memory);
+      skipYrStartupMovies(memory);
       expect(memory.read_memory(address, 55)).toEqual(original);
     });
   });

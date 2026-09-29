@@ -5,15 +5,15 @@ import { assertGameResources, inventoryResources, sha256, verifyResources } from
 
 const gameId = process.env.RA2_CI_GAME;
 if (gameId !== undefined && !isSupportedGameId(gameId)) throw new Error('RA2_CI_GAME 仅支持 ra2 或 yr');
-const roots = { game: process.env.RA2_GAME_ROOT ?? '', thirdParty: process.env.RA2_THIRD_PARTY_CACHE_DIR ?? '' };
+const roots = { game: process.env.RA2_GAME_ROOT ?? '' };
 const manifest = process.env.RA2_CI_RESOURCE_MANIFEST;
-if (!manifest) throw new Error('请设置 RA2_CI_RESOURCE_MANIFEST（清单位于两个资源目录之外）');
+if (!manifest) throw new Error('请设置 RA2_CI_RESOURCE_MANIFEST（清单位于资源目录之外）');
 if (!isAbsolute(manifest)) throw new Error('资源清单必须使用绝对路径');
 for (const root of Object.values(roots)) {
   if (!isAbsolute(root)) throw new Error('资源目录必须使用绝对路径');
   const path = relative(root, manifest);
   if (path === '' || (!path.startsWith(`..${sep}`) && path !== '..' && !isAbsolute(path))) {
-    throw new Error('资源清单必须位于两个资源目录之外');
+    throw new Error('资源清单必须位于资源目录之外');
   }
 }
 if (process.argv.slice(2).some((arg) => arg !== '--record')) throw new Error('仅支持 --record 或无参数校验');

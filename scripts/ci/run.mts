@@ -100,9 +100,9 @@ try {
   } else {
     // Remote runs use only the game argument and two secrets; existing resource configuration is read locally only with explicit --local.
     const gameId = game as 'ra2' | 'yr';
-    let roots: { game: string; thirdParty: string }, manifest: string, expected: string;
+    let roots: { game: string }, manifest: string, expected: string;
     if (flag === '--local') {
-      roots = { game: env.RA2_GAME_ROOT ?? '', thirdParty: env.RA2_THIRD_PARTY_CACHE_DIR ?? '' };
+      roots = { game: env.RA2_GAME_ROOT ?? '' };
       manifest = env.RA2_CI_RESOURCE_MANIFEST ?? '';
       expected = env.RA2_CI_RESOURCE_MANIFEST_SHA256 ?? '';
     } else {
@@ -134,7 +134,7 @@ try {
         expected: string;
       };
       await rm(join(payload, 'archive.bin'));
-      roots = { game: join(payload, 'game'), thirdParty: join(payload, 'thirdParty') };
+      roots = { game: join(payload, 'game') };
       manifest = prepared.manifest;
       expected = prepared.expected;
     }
@@ -142,7 +142,6 @@ try {
     console.log(`真实资源校验通过：${Object.keys(inventory.files).length} 个文件`);
     Object.assign(env, {
       RA2_GAME_ROOT: roots.game,
-      RA2_THIRD_PARTY_CACHE_DIR: roots.thirdParty,
       VM_GAME_DIR: join(roots.game, 'ra2'),
       RA2_CI_GAME: gameId,
       RA2_BROWSER_GAME: gameId,
@@ -156,7 +155,9 @@ try {
     const boot = [`tests/real-game/${gameId}/boot.test.ts`];
     if (gameId === 'ra2') boot.push('tests/real-game/ra2/shortGame.test.ts');
     await tasks.run('boot', 4, 'pnpm', ['exec', 'vitest', 'run', ...boot, '--maxWorkers=1']);
-    await tasks.run('save-load', 6, 'pnpm', [
+    // Two clean boots may each play the original four-minute YR intro.
+    // Keep the process deadline above the suite's 12-minute bound.
+    await tasks.run('save-load', 14, 'pnpm', [
       'exec',
       'vitest',
       'run',

@@ -101,6 +101,26 @@ afterEach(() => {
 });
 
 describe('WorkerVmClient RPC lifecycle', () => {
+  it('returns audio observations to the Worker and ignores late audio commands during destruction', async () => {
+    vi.useFakeTimers();
+    const { worker, audio, client } = setup();
+    const snapshot = { positionBytes: 40, writePositionBytes: 80, playing: true };
+    vi.spyOn(audio, 'getState').mockReturnValue(snapshot as ReturnType<WebAudioPcmSink['getState']>);
+    const play = vi.spyOn(audio, 'play');
+    const stopAll = vi.spyOn(audio, 'stopAll');
+    worker.emit({ type: 'audio', revision: 7, op: { op: 'play', id: 3 } });
+    expect(worker.posts).toContainEqual({ type: 'audio-state', states: [{ id: 3, revision: 7, ...snapshot }] });
+    const destroying = client.destroy();
+    worker.emit({ type: 'audio', revision: 8, op: { op: 'play', id: 3 } });
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(stopAll).toHaveBeenCalledTimes(1);
+    worker.emit({ type: 'control-done', action: 'stop', requestId: requestId(worker, 'control') });
+    await Promise.resolve();
+    worker.emit({ type: 'flush-done', requestId: requestId(worker, 'flush') });
+    await destroying;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('显式开启回收时只归还已替换帧，当前帧继续可用于光标重绘', async () => {
     vi.stubGlobal('requestAnimationFrame', () => 1);
     vi.stubGlobal('cancelAnimationFrame', () => {});

@@ -11,6 +11,8 @@
 Run the original x86 executables of **Red Alert 2** and **Yuri's Revenge** directly in your browser.
 RA2 VM uses v86, custom firmware, and a Win32/DirectX compatibility layer without starting Windows.
 
+*⚠️EA has not endorsed and does not support this product.*
+
 **Play online: [ra2.games](https://ra2.games)**
 
 Currently in Alpha: local resource imports, RA2/YR selection, skirmish entry, saves, map packages,
@@ -21,13 +23,13 @@ compatibility with every campaign, MOD, large multiplayer battle, or long intern
 
 1. Open the online site and prepare game resources you legally own.
 2. Choose **Select files…** to import an archive, or **Select folder…** to select a game directory.
-   The page checks required resources and lists missing files. The game manifest specifies and verifies the required executable.
+   Include the original game executable in the bundle. The page checks required resources and lists missing files.
 3. One complete version starts automatically. If both RA2 and YR are present, choose which to run.
 4. In the original game, open **Single Player → Skirmish**, choose a map, factions, and computer opponents, then start.
 
 The web interface automatically selects English or Simplified Chinese from your browser's preferred
 languages when the page opens. Other languages fall back to English. Game text uses the language
-of the imported resources; the download dialog lets you filter packages by their game text language.
+of the imported resources.
 
 To investigate slow gameplay, use **Performance diagnostics…** in the game toolbar, record for 20 seconds,
 then copy the report. See [browser comparison reports](docs/GAME_PERFORMANCE.md#browser-comparison-reports).
@@ -100,7 +102,7 @@ pnpm run dev
 ```
 
 Open the HTTPS address printed in the terminal and select a local game directory or archive.
-To prepare the development executable cache, run `pnpm run prepare:third-party`; this downloads files.
+Supply the original `game.exe` (RA2) or `gamemd.exe` (YR) inside the game bundle. Import and cache restoration preserve that executable; the app does not download a replacement.
 Game programs and assets are not included in this repository, and public tests do not require them.
 
 ```bash

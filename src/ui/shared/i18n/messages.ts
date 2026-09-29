@@ -1,5 +1,11 @@
 // Chinese source keys keep existing UI wording available as the Chinese catalog.
 export const englishMessages = {
+  横屏获取更好的游戏体验: 'Rotate to landscape for a better gaming experience.',
+  '已解压 {0} 个文件': '{0} files extracted',
+  '已解压 {0}/{1} 个文件': '{0}/{1} files extracted',
+  '导入 ZIP / EXE 压缩包或完整游戏目录。': 'Import a ZIP / EXE archive or a complete game directory.',
+  '资源识别后，按提示选择 RA2 或 YR。': 'After recognition, choose RA2 or YR when prompted.',
+  '联机参数可在启动前设置。': 'Configure network options before launch.',
   '性能诊断…': 'Performance diagnostics…',
   性能诊断: 'Performance diagnostics',
   性能诊断报告: 'Performance diagnostic report',
@@ -95,37 +101,36 @@ export const englishMessages = {
   向上滚动: 'Scroll up',
   向下滚动: 'Scroll down',
   选项滚动条: 'Options scrollbar',
-  '第三方分享（版本固定）': 'Third-party executable (fixed version)',
-  '当前没有已核验的下载入口。': 'No verified downloads are currently available.',
-  '当前没有已核验的 {0} 下载入口。': 'No verified {0} downloads are currently available.',
-  '当前没有已核验的下载地址，请稍后查看。': 'No verified download URLs are currently available. Check again later.',
-  '当前没有已核验的 {0} 下载地址，请选择其他语言或稍后查看。':
-    'No verified {0} download URLs are available. Choose another language or check again later.',
   'RA2 VM · 红色警戒': 'RA2 VM · Red Alert',
   选择要启动的游戏: 'Choose a game to start',
   选择游戏资源: 'Choose game resources',
   联机: 'Multiplayer',
   '联机 relay 地址（可选）': 'Multiplayer relay address (optional)',
-  '留空使用默认服务；只需填写主机和端口，默认房间 /ra2；内网 IP 使用 WS，其他地址使用 WSS。联机玩家填写相同地址；刷新保留设置。':
-    'Leave blank for the default service. Enter a host and port; the default room is /ra2. Private IPs use WS, other addresses use WSS. All players must use the same address. Settings survive refresh.',
+  '留空使用默认服务器；所有玩家填写同一地址即可同房。':
+    'Leave blank for the default server. All players enter the same address to join the same room.',
+  '只需主机与端口，默认房间 /ra2；内网 IP 使用 WS，其他地址使用 WSS。':
+    'Host and port only; the default room is /ra2. Private IPs use WS, other addresses use WSS.',
+  与好友同房对战: 'Battle with friends in the same room',
+  游戏指南: 'Game guide',
+  '② 导入资源：点击「选择文件…」载入 zip/exe 压缩包，或「选择文件夹…」。':
+    '② Import: choose Select files to load a zip/exe archive, or Select folder.',
+  '③ 启动游戏：只有一个版本时自动启动；同时检测到 RA2 与 YR 时，先点击上方版本按钮。':
+    '③ Start: one detected version starts automatically; pick a version first when both RA2 and YR are present.',
+  '④ 联机：游戏内也可以选择；启动前勾选「联机」，所有玩家填写相同的服务器地址即可同房。':
+    '④ Multiplayer: selectable in-game too. To preconfigure, enable it and enter the same server address on every machine to join the same room.',
   '（可选，不影响启动）': '(optional; not required to start)',
   '✓ 必需文件已集齐，正在启动…': '✓ Required files ready. Starting…',
   '选择文件…': 'Select files…',
   '选择文件夹…': 'Select folder…',
-  '↓ 没有游戏文件？点击下载': '↓ Need game files? Download',
   选择检测到的游戏: 'Choose a detected game',
+  游戏菜单: 'Game menu',
+  '正在处理…': 'Working…',
+  '已检测到 {0} 个版本': 'Detected {0} versions',
   开发测试: 'Development test',
-  下载游戏资源: 'Download game resources',
-  '下载入口在新窗口打开第三方来源。语言筛选只筛选已核验的下载包；“全部”会保留所有目录入口，待核验入口会标注“语言待核验”。这里不修改已导入游戏的文字，也不是网页字体选择。下载完成后回到这里，点击「选择文件…」导入启动。':
-    'Downloads open third-party sources in a new window. The language filter applies to verified packages; All retains every catalog entry, with unverified languages marked accordingly. This does not change imported game text or website fonts. Return here after downloading and choose Select files to start.',
-  游戏文字语言: 'Game text language',
-  '下载游戏资源：{0}（游戏文字语言：{1}；第三方来源，新窗口打开）':
-    'Download game resources: {0} (game text language: {1}; third-party source, opens in a new window)',
-  '↓ 下载 ·': '↓ Download ·',
-  '免责声明：本页面不提供游戏文件。游戏版权归原权利人所有，请只下载你合法拥有的内容。':
-    'Disclaimer: this page does not provide game files. Copyright belongs to the respective rights holders. Download only content you legally own.',
+  '本项目为粉丝自制的非官方项目，仅提供游戏运行环境。请仅导入您合法拥有的游戏文件。游戏版权归原权利人所有。本项目与 Electronic Arts, Inc. 无任何关联，亦未获得其授权、认可或支持。':
+    'This project is an unofficial, fan-made project that provides only a game runtime environment. Please import only game files that you legally own. All game copyrights belong to their respective rights holders. This project is not affiliated with, authorized, endorsed, or supported by Electronic Arts, Inc. in any way.',
   '欢迎加入我们的微信交流群，': 'Join our WeChat community:',
-  点此扫码入群: 'Scan to join',
+  点此扫码入群: 'Wechat Group',
   微信交流群: 'WeChat community',
   关闭微信群二维码: 'Close WeChat QR code',
   微信群二维码: 'WeChat group QR code',
@@ -176,6 +181,9 @@ export const englishMessages = {
   复制失败: 'Copy failed',
   已复制: 'Copied',
   重新启动游戏: 'Restart game',
+  重新选择游戏资源: 'Choose game resources again',
+  '缓存游戏资源不可读：{0}：{1}': 'Cached game resource is unreadable: {0}: {1}',
+  '无法清除资源缓存：{0}': 'Could not clear cached resources: {0}',
   已回到网页: 'Back to the web page',
   '原版游戏已正常退出，音频和鼠标锁定已释放。{0}':
     'The original game exited normally. Audio and pointer lock have been released. {0}',
@@ -312,7 +320,6 @@ export const englishMessages = {
   '资源中包含以下游戏，请选择要启动的版本。': 'These games were detected. Choose the version to start.',
   '未找到完整游戏资源。': 'No complete game resources found.',
   ' 缺少：': ' Missing:',
-  ' + 第三方': ' + third-party',
   '{0} 缺少必需文件：{1}。': '{0} is missing required files: {1}.',
   '请重新选择包含这些文件的资源。': 'Select resources containing these files.',
   '必需文件已集齐，正在启动…': 'Required files ready. Starting…',
@@ -408,6 +415,8 @@ export const englishMessages = {
     'No in-game saves in the game directory (Save directory missing or empty):\n',
   '导出的内容只有进度表文件，无法在其他浏览器继续游戏。\n':
     'The export contains only progress tables and cannot resume a game in another browser.\n',
+  '以上按文件数量统计，不等于游戏内可见的存档槽位数。\n\n':
+    'These counts are files, not the number of save slots shown in the game.\n\n',
   '请先在本机游戏内保存一次存档，再导出。': 'Save once in the game on this device before exporting.',
   '导出包内容（共 {0} 个文件）：\n\n{1}\n\n': 'Export contents ({0} files):\n\n{1}\n\n',
   '请确认包含你实际游玩的槽位。若没有，说明当前浏览器/网址里不存在那些存档':

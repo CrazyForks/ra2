@@ -5,6 +5,8 @@ export interface GuestFileEntry {
   path: string;
   size: number;
   directory?: boolean;
+  /** Embedded SGBYSTG1 last-save FILETIME; used when the host has no per-path Win32 timestamp. */
+  lastWriteTime?: bigint;
 }
 
 export function guestFileSearch(pattern: string) {

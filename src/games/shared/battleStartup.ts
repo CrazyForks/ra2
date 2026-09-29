@@ -4,11 +4,12 @@ import { le32 } from './bytes';
 /** Version parameters for single-player test entry: jump target, start handler, and the matching direct-page installer. */
 export interface BattleStartupSpec {
   readonly label: string;
-  readonly expectedHash: string;
+  /** Reference-baseline guard; adaptive callers validate the linked native setup/handler before calling. */
+  readonly expectedHash?: string;
   readonly site: number;
   /** Native start handler; receives the setup window and action code via fastcall. */
   readonly handler: number;
-  /** Enter this version's skirmish page before the battlefield; it verifies the hash and allocates its own stub tail. */
+  /** Enter the validated skirmish page before the battlefield, allocating its own exclusive stub tail. */
   readonly navigate: (memory: GuestMemory, reserve: (size: number) => number, hash: string) => number;
 }
 
@@ -25,7 +26,7 @@ export function installBattleStartup(
   spec: BattleStartupSpec,
 ): number {
   const { label, site, handler, navigate } = spec;
-  if (hash !== spec.expectedHash) throw new Error(`${label}：EXE 哈希不匹配`);
+  if (spec.expectedHash !== undefined && hash !== spec.expectedHash) throw new Error(`${label}：EXE 哈希不匹配`);
   const current = memory.read_memory(site, SIGNATURE.length);
   if (current.length !== SIGNATURE.length || !current.every((byte, index) => byte === SIGNATURE[index])) {
     throw new Error(`${label}：指令签名不匹配或重复安装`);

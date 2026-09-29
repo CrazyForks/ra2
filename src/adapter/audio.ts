@@ -36,6 +36,7 @@ function loadPcmStreamWorklet(context: AudioContext): Promise<void> {
 export interface PcmBufferSnapshot {
   byteLength: number;
   positionBytes: number;
+  writePositionBytes: number;
   playing: boolean;
   loop: boolean;
   /** DirectSound volume in hundredths of a dB, -10000..0. */
@@ -69,6 +70,8 @@ interface PcmBufferState {
   streamFrame: number;
   /** Context time of the latest worklet position message, used as the cursor extrapolation baseline. */
   workletPositionAt: number;
+  /** Reject cursor reports queued before a seek or frequency change. */
+  workletRevision: number;
   gain: GainNode | null;
   panner: StereoPannerNode | null;
   positionBytes: number;
@@ -143,6 +146,7 @@ export class WebAudioPcmSink {
       worklet: null,
       streamFrame: 0,
       workletPositionAt: 0,
+      workletRevision: 0,
       gain: null,
       panner: null,
       positionBytes: 0,
@@ -212,7 +216,7 @@ export class WebAudioPcmSink {
     const state = this.buffers.get(id);
     if (!state) return false;
     state.loop = options.loop ?? false;
-    if ((state.source || state.stream || state.worklet) && options.fromByte === undefined) {
+    if (state.playing && (state.source || state.stream || state.worklet) && options.fromByte === undefined) {
       // IDirectSoundBuffer::Play does not restart an already playing buffer from the beginning.
       if (state.source) state.source.loop = state.loop;
       if (state.worklet) {
@@ -246,8 +250,13 @@ export class WebAudioPcmSink {
     const wasPlaying = state.playing;
     state.positionBytes = alignPosition(byteOffset, state);
     state.streamFrame = bytePositionToFrame(state.positionBytes, state);
+    if (this.context) state.startedAt = this.context.currentTime;
     if (state.worklet) {
-      this.postWorkletMessage(state, { kind: 'set-position', frame: state.streamFrame });
+      this.postWorkletMessage(state, {
+        kind: 'set-position',
+        frame: state.streamFrame,
+        revision: ++state.workletRevision,
+      });
       if (this.context) state.workletPositionAt = this.context.currentTime;
     } else if (wasPlaying && !state.stream) {
       this.detachPlayback(state, false);
@@ -300,7 +309,13 @@ export class WebAudioPcmSink {
     state.positionBytes = position;
     if (wasPlaying && !liveStream) this.start(state);
     if (state.worklet) {
-      this.postWorkletMessage(state, { kind: 'set-frequency', frequency: state.frequency });
+      state.streamFrame = bytePositionToFrame(position, state);
+      if (this.context) state.workletPositionAt = this.context.currentTime;
+      this.postWorkletMessage(state, {
+        kind: 'set-frequency',
+        frequency: state.frequency,
+        revision: ++state.workletRevision,
+      });
     }
     return true;
   }
@@ -308,9 +323,20 @@ export class WebAudioPcmSink {
   getState(id: PcmBufferId): PcmBufferSnapshot | null {
     const state = this.buffers.get(id);
     if (!state) return null;
+    const writePositionBytes = this.currentPosition(state);
+    // Web Audio currentTime is the next render boundary. The output timestamp
+    // identifies samples reaching the device, behind the already committed audio.
+    const timestamp = this.context?.getOutputTimestamp?.().contextTime;
+    const latency = (this.context?.baseLatency ?? 0) + (this.context?.outputLatency ?? 0);
+    const outputTime = Number.isFinite(timestamp)
+      ? timestamp
+      : this.context && latency > 0
+        ? Math.max(0, this.context.currentTime - latency)
+        : undefined;
     return {
       byteLength: state.pcm.byteLength,
-      positionBytes: this.currentPosition(state),
+      positionBytes: this.currentPosition(state, outputTime),
+      writePositionBytes,
       playing: state.playing,
       loop: state.loop,
       volume: state.volume,
@@ -451,6 +477,7 @@ export class WebAudioPcmSink {
       kind: 'create',
       channels: state.format.nChannels,
       frames: totalFrames,
+      revision: state.workletRevision,
       frequency: state.frequency,
       loop: state.loop,
       frame,
@@ -483,12 +510,19 @@ export class WebAudioPcmSink {
   private onWorkletMessage(
     state: PcmBufferState,
     worklet: AudioWorkletNode,
-    message: { kind: string; frame?: number; live?: number },
+    message: { kind: string; frame?: number; live?: number; at?: number; revision?: number; playing?: boolean },
   ): void {
     if (state.worklet !== worklet || !this.context || message.kind !== 'position') return;
     if (message.live !== undefined) this.liveWorkletProcessors = message.live;
+    if (message.revision !== state.workletRevision || !Number.isFinite(message.at)) return;
+    // Message delivery may stall behind rendering. Anchor to audio time, never arrival time.
     state.streamFrame = message.frame ?? state.streamFrame;
-    state.workletPositionAt = this.context.currentTime;
+    state.workletPositionAt = message.at!;
+    if (message.playing === false) {
+      state.playing = false;
+      state.positionBytes = 0;
+      this.detachPlayback(state, false);
+    }
   }
 
   private postWorkletMessage(state: PcmBufferState, message: Record<string, unknown> & { kind: string }): void {
@@ -535,7 +569,7 @@ export class WebAudioPcmSink {
       panner.pan.value = directSoundPanToStereo(state.pan);
       stream.connect(gain).connect(panner).connect(this.masterDestination(context));
       state.streamFrame = bytePositionToFrame(current, state);
-      stream.onaudioprocess = (event) => this.renderLiveStream(state, stream, event.outputBuffer);
+      stream.onaudioprocess = (event) => this.renderLiveStream(state, stream, event.outputBuffer, event.playbackTime);
 
       state.source = null;
       state.stream = stream;
@@ -557,7 +591,12 @@ export class WebAudioPcmSink {
     }
   }
 
-  private renderLiveStream(state: PcmBufferState, stream: ScriptProcessorNode, output: AudioBuffer): void {
+  private renderLiveStream(
+    state: PcmBufferState,
+    stream: ScriptProcessorNode,
+    output: AudioBuffer,
+    playbackTime: number,
+  ): void {
     const channels = Array.from({ length: output.numberOfChannels }, (_, channel) => output.getChannelData(channel));
     for (const channel of channels) channel.fill(0);
     if (state.stream !== stream || !state.playing) return;
@@ -597,6 +636,7 @@ export class WebAudioPcmSink {
       }
     }
     state.streamFrame = frame;
+    state.workletPositionAt = playbackTime + output.length / outputRate;
     state.positionBytes = Math.min(totalFrames, Math.floor(frame)) * state.format.nBlockAlign;
   }
 
@@ -657,22 +697,26 @@ export class WebAudioPcmSink {
     return audio;
   }
 
-  private currentPosition(state: PcmBufferState): number {
+  private currentPosition(state: PcmBufferState, outputTime?: number): number {
+    const now = outputTime === undefined ? (this.context?.currentTime ?? 0) : Math.max(state.startedAt, outputTime);
     if (state.stream || state.worklet) {
       const totalFrames = Math.floor(state.pcm.byteLength / state.format.nBlockAlign);
       if (totalFrames <= 0) return 0;
       // Worklet cursor = last reported frame + frequency-based extrapolation; reports arrive about every 100ms.
       const advanced =
-        state.worklet && this.context && state.playing
-          ? Math.floor((this.context.currentTime - state.workletPositionAt) * state.frequency)
+        this.context && state.playing && (state.worklet || outputTime !== undefined)
+          ? Math.floor(
+              (outputTime === undefined ? Math.max(0, now - state.workletPositionAt) : now - state.workletPositionAt) *
+                state.frequency,
+            )
           : 0;
       const frame = state.loop
-        ? (Math.floor(state.streamFrame) + advanced) % totalFrames
-        : Math.min(totalFrames, Math.floor(state.streamFrame) + advanced);
+        ? (((Math.floor(state.streamFrame) + advanced) % totalFrames) + totalFrames) % totalFrames
+        : Math.max(0, Math.min(totalFrames, Math.floor(state.streamFrame) + advanced));
       return frame * state.format.nBlockAlign;
     }
     if (!state.source || !this.context || !state.playing) return state.positionBytes;
-    const elapsed = Math.max(0, this.context.currentTime - state.startedAt);
+    const elapsed = Math.max(0, now - state.startedAt);
     const advanced = Math.floor(elapsed * state.format.nSamplesPerSec * playbackRate(state));
     const totalFrames = Math.floor(state.pcm.byteLength / state.format.nBlockAlign);
     if (totalFrames <= 0) return 0;

@@ -1,16 +1,13 @@
-import { readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import {
   installYrSpawnerProbe,
   YR_SPAWNER_PROBE_EXE_SHA256 as hash,
   YR_SPAWNER_PROBE_SITE as site,
 } from '../../src/games/yr/spawnerProbe';
-import { rvaToOff } from '../../src/vm86/pe';
 import { createGuestMemory } from '../helpers/guestMemory';
 import { withGuestMachine, PROGRAM, le32, finish } from '../helpers/guestMachine';
 
-// Unit fixtures require no game files; separately verify real EXE instructions when a local executable cache exists.
+// Reference instruction fixtures keep this diagnostic ABI regression independent of game files.
 const original = [
   0x8b, 0x35, 0xd0, 0xc1, 0x81, 0, 0xb9, 0xfe, 0xff, 0xff, 0xff, 0xe8, 0xdb, 0xb8, 0xdb, 0xff, 0x6a, 0x28, 0xe8, 0x3b,
   0xb6, 0x10, 0, 0x83,
@@ -85,18 +82,5 @@ describe('YR Spawner 客体探针', () => {
       expect(m.read(result + 12)).toBe(m.read(result + 40) - 8);
       expect(m.read(result + 32)).toBe(m.read(result + 44));
     });
-  });
-  it('本地主程序 YR 缓存（若存在）与固定签名一致', () => {
-    let exe: Buffer;
-    try {
-      exe = readFileSync('.tmp-third-party/gamemd.exe');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-      throw error;
-    }
-    expect(createHash('sha256').update(exe).digest('hex')).toBe(hash);
-    const offset = rvaToOff(exe, site - 0x400000);
-    expect(offset).toBeGreaterThanOrEqual(0);
-    expect([...exe.subarray(offset, offset + 24)]).toEqual(original);
   });
 });

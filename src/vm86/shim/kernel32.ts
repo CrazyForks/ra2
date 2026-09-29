@@ -99,11 +99,13 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
     private writeFindData(address: number, entry: GuestFileEntry): void {
       this.zero(address, 320); // WIN32_FIND_DATAA: cFileName begins at offset 44.
       this.writeU32(address, entry.directory ? 0x10 : 0x20);
-      const times = this.fileTimes.get(normalizeGuestPath(entry.path));
+      const path = normalizeGuestPath(entry.path);
+      const times = this.fileTimes.get(path);
+      const written = this.guestFileTimeOverrides.has(path) ? times?.written : (entry.lastWriteTime ?? times?.written);
       for (const [offset, time] of [
         [4, times?.created],
         [12, times?.accessed],
-        [20, times?.written],
+        [20, written],
       ] as const) {
         this.writeU32(address + offset, Number((time ?? 0n) & 0xffff_ffffn));
         this.writeU32(address + offset + 4, Number((time ?? 0n) >> 32n));
@@ -980,7 +982,7 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
         return 0;
       }
       const id = this.freeThreadIds.pop() ?? this.nextThreadId++;
-      const handle = this.nextThreadHandle++;
+      const handle = this.allocateGuestWaitHandle();
       if (shimTraceEnabled('VM_TRACE_THREAD'))
         console.log(`🧵 CreateThread id=${id} 入口=0x${start.toString(16)} 参数=0x${parameter.toString(16)}`);
       const reserve = Math.max(64 * 1024, Math.min(stackBytes || 64 * 1024, 1024 * 1024));
@@ -1203,6 +1205,13 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       }
       this.pullFastFilePosition(handle, file);
       const count = Math.min(requested >>> 0, Math.max(0, file.size - file.position));
+      // Missing provider-backed pages are I/O failures, not sparse zero-filled data. Check before touching the
+      // destination or advancing the handle so both ReadFile and _lread can retry after the host fetches the range.
+      if (this.rangeBackedFiles.has(file.path) && !this.hasFileRange(file.path, file.position, count)) {
+        if (bytesReadPtr) this.writeU32(bytesReadPtr, 0);
+        this.lastError = 30; // ERROR_READ_FAULT
+        return -1;
+      }
       if (buffer && count) {
         if (file.sharedMirror && file.mirror) {
           this.memory.write_memory(this.memory.read_memory(file.mirror + file.position, count), buffer);
@@ -1320,6 +1329,8 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
      */
     protected mirrorFile(handle: number, file: FileState): void {
       if (!this.options.enableFastFileMirror) return;
+      // Guest fast reads cannot fetch pages or report missing ranges; keep provider-backed files on the checked path.
+      if (this.rangeBackedFiles.has(file.path)) return;
       // Bink 1.x reads tiny blocks from .bik files extracted from MIX; without mirrors, the YR main menu measured
       // about 7700 ReadFile calls/500ms. Keep the archive allowlist for huge MIX files, but permit video leaf files
       // in the same guest fast table to avoid Worker/COM1 round trips for each decoded block.
@@ -2099,7 +2110,10 @@ export function withKernel32<TBase extends Constructor<ShimGraphicsChain>>(Base:
       const times = this.fileTimes.get(file.path) ?? { created: now, accessed: now, written: now };
       if (creation) times.created = this.readFileTimeValue(creation);
       if (access) times.accessed = this.readFileTimeValue(access);
-      if (written) times.written = this.readFileTimeValue(written);
+      if (written) {
+        times.written = this.readFileTimeValue(written);
+        this.guestFileTimeOverrides.add(file.path);
+      }
       this.fileTimes.set(file.path, times);
       this.lastError = 0;
       return true;

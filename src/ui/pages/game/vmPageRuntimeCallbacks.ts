@@ -37,7 +37,6 @@ export interface VmPageRuntimeCallbackDeps {
   getRefitActiveCanvas: () => (frameWidth?: number, frameHeight?: number) => void;
   onUpdateBootOverlay: (next: VmStatus) => void;
   onScheduleRender: () => void;
-  onHideBootOverlay: () => void;
   onFinishExited: (detail: string) => void;
   onExposeRuntimeCallProbe: () => void;
   onAppendCall: (lines: string[], call: Win32Call, ordinal: number, suffix?: string) => void;
@@ -64,7 +63,6 @@ export function createVmRuntimeCallbacks(deps: VmPageRuntimeCallbackDeps): GameV
     getRefitActiveCanvas,
     onUpdateBootOverlay,
     onScheduleRender,
-    onHideBootOverlay,
     onFinishExited,
     onExposeRuntimeCallProbe,
     onAppendCall,
@@ -152,7 +150,6 @@ export function createVmRuntimeCallbacks(deps: VmPageRuntimeCallbackDeps): GameV
         const battlefield = measureRa2BattlefieldFrame(frame);
         canvas.dataset.vmBattlefield = `${battlefield.rightEdgeRatio.toFixed(4)},${battlefield.fieldRatio.toFixed(4)}`;
       }
-      onHideBootOverlay();
       onScheduleRender();
     },
   };

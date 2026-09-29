@@ -4,16 +4,14 @@ import { SUPPORTED_GAMES, supportedGame, type SupportedGameId } from '../../../g
 import { HttpGameFileProvider } from '../../../platform/browser/files/http';
 import { loadPreferredGame, rememberPreferredGame } from '../../../platform/browser/files/directoryAccess';
 import { validateGameDirectory } from '../../../resources/discovery/discoverGameSources';
-import { OverlayGameFileProvider } from '../../../resources/providers/overlay';
 import { ScopedGameFileProvider } from '../../../resources/providers/scoped';
 import { type GameFileProvider } from '../../../resources/contracts';
 import { type GameSource } from '../../../games/source';
 import { SessionGameFileProvider } from '../../../platform/browser/files/sessionFiles';
-import { extractArchiveFiles } from '../../../utils/archive/archiveExtract';
+import { extractArchiveFiles, type ArchiveExtractProgress } from '../../../utils/archive/archiveExtract';
 import { openGameArchive } from '../../../adapter/gameArchiveLayers';
 import { ProgressiveGameFileProvider, progressiveFilesOf } from '../../../adapter/progressiveFiles';
 import { restoreCachedFileProvider, saveCachedGameFiles } from '../../../adapter/cachedGameFiles';
-import { loadThirdPartyFiles } from '../../../adapter/thirdPartyFiles';
 import { ARCHIVE_WANTED_NAMES, GAME_MANIFESTS, type GameManifest } from '../../../games/manifest';
 import { createStore } from '../../shared/state/store';
 
@@ -21,6 +19,8 @@ export interface PickerState {
   description: string;
   error: string;
   busy: boolean;
+  awaitingSelection: boolean;
+  progress: ArchiveExtractProgress | null;
   games: SupportedGameId[];
   manifest: { manifest: GameManifest; present: ReadonlySet<string>; complete: boolean } | null;
 }
@@ -32,6 +32,8 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
     description: t('先选择游戏资源；只包含一个版本时自动启动，包含两个版本时再选择要玩的游戏。'),
     error: '',
     busy: false,
+    awaitingSelection: false,
+    progress: null,
     manifest: null,
     games: [],
   };
@@ -42,6 +44,7 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
   };
   const setButtonsDisabled = (disabled: boolean): void => {
     state.busy = disabled;
+    if (!disabled) state.progress = null;
     publish();
   };
   const presentNames = (names: Iterable<string>): Set<string> => new Set([...names].map((name) => name.toLowerCase()));
@@ -50,7 +53,9 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
     publish();
   };
   const use = async (load: () => Promise<GameFileProvider | null>, gameId?: SupportedGameId) => {
+    state.awaitingSelection = false;
     state.error = '';
+    state.progress = null;
     publish();
     setButtonsDisabled(true);
     try {
@@ -103,7 +108,7 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
     }
   };
   /**
-   * Manifest gate: fetch the selected version's executable (game.exe / gamemd.exe), overlay it, then render the manifest. Return null for missing required files while retaining the checklist.
+   * Manifest gate: require the package executable alongside its resources, then render the manifest. Return null for missing required files while retaining the checklist.
    */
   const manifestGate = async (
     base: GameFileProvider,
@@ -111,16 +116,7 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
     gameId: SupportedGameId,
   ): Promise<GameFileProvider | null> => {
     const manifest = GAME_MANIFESTS[gameId];
-    // Always use the fixed compatible executable version; shim addresses depend on exact version-sensitive bytes.
-    const thirdPartyFiles = await loadThirdPartyFiles(manifest, (message) => {
-      state.description = message;
-      publish();
-    });
-    if (disposed) return null;
-    // Overlay-first: the executable overrides any same-named archive file.
-    const provider = new OverlayGameFileProvider(base, thirdPartyFiles, t(' + 第三方'), false, false, false);
     const present = new Set(archiveNames);
-    for (const thirdParty of manifest.thirdParty) present.add(thirdParty.name.toLowerCase());
     const missing = manifest.playerRequired
       .filter((file) => !present.has(file.name.toLowerCase()))
       .map((file) => file.name);
@@ -135,14 +131,17 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
     }
     state.description = t('必需文件已集齐，正在启动…');
     publish();
-    // Remember this import for automatic restoration next time without another selection; executables are persisted separately
-    // by thirdPartyFiles, so store only player-supplied files here.
+    return base;
+  };
+
+  const persistImportedFiles = (base: GameFileProvider, gameId: SupportedGameId): void => {
+    const manifest = GAME_MANIFESTS[gameId];
+    // Persist the executable with its resources so restoring cannot mix installations.
     if (base instanceof SessionGameFileProvider) {
       const persist = () => {
         const playerFiles = new Map<string, Uint8Array>();
         for (const [path, bytes] of base.files) {
           const lower = path.toLowerCase();
-          if (lower === 'game.exe' || lower === 'gamemd.exe') continue;
           if (base instanceof ProgressiveGameFileProvider && !base.inventory.has(lower)) continue;
           playerFiles.set(lower, bytes);
         }
@@ -162,7 +161,6 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
           .catch((error) => console.warn(t('[游戏文件] 后台解压未完成，不更新资源缓存'), error));
       } else void persist();
     }
-    return provider;
   };
 
   /** Finish import through the manifest gate; once complete, verify the executable and start, otherwise remain on the panel. */
@@ -186,6 +184,7 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
         progressiveFilesOf(base)?.cancel();
         return;
       }
+      persistImportedFiles(base, gameId);
       rememberPreferredGame(source.game.id);
       disposed = true;
       resolve(source);
@@ -202,12 +201,17 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
       publish();
     }
   };
+  const onProgress = (progress: ArchiveExtractProgress): void => {
+    if (disposed || state.games.length > 1) return;
+    state.progress = progress;
+    publish();
+  };
   /**
    * Parse the selected archive. Reuse late change events by restarting the full use flow if the pending selection was already canceled, restoring disabled-button/error behavior. The manifest gate runs inside use.
    */
   const processArchiveFile = async (file: File): Promise<GameFileProvider | null> => {
     onStatus(t('正在解析归档目录并准备启动层…'));
-    return openGameArchive(file, undefined, onStatus);
+    return openGameArchive(file, undefined, onStatus, onProgress);
   };
   /** Read manifest-required files from the selected directory, handling late change like archives; the manifest gate runs in use. */
   const processFolderFiles = (files: File[]): Promise<GameFileProvider | null> =>
@@ -232,12 +236,14 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
       // Also recursively extract archives such as installers found inside directories, using the same 7z-wasm Worker;
       // ordinary EXEs such as launcher copies are not archives, so skip failed attempts.
       for (const archive of archives.slice(0, 8)) {
+        state.progress = null;
         onStatus(t('正在解压目录内归档：{0} …', archive.name));
         try {
           const result = await extractArchiveFiles(await readBytes(archive), {
             wanted: [...ARCHIVE_WANTED_NAMES],
             directoryRules: GAME_ARCHIVE_DIRECTORY_RULES,
             onStatus,
+            onProgress,
           });
           for (const [name, entryBytes] of result.files) extracted.set(name, entryBytes);
         } catch (error) {
@@ -255,6 +261,8 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
       state.games = [];
       state.manifest = null;
       state.error = '';
+      state.progress = null;
+      state.awaitingSelection = true;
       setButtonsDisabled(true);
     },
     chooseGame(gameId: SupportedGameId) {
@@ -265,6 +273,7 @@ export function createGameSourcePicker(resolve: (source: GameSource) => void) {
       return use(async () => base, gameId);
     },
     cancelPick() {
+      state.awaitingSelection = false;
       setButtonsDisabled(false);
     },
     importArchive(file: File) {
@@ -290,7 +299,7 @@ export async function developmentSourceProvider(provider: HttpGameFileProvider):
 }
 
 /**
- * Restore a game source from the last imported IndexedDB file set. If required files are complete, skip the picker and start automatically; return null for missing/incomplete caches to show the picker.
+ * Restore a game source from the last imported IndexedDB file set. Return null for absent/incomplete caches; reject unreadable data so the page can show the failure instead of hiding it behind the picker.
  */
 export async function restoreCachedGameSource(): Promise<GameSource | null> {
   const preferred = loadPreferredGame();
@@ -302,10 +311,23 @@ export async function restoreCachedGameSource(): Promise<GameSource | null> {
     if (!cached) continue;
     const missing = manifest.playerRequired.filter((file) => cached.hasKnownFile(file.name.toLowerCase()) !== true);
     if (missing.length) continue;
-    const thirdParty = await loadThirdPartyFiles(manifest).catch(() => null);
-    if (!thirdParty) continue;
-    const provider = new OverlayGameFileProvider(cached, thirdParty, t(' + 第三方'), false, false, false);
-    const sources = await validateGameDirectory(provider, gameId).catch(() => []);
+    // IndexedDB can still list a Blob whose backing data became unreadable after a page refresh.
+    // Probe actual bytes before startup, and surface the failing file instead of silently reopening the picker.
+    for (const file of manifest.playerRequired) {
+      try {
+        if ((await cached.readPrefix(file.name, 1)) === null) throw new Error('Cached record is missing');
+      } catch (error) {
+        throw new Error(
+          t(
+            '缓存游戏资源不可读：{0}：{1}',
+            `${gameId}/${file.name}`,
+            error instanceof Error ? error.message : String(error),
+          ),
+          { cause: error },
+        );
+      }
+    }
+    const sources = await validateGameDirectory(cached, gameId).catch(() => []);
     if (sources[0]) return sources[0];
   }
   return null;

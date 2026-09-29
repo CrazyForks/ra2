@@ -62,6 +62,7 @@ export type MainToWorkerMessage =
   | { type: 'wm'; m: number; w: number; l: number }
   | { type: 'key'; vk: number; down: boolean }
   | { type: 'cursor'; x: number; y: number }
+  | { type: 'audio-state'; states: AudioStateReport[] }
   | { type: 'clock'; rate: number }
   | { type: 'volume'; linear: number }
   | { type: 'call-tracing'; enabled: boolean }
@@ -97,7 +98,7 @@ export type WorkerToMainMessage =
   | { type: 'guest-speed-flag-reply'; requestId: number; value: number | null }
   | { type: 'mem-record-start-reply'; requestId: number; ok: boolean }
   | { type: 'mem-record-stop-reply'; requestId: number; result: GuestMemRecordResult | null }
-  | { type: 'audio'; op: AudioOp }
+  | { type: 'audio'; op: AudioOp; revision?: number }
   | { type: 'audio-control'; action: 'master-volume'; linear: number }
   | { type: 'audio-control'; action: 'stop-all' }
   | { type: 'audio-control'; action: 'destroy' }
@@ -106,9 +107,16 @@ export type WorkerToMainMessage =
   | { type: 'control-done'; action: 'start' | 'stop'; requestId: number }
   | { type: 'error'; message: string; requestId?: number };
 
-/**
- * Audio operations mirror Win32AudioSink (win32.ts:105-118). getState is never sent: synchronous cross-thread reads are unavailable, so ProxyAudioSink.getState returns null and the shim falls back to local accounting.
- */
+/** Output-clock observations tagged with the command revision that produced them. */
+export interface AudioStateReport {
+  id: number;
+  revision: number;
+  positionBytes: number;
+  writePositionBytes: number;
+  playing: boolean;
+}
+
+/** Commands preserve FIFO order; cursor feedback never requires synchronous Worker RPC. */
 export type AudioOp =
   | { op: 'createBuffer'; id: number; byteLength: number; format: PcmWaveFormat }
   | { op: 'duplicateBuffer'; sourceId: number; destinationId: number }

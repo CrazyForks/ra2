@@ -45,15 +45,75 @@ try {
         await page.goto(process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15174');
         await expect(page.locator('html')).toHaveAttribute('lang', resolveLocale([locale]));
         const canvas = await page.locator('#screen').elementHandle();
-        const entry = page.getByRole('button', { name: text('↓ 没有游戏文件？点击下载'), exact: true });
-        await expect(entry).toBeVisible();
+        if (viewport.width <= 560) {
+          await page.setViewportSize({ width: 320, height: 568 });
+          await expect(page.locator('.status-terminal-readout')).toBeInViewport();
+          const commands = page.locator('.ra2-menu-nav > .ra2-menu-btn');
+          const first = (await commands.nth(0).boundingBox())!;
+          const second = (await commands.nth(1).boundingBox())!;
+          expect(Math.abs(first.y - second.y)).toBeLessThan(1);
+          expect(second.x).toBeGreaterThanOrEqual(first.x + first.width);
+          expect(first.height).toBeGreaterThanOrEqual(44);
+          expect(await page.locator('.ra2-screen').evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true);
+          await page.setViewportSize(viewport);
+        }
+        await expect(page.getByRole('button', { name: text('下载游戏'), exact: true })).toHaveCount(0);
         await expect(page.getByRole('button', { name: text('附加地图包…') })).toBeHidden();
-        const background = await page.locator(viewport.width <= 560 ? '#ui' : '#stage').evaluate((node, mobile) => {
-          const style = getComputedStyle(node, mobile ? '::before' : null);
-          return { image: style.backgroundImage, size: style.backgroundSize };
-        }, viewport.width <= 560);
-        expect(background.image).toContain('ra2vm-launcher-background.jpg');
-        expect(background.size).toContain('contain');
+        const mobileHome = viewport.width <= 560;
+        const orientationHint = page.locator('.portrait-orientation-hint');
+        if (mobileHome) {
+          await expect(orientationHint).toBeVisible();
+          await expect(orientationHint).toHaveText(text('横屏获取更好的游戏体验'));
+          const appearance = await orientationHint.evaluate((node) => {
+            const hint = getComputedStyle(node);
+            const guide = getComputedStyle(document.querySelector('.game-guide li')!);
+            return { color: hint.color, font: hint.font, guideFont: guide.font };
+          });
+          expect(appearance.color).toBe('rgb(255, 255, 0)');
+          expect(appearance.font).toBe(appearance.guideFont);
+          const navBox = (await page.locator('.ra2-menu-nav').boundingBox())!;
+          expect((await orientationHint.boundingBox())!.y).toBeGreaterThanOrEqual(navBox.y + navBox.height);
+        } else await expect(orientationHint).toBeHidden();
+        const measureBackdrop = () =>
+          page.locator(mobileHome ? '.ra2-screen' : '.ra2-panel').evaluate((node, mobile) => {
+            const style = getComputedStyle(node, mobile ? '::before' : null);
+            return {
+              image: style.backgroundImage,
+              size: style.backgroundSize,
+              position: style.position,
+              coordinates: style.backgroundPosition,
+              width: mobile ? style.width : node.getBoundingClientRect().width,
+              height: mobile ? style.height : node.getBoundingClientRect().height,
+            };
+          }, mobileHome);
+        const backdrop = await measureBackdrop();
+        expect(backdrop.image).toContain(mobileHome ? 'none' : 'menu.jpg');
+        if (mobileHome) {
+          expect(backdrop.position).toBe('fixed');
+          const panelBox = (await page.locator('.ra2-panel-wrap').boundingBox())!;
+          const footerBox = (await page.locator('.ra2-footer').boundingBox())!;
+          expect(Math.abs((panelBox.y + footerBox.y + footerBox.height) / 2 - viewport.height / 2)).toBeLessThan(2);
+          expect(
+            await page
+              .locator('.ra2-menu-btn')
+              .first()
+              .evaluate((node) => getComputedStyle(node).backgroundImage),
+          ).toContain('/theme/ra2/button.png');
+          expect(backdrop.width).toBe(`${viewport.width}px`);
+          expect(backdrop.height).toBe(`${viewport.height}px`);
+          expect(
+            await page.locator('.ra2-menu-header').evaluate((node) => getComputedStyle(node).backgroundImage),
+          ).toBe('none');
+          const toggle = page.locator('.network-toggle input');
+          await toggle.scrollIntoViewIfNeeded();
+          for (let pass = 0; pass < 3; pass++) {
+            await toggle.check();
+            await expect(page.locator('.network-settings')).toBeInViewport({ ratio: 1 });
+            expect(await measureBackdrop()).toEqual(backdrop);
+            await toggle.uncheck();
+            expect(await measureBackdrop()).toEqual(backdrop);
+          }
+        } else expect(backdrop.size).toContain('cover');
         await expect(page.getByRole('button', { name: text('开发测试'), exact: true })).toHaveCount(1);
         await expect(page.locator('.development-sources details, .development-sources summary')).toHaveCount(0);
         await expect(page.getByRole('checkbox', { name: text('快速开局：直达遭遇战设置') })).toHaveCount(0);
@@ -62,10 +122,10 @@ try {
         const home = page.locator('.game-source-picker');
         await expect(home.getByRole('button', { name: text('选择文件…'), exact: true })).toHaveCount(1);
         await expect(home.locator('.detected-games')).toHaveCount(0);
-        expect(await entry.evaluate((node) => getComputedStyle(node).backgroundColor)).toBe('rgb(139, 0, 0)');
         await expect(home.getByLabel(text('联机 relay 地址（可选）'))).toHaveCount(0);
         await home.getByRole('checkbox', { name: text('联机'), exact: true }).check();
         const relay = home.getByLabel(text('联机 relay 地址（可选）'));
+        await expect(relay).toBeInViewport({ ratio: 1 });
         await relay.fill('/missing-host');
         await expect(relay).toHaveAttribute('aria-invalid', 'true');
         await expect(home.getByRole('button', { name: text('选择文件…'), exact: true }).first()).toBeDisabled();
@@ -87,83 +147,8 @@ try {
         expect(homeBox!.x + homeBox!.width).toBeLessThanOrEqual(viewport.width);
         await home.getByRole('button', { name: text('点此扫码入群'), exact: true }).scrollIntoViewIfNeeded();
         await expect(home.getByRole('button', { name: text('点此扫码入群'), exact: true })).toBeInViewport();
-        await entry.scrollIntoViewIfNeeded();
 
-        const dialog = page.getByRole('dialog', { name: text('下载游戏资源'), exact: true });
-        for (let pass = 0; pass < 2; pass++) {
-          await entry.click();
-          await expect(dialog).toBeVisible();
-          const languageSelect = dialog.getByRole('combobox', { name: text('游戏文字语言'), exact: true });
-          await expect(languageSelect).toHaveValue('all');
-          await expect(dialog.locator('a')).toHaveCount(6);
-          await expect(dialog.locator('.game-download-language')).toHaveCount(6);
-          await expect(dialog.locator('.game-download-language').filter({ hasText: text('简体中文') })).toHaveCount(2);
-          await expect(dialog.locator('.game-download-language').filter({ hasText: text('繁体中文') })).toHaveCount(3);
-          await expect(dialog.locator('.game-download-language').filter({ hasText: 'English' })).toHaveCount(1);
-          await expect(dialog.locator('.game-download-language').filter({ hasText: text('语言待核验') })).toHaveCount(
-            0,
-          );
-          expect(
-            await dialog
-              .locator('a.game-download-link')
-              .evaluateAll((links) => links.map((link) => link.getAttribute('href'))),
-          ).toEqual([
-            'https://www.uc129.com/xiazai/ra2/1.006.html',
-            'https://www.uc129.com/xiazai/ra2/gongheguozhihui.html',
-            'https://www.jb51.net/game/1018580.html',
-            'https://archive.org/download/red-alert-2-multiplayer/Red-Alert-2-Multiplayer.exe',
-            'https://www.uc129.com/xiazai/ra2/6615.html',
-            'https://www.jb51.net/game/26829.html',
-          ]);
-          await languageSelect.selectOption('zh-Hans');
-          await expect(dialog.locator('a')).toHaveCount(2);
-          const simplifiedLinks = dialog.locator('a.game-download-link').filter({ hasText: text('简体中文') });
-          await expect(simplifiedLinks).toHaveCount(2);
-          await expect(dialog.locator('a.game-download-link').filter({ hasText: text('繁体中文') })).toHaveCount(0);
-          expect(await simplifiedLinks.evaluateAll((links) => links.map((link) => link.getAttribute('href')))).toEqual([
-            'https://www.jb51.net/game/1018580.html',
-            'https://www.jb51.net/game/26829.html',
-          ]);
-          await languageSelect.selectOption('zh-Hant');
-          await expect(dialog.locator('a')).toHaveCount(3);
-          const traditionalLinks = dialog.locator('a.game-download-link').filter({ hasText: text('繁体中文') });
-          await expect(traditionalLinks).toHaveCount(3);
-          await expect(dialog.locator('a.game-download-link').filter({ hasText: text('简体中文') })).toHaveCount(0);
-          await expect(dialog.locator('a.game-download-link').filter({ hasText: 'English' })).toHaveCount(0);
-          expect(await traditionalLinks.evaluateAll((links) => links.map((link) => link.getAttribute('href')))).toEqual(
-            [
-              'https://www.uc129.com/xiazai/ra2/1.006.html',
-              'https://www.uc129.com/xiazai/ra2/gongheguozhihui.html',
-              'https://www.uc129.com/xiazai/ra2/6615.html',
-            ],
-          );
-          await languageSelect.selectOption('en');
-          await expect(dialog.locator('a')).toHaveCount(1);
-          const englishLinks = dialog.locator('a.game-download-link').filter({ hasText: 'English' });
-          await expect(englishLinks).toHaveCount(1);
-          await expect(dialog.locator('a.game-download-link').filter({ hasText: text('简体中文') })).toHaveCount(0);
-          await expect(dialog.locator('a.game-download-link').filter({ hasText: text('繁体中文') })).toHaveCount(0);
-          await expect(dialog.locator('.download-links-empty-global')).toHaveCount(0);
-          expect(await englishLinks.evaluateAll((links) => links.map((link) => link.getAttribute('href')))).toEqual([
-            'https://archive.org/download/red-alert-2-multiplayer/Red-Alert-2-Multiplayer.exe',
-          ]);
-          await languageSelect.selectOption('all');
-          await expect(dialog.locator('a')).toHaveCount(6);
-          for (const link of await dialog.locator('a').all()) {
-            await expect(link).toHaveAttribute('target', '_blank');
-            await expect(link).toHaveAttribute('rel', /noopener/);
-          }
-          const box = await dialog.boundingBox();
-          expect(box!.width).toBeLessThanOrEqual(viewport.width);
-          if (pass === 0)
-            await page.screenshot({
-              path: `${screenshotDirectory}/ra2-react-download-${locale}-${viewport.width}.png`,
-            });
-          if (pass === 0) await page.keyboard.press('Escape');
-          else await dialog.getByRole('button', { name: text('关闭'), exact: true }).click();
-          await expect(dialog).toBeHidden();
-          await expect(entry).toBeFocused();
-        }
+        await expect(page.locator('.game-download-dialog')).toHaveCount(0);
         expect(await canvas!.evaluate((node) => node === document.querySelector('#screen'))).toBe(true);
         await page.evaluate(async () => {
           const stateUrl = '/src/ui/pages/game/state/uiState.ts';
@@ -175,6 +160,8 @@ try {
           });
         });
         await expect(page.locator('#vm-boot')).toBeVisible();
+        await expect(page.locator('#vm-boot [role=progressbar]')).toBeVisible();
+        await expect(page.locator('#vm-boot [role=progressbar]')).not.toHaveAttribute('aria-valuenow');
         await expect(page.locator('.vm-boot-title')).toHaveText(text('红色警戒 2'));
         await expect(page.locator('.vm-boot-detail')).toHaveText(text('PE 已解析：入口 0x785aa0，368 个 Win32 导入'));
         await page.evaluate(async () => {
@@ -206,10 +193,16 @@ try {
           // A synthetic two-version manifest verifies real ZIP recognition and deferred version selection without loading or faking a game EXE.
           const both = zipSync(
             Object.fromEntries(
-              ['ra2.mix', 'language.mix', 'ra2md.mix', 'langmd.mix', 'binkw32.dll', 'blowfish.dll'].map((name) => [
-                name,
-                new Uint8Array([1]),
-              ]),
+              [
+                'game.exe',
+                'gamemd.exe',
+                'ra2.mix',
+                'language.mix',
+                'ra2md.mix',
+                'langmd.mix',
+                'binkw32.dll',
+                'blowfish.dll',
+              ].map((name) => [name, new Uint8Array([1])]),
             ),
           );
           const secondChooser = page.waitForEvent('filechooser');
@@ -234,6 +227,26 @@ try {
             cancelSourceRequest();
           });
           await expect(page.locator('#vm-controls')).toBeVisible();
+          const overflowing = await page.locator('#vm-controls').evaluate((sidebar) => {
+            const bounds = sidebar.getBoundingClientRect();
+            return [
+              ...sidebar.querySelectorAll<HTMLElement>(
+                '.toolbar-button, .game-select-value, .label, .slider-fields, output',
+              ),
+            ]
+              .filter((element) => element.getClientRects().length > 0)
+              .filter((element) => {
+                const rect = element.getBoundingClientRect();
+                return (
+                  rect.left < bounds.left ||
+                  rect.right > bounds.right ||
+                  (element.matches('.toolbar-button, output') && element.scrollWidth > element.clientWidth + 1)
+                );
+              })
+              .map((element) => element.id || element.textContent);
+          });
+          expect(overflowing, `${locale}: sidebar controls and translated text must fit`).toEqual([]);
+
           const upscaleBox = await page.locator('#vm-upscale-widget').boundingBox();
           const resolutionBox = await page.locator('#vm-resolution-widget').boundingBox();
           expect(Math.abs(upscaleBox!.x - resolutionBox!.x)).toBeLessThan(1);
@@ -343,6 +356,55 @@ try {
       }
     }
   }
+  // Cancel during the asynchronous handoff: the loading shell must already be visible,
+  // and a late custom-map cache result must not create a VM.
+  const handoff = await browser.newContext({ locale: 'en-US', ignoreHTTPSErrors: true });
+  try {
+    const page = await handoff.newPage();
+    await page.addInitScript('globalThis.__name = (value) => value');
+    const errors: string[] = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    await page.route('**/src/adapter/cachedGameFiles.ts*', async (route) => {
+      const response = await route.fetch();
+      const source = await response.text();
+      const patched = source.replace(
+        'export async function loadCustomMapFiles(gameId) {',
+        'export async function loadCustomMapFiles(gameId) { return await new Promise(resolve => { globalThis.__releaseMapRead = () => resolve(new Map()); });',
+      );
+      expect(patched).not.toBe(source);
+      await route.fulfill({ response, body: patched });
+    });
+    await page.goto(process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15174');
+    await page.getByRole('heading', { name: 'Choose game resources', exact: true }).waitFor();
+    await page.evaluate(async () => {
+      const stateUrl = '/src/ui/pages/game/state/uiState.ts';
+      const catalogUrl = '/src/games/catalog.ts';
+      const filesUrl = '/src/platform/browser/files/sessionFiles.ts';
+      const { sourceRequest } = await import(stateUrl);
+      const { supportedGame } = await import(catalogUrl);
+      const { SessionGameFileProvider } = await import(filesUrl);
+      (globalThis as any).__finishSource = () =>
+        sourceRequest.getSnapshot().finish({
+          game: supportedGame('ra2'),
+          files: new SessionGameFileProvider('handoff fixture', new Map()),
+          executableBytes: new Uint8Array(),
+        });
+    });
+    // Invoke the action after asynchronous module setup has returned, as a UI event would.
+    await page.evaluate(() => (globalThis as any).__finishSource());
+    await expect(page.locator('#vm-boot .ra2-loading-content')).toBeVisible();
+    await expect(page.locator('#vm-controls')).toBeHidden();
+    await page.getByRole('button', { name: 'Cancel startup', exact: true }).click();
+    await expect(page.locator('#vm-boot')).toHaveCount(0);
+    await page.evaluate(() => (globalThis as any).__releaseMapRead());
+    await page.waitForTimeout(100);
+    await expect(page.locator('#vm-boot')).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Back to the web page', exact: true })).toBeVisible();
+    expect(errors).toEqual([]);
+  } finally {
+    await handoff.close();
+  }
+
   // Unsupported browser languages fall back to English, including document metadata.
   const fallback = await browser.newContext({ locale: 'fr-FR', ignoreHTTPSErrors: true });
   try {
@@ -355,6 +417,50 @@ try {
     expect(await page.locator('.game-source-picker').innerText()).not.toMatch(/\p{Script=Han}/u);
   } finally {
     await fallback.close();
+  }
+  // A cache entry can remain listed after its Blob becomes unreadable. Keep the failure visible across reloads.
+  const unreadableCache = await browser.newContext({
+    locale: 'zh-CN',
+    ignoreHTTPSErrors: true,
+    viewport: { width: 390, height: 844 },
+  });
+  try {
+    const page = await unreadableCache.newPage();
+    await preventThirdPartyDownloads(page);
+    await page.goto(process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15174');
+    await page.getByRole('heading', { name: '选择游戏资源' }).waitFor();
+    await page.evaluate(async () => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open('ra2-vm-game-files', 1);
+        request.onupgradeneeded = () => request.result.createObjectStore('files');
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction('files', 'readwrite');
+        for (const name of ['game.exe', 'ra2.mix', 'language.mix', 'binkw32.dll', 'blowfish.dll'])
+          transaction.objectStore('files').put(new Blob([new Uint8Array(name === 'ra2.mix' ? 7 : 1)]), `ra2/${name}`);
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+      });
+      database.close();
+    });
+    await page.addInitScript(() => {
+      const slice = Blob.prototype.slice;
+      Blob.prototype.slice = function (...args) {
+        if (this.size === 7) throw new DOMException('The requested file could not be read', 'NotReadableError');
+        return slice.apply(this, args);
+      };
+    });
+    await page.reload();
+    await expect(page.locator('.bad-page')).toBeVisible();
+    await expect(page.locator('.bad-page')).toContainText('ra2/ra2.mix');
+    await expect(page.locator('.bad-page')).toContainText('The requested file could not be read');
+    await expect(page.locator('.game-source-picker')).toHaveCount(0);
+    await page.getByRole('button', { name: '重新选择游戏资源' }).click();
+    await expect(page.getByRole('heading', { name: '选择游戏资源' })).toBeVisible();
+  } finally {
+    await unreadableCache.close();
   }
 } finally {
   await browser.close();

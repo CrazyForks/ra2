@@ -192,7 +192,8 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
     await new Promise<void>((done) => emulator.add_listener('emulator-ready', done));
     emulator.write_memory(staging.subarray(HYPERCALL_STACK, stubNext), HYPERCALL_STACK);
     emulator.write_memory(staging.subarray(image.imageBase, image.imageBase + image.sizeOfImage), image.imageBase);
-    GAME.runtimeHooks?.prepareImage?.(emulator);
+    const runtimeHooks = GAME.runtimeHooks?.resolve?.(emulator, exe) ?? GAME.runtimeHooks;
+    runtimeHooks?.prepareImage?.(emulator);
     let probeNext = stubNext;
     options.prepareGuest?.(emulator, exe, (size) => {
       const address = probeNext;
@@ -269,8 +270,11 @@ export async function runVmSmoke(options: VmSmokeOptions): Promise<void> {
     shim.mountFile(`C:\\GAME\\${EXECUTABLE}`, exe);
     let linkedEntry = image.entry;
     for (const preload of GAME.preloadFiles ?? []) {
-      const preloadPath = join(GAME_DIR, preload.path);
-      if (!existsSync(preloadPath)) continue;
+      const preloadPath = resolveGuestFile(GAME_DIR, preload.path);
+      if (!preloadPath) {
+        if (preload.linkBeforeEntry) throw new Error(`Required guest DLL is missing: ${preload.path}`);
+        continue;
+      }
       // readFileSync returns a fresh buffer for this mount; transfer ownership so
       // large DLL/archive fixtures are not duplicated before the guest mirror is built.
       shim.mountFile(preload.path, bytesOf(preloadPath), true);

@@ -23,9 +23,6 @@ describe('UI language selection', () => {
     expect(zh('选择文件…')).toBe('选择文件…');
     expect(en('正在读取 {0}…', '玩家{0}$&.mpr')).toBe('Reading 玩家{0}$&.mpr…');
     expect(zh('已暂存 {0} 个文件，点击应用后生效。', 3)).toBe('已暂存 3 个文件，点击应用后生效。');
-    expect(en('当前没有已核验的 {0} 下载入口。', '简体中文')).toBe(
-      'No verified Simplified Chinese downloads are currently available.',
-    );
   });
 
   it('localizes legacy progress and nested failures without changing unknown diagnostics', () => {

@@ -1,7 +1,7 @@
 /**
  * Migrated audio smoke tests: WAVEFORMATEX parsing, DirectSound volume/pan conversion, and the event sequence from the DirectSound COM bridge (CreateSoundBuffer/Lock/Unlock/Play) to Win32AudioSink.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   directSoundPanToStereo,
   directSoundVolumeToGain,
@@ -67,6 +67,7 @@ describe('DirectSound COM 桥（原 audioSmoke）', () => {
     const audioEvents: string[] = [];
     let createdFormat: PcmWaveFormat | null = null;
     let writtenPcm = new Uint8Array();
+    let playing = false;
     const audio: Win32AudioSink = {
       createBuffer(_id, size, format) {
         audioEvents.push(`create:${size}`);
@@ -84,6 +85,7 @@ describe('DirectSound COM 桥（原 audioSmoke）', () => {
         return bytes.length;
       },
       play(_id, options) {
+        playing = true;
         audioEvents.push(`play:${options?.loop ? 1 : 0}`);
         return true;
       },
@@ -103,7 +105,7 @@ describe('DirectSound COM 桥（原 audioSmoke）', () => {
         return true;
       },
       getState() {
-        return { positionBytes: 0, playing: true };
+        return { positionBytes: 0, playing };
       },
       releaseBuffer() {
         return true;
@@ -155,8 +157,8 @@ describe('DirectSound COM 桥（原 audioSmoke）', () => {
   });
 });
 
-/** A sink whose getState always returns null, simulating the Worker audio proxy's inability to read WebAudio state synchronously. */
-const createWorkerLikeAudio = (): Win32AudioSink => ({
+/** Headless sink with no playback observations; exercises the explicit clock fallback. */
+const createHeadlessAudio = (): Win32AudioSink => ({
   createBuffer() {},
   duplicateBuffer() {
     return true;
@@ -327,7 +329,7 @@ describe('DirectSound 流式音乐（RA2 增补，原 audioSmoke）', () => {
   // DSBLOCK_ENTIREBUFFER with dwBytes=0 must still return the entire buffer.
   it('Lock 带 DSBLOCK_ENTIREBUFFER 且 dwBytes=0 时返回完整缓冲区', () => {
     const memory = createGuestMemory(12 * 1024 * 1024);
-    const shim = createTestShim(memory, { firstDynamicId: 1, audio: createWorkerLikeAudio() });
+    const shim = createTestShim(memory, { firstDynamicId: 1, audio: createHeadlessAudio() });
     const dispatchSound = (key: string, args: number[]) => callShim(shim, key, args, 0x2000);
 
     const desc = 0x1000;
@@ -351,11 +353,10 @@ describe('DirectSound 流式音乐（RA2 增补，原 audioSmoke）', () => {
     expect(readU32(memory, entireBytesOut)).toBe(6);
   });
 
-  // The Worker audio proxy cannot read WebAudio state synchronously; the shim's local playback cursor must still advance,
-  // or the game will never decode the next section of its music ring buffer.
-  it('getState 不可用（Worker 代理）时 shim 本地播放游标仍会前进', async () => {
+  // Headless output has no audio clock; retain an explicit fallback for asset-free execution.
+  it('advances the headless fallback when the sink provides no playback observations', async () => {
     const memory = createGuestMemory(12 * 1024 * 1024);
-    const shim = createTestShim(memory, { firstDynamicId: 1, audio: createWorkerLikeAudio() });
+    const shim = createTestShim(memory, { firstDynamicId: 1, audio: createHeadlessAudio() });
     const dispatchSound = (key: string, args: number[]) => callShim(shim, key, args, 0x2000);
 
     const formatPtr = 0x1100;
@@ -371,7 +372,7 @@ describe('DirectSound 流式音乐（RA2 增补，原 audioSmoke）', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     const cursorOut = 0x1270;
     expect(dispatchSound('DSOUND.COM!IDirectSoundBuffer.GetCurrentPosition', [streamObject, cursorOut, 0]).eax).toBe(0);
-    expect(readU32(memory, cursorOut), 'Worker 侧估算的 DirectSound 播放游标没有前进').toBeGreaterThan(0);
+    expect(readU32(memory, cursorOut), 'Headless DirectSound fallback cursor did not advance').toBeGreaterThan(0);
   });
 
   // Preferred AudioWorklet path: render live streams off the main thread and synchronize written ranges through the port.
@@ -476,12 +477,51 @@ describe('DirectSound 流式音乐（RA2 增补，原 audioSmoke）', () => {
       expect((update.data as Float32Array).length).toBe(2);
       // Cursor reports: after the worklet reports a frame, the main thread extrapolates using currentTime.
       const worklet = workletNodes[0]!;
-      const frameMessage = { kind: 'position', frame: 10_000 };
-      fakeContext.currentTime = 1;
+      const frameMessage = { kind: 'position', frame: 10_000, at: 1, revision: 0 };
+      // Delivery is delayed by main-thread work; the cursor still belongs to audio time 1.
+      fakeContext.currentTime = 1.2;
       worklet.port.onmessage?.({ data: frameMessage } as unknown as MessageEvent);
       fakeContext.currentTime = 1.5;
       // 10,000 + 0.5 s x 22050 = 21,025 frames -> x 4 bytes.
       expect(sink.getState('music')!.positionBytes).toBe(21_025 * 4);
+      sink.setCurrentPosition('music', 400);
+      worklet.port.onmessage?.({ data: frameMessage } as unknown as MessageEvent);
+      expect(sink.getState('music')!.positionBytes).toBe(400);
+      fakeContext.currentTime = 1.75;
+      const beforeRateChange = sink.getState('music')!.positionBytes;
+      sink.setFrequency('music', 11_025);
+      expect(sink.getState('music')!.positionBytes).toBe(beforeRateChange);
+      worklet.port.onmessage?.({
+        data: { kind: 'position', frame: 999, at: 1.7, revision: 1 },
+      } as unknown as MessageEvent);
+      expect(sink.getState('music')!.positionBytes).toBe(beforeRateChange);
+      fakeContext.currentTime = 2.75;
+      expect(sink.getState('music')!.positionBytes).toBe((beforeRateChange + 11_025 * 4) % 88_200);
+      // A report can describe the next quantum boundary; never extrapolate backwards.
+      worklet.port.onmessage?.({
+        data: { kind: 'position', frame: 500, at: 2.751, revision: 2 },
+      } as unknown as MessageEvent);
+      expect(sink.getState('music')!.positionBytes).toBe(2_000);
+      worklet.port.onmessage?.({
+        data: { kind: 'position', frame: 22_050, at: 2.75, revision: 1, playing: false },
+      } as unknown as MessageEvent);
+      expect(sink.getState('music')!.playing).toBe(true);
+      worklet.port.onmessage?.({
+        data: { kind: 'position', frame: 22_050, at: 2.75, revision: 2, playing: false },
+      } as unknown as MessageEvent);
+      expect(sink.getState('music')).toMatchObject({ playing: false, positionBytes: 0 });
+      expect(worklet.port.onmessage).toBeNull();
+      expect(sink.play('music', { loop: true })).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(fakeContext.sources).toHaveLength(2);
+      expect(fakeContext.sources[1]!.stopped).toBe(false);
+      expect(sink.getState('music')!.playing).toBe(true);
+      Object.assign(fakeContext, { getOutputTimestamp: () => ({ contextTime: 2.85 }) });
+      fakeContext.currentTime = 2.95;
+      const cursors = sink.getState('music')!;
+      expect(cursors.writePositionBytes).toBeGreaterThan(cursors.positionBytes);
+      expect(cursors.writePositionBytes - cursors.positionBytes).toBeCloseTo(1102.5 * 4, -1);
+      expect(sink.getState('music')).toEqual(cursors);
       // stop tears down the worklet and sends destroy.
       sink.stop('music');
       expect(posted.some((message) => message.kind === 'destroy')).toBe(true);
@@ -510,11 +550,31 @@ describe('PCM 流 worklet 处理器生命周期', () => {
     };
     globals.sampleRate = 48_000;
     globals.currentTime = 0;
+    vi.resetModules();
     // Plain JS worklet source with no declarations; it is loaded for its registerProcessor side effect only.
     // @ts-expect-error -- untyped module
     await import('../../src/adapter/pcmStreamWorklet.js');
     return registered as never;
   }
+
+  it.each([4, 128])('reports non-looping completion within the final quantum (%i frames)', async (frames) => {
+    const Processor = await loadProcessor();
+    const processor = new Processor();
+    const report = vi.fn();
+    processor.port.postMessage = report;
+    processor.port.onmessage?.({
+      data: { kind: 'create', channels: 1, frames, frequency: 48_000, loop: false, frame: 0, revision: 3 },
+    });
+    processor.port.onmessage?.({ data: { kind: 'update', offsetFrames: 0, data: new Float32Array(frames).fill(0.5) } });
+    const output = new Float32Array(128);
+    processor.process(null, [[output]]);
+    expect(Array.from(output.slice(0, frames))).toEqual(Array(frames).fill(0.5));
+    expect(report).toHaveBeenCalledWith(expect.objectContaining({ playing: false, frame: frames, revision: 3 }));
+    processor.process(null, [[output]]);
+    expect(output.every((value) => value === 0)).toBe(true);
+    expect(report).toHaveBeenCalledTimes(1);
+    processor.port.onmessage?.({ data: { kind: 'destroy' } });
+  });
 
   it('destroy 后 process 返回 false，浏览器才能回收已断开的节点', async () => {
     const Processor = await loadProcessor();
@@ -523,6 +583,16 @@ describe('PCM 流 worklet 处理器生命周期', () => {
     processor.port.onmessage?.({
       data: { kind: 'create', channels: 1, frames: 4, frequency: 48_000, loop: true, frame: 0 },
     });
+    const reports: Array<{ at: number; frame: number; revision: number }> = [];
+    processor.port.postMessage = (message) => reports.push(message as (typeof reports)[number]);
+    processor.port.onmessage?.({
+      data: { kind: 'update', offsetFrames: 0, data: new Float32Array([0, 0.25, 0.5, 0.75]) },
+    });
+    processor.port.onmessage?.({ data: { kind: 'set-position', frame: 1, revision: 1 } });
+    (globalThis as unknown as Record<string, unknown>).currentTime = 0.2;
+    expect(processor.process(null, outputs)).toBe(true);
+    expect(Array.from(outputs[0]![0]!.slice(0, 8))).toEqual([0.25, 0.5, 0.75, 0, 0.25, 0.5, 0.75, 0]);
+    expect(reports[0]).toMatchObject({ at: 0.2 + 128 / 48_000, frame: 1, revision: 1 });
     // A live stream keeps rendering; only destroy ends processing. Returning true after destroy leaks the node's
     // per-quantum work onto the audio thread for the whole session, which silences the game over a long match.
     expect(processor.process(null, outputs)).toBe(true);

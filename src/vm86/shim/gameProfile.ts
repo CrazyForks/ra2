@@ -21,6 +21,8 @@ export interface ShellCompatibility {
   readonly defaultSourceColorKey?: readonly [number, number];
   readonly titleControlId?: number;
   readonly initializeComboDropWindow?: boolean;
+  /** Registered top-level classes that require synchronous WM_CREATE before CreateWindowExA returns. */
+  readonly topLevelCreateClassNames?: readonly string[];
   /** Shell pages create independent scrollbars beside their lists as sibling windows; route notifications to the adjacent list. */
   readonly siblingScrollbarOwner?: boolean;
   readonly globalModifierKeys?: boolean;
@@ -65,10 +67,6 @@ export interface GameShimProfile {
   readonly shell?: ShellCompatibility;
   readonly directDraw?: DirectDrawCompatibility;
   readonly directPlay?: DirectPlayCompatibility;
-  /** For Bink sources containing only sparse indexes, skip native decoding and advance through a playback-complete compatibility handle. */
-  readonly skipIncompleteBinkPlayback?: boolean;
-  /** Maximum original Bink instances per VM session; games with unstable old-DLL reentry may limit this to 1. */
-  readonly nativeBinkPlaybackLimit?: number;
   /**
    * When a guest IPersistStream::Save bridge is unsafe in v86, handle OleSaveToStream as a successful compatibility stub. Structured-storage wrappers remain active, but guest object serialization does not run.
    */

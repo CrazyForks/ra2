@@ -88,6 +88,72 @@ const punctuation: Readonly<Record<number, string>> = {
   0x6f: '/',
 };
 
+const scanKeyNames: Readonly<Record<number, string>> = {
+  0x01: 'Escape',
+  0x0e: 'Backspace',
+  0x0f: 'Tab',
+  0x1c: 'Enter',
+  0x1d: 'Ctrl',
+  0x2a: 'Shift',
+  0x36: 'Right Shift',
+  0x38: 'Alt',
+  0x39: 'Space',
+  0x3a: 'Caps Lock',
+  0x45: 'Num Lock',
+  0x46: 'Scroll Lock',
+  0x37: 'Num *',
+  0x47: 'Num 7',
+  0x48: 'Num 8',
+  0x49: 'Num 9',
+  0x4a: 'Num -',
+  0x4b: 'Num 4',
+  0x4c: 'Num 5',
+  0x4d: 'Num 6',
+  0x4e: 'Num +',
+  0x4f: 'Num 1',
+  0x50: 'Num 2',
+  0x51: 'Num 3',
+  0x52: 'Num 0',
+  0x53: 'Num Del',
+  0x57: 'F11',
+  0x58: 'F12',
+  0xe01c: 'Num Enter',
+  0xe01d: 'Right Ctrl',
+  0xe035: 'Num /',
+  0xe037: 'Print Screen',
+  0xe038: 'Right Alt',
+  0xe047: 'Home',
+  0xe048: 'Up',
+  0xe049: 'Page Up',
+  0xe04b: 'Left',
+  0xe04d: 'Right',
+  0xe04f: 'End',
+  0xe050: 'Down',
+  0xe051: 'Page Down',
+  0xe052: 'Insert',
+  0xe053: 'Delete',
+  0xe05b: 'Left Windows',
+  0xe05c: 'Right Windows',
+  0xe05d: 'Applications',
+};
+
+/**
+ * GetKeyNameTextA receives a keyboard lParam, where bits 16–23 contain a Set-1 scan code and bit 24 marks E0 keys.
+ * Names remain US-layout identifiers so the guest's key bindings do not depend on the browser or host OS locale.
+ */
+export function keyNameText(lParam: number): string {
+  const scan = (lParam >>> 16) & 0xff;
+  const extended = (lParam & 0x0100_0000) !== 0;
+  const code = extended ? 0xe000 | scan : scan;
+  const named = scanKeyNames[code];
+  if (named) return named;
+  const vk = scanToVk.get(code) ?? 0;
+  if (vk >= 0x30 && vk <= 0x39) return String.fromCharCode(vk);
+  if (vk >= 0x41 && vk <= 0x5a) return String.fromCharCode(vk);
+  if (vk >= 0x70 && vk <= 0x7b) return `F${vk - 0x6f}`;
+  return punctuation[vk] ?? '';
+}
+
 /**
  * MapVirtualKey directions are distinct. RA2 battlefield shortcuts call it; return Win32's 0 for unknown keys.
  * Semantics: Microsoft Win32 documentation, MapVirtualKeyA.

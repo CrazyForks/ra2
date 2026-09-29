@@ -89,6 +89,39 @@ describe('directoryScopeOf', () => {
 });
 
 describe('OverlayGameFileProvider（战役包叠加语义）', () => {
+  it.each([false, true])('keeps independent session writes with parentFirst=%s', async (parentFirst) => {
+    const original = new Uint8Array([1, 2]);
+    const parent = new MemoryGameFileProvider(new Map([['settings.ini', original]]));
+    const overlay = new OverlayGameFileProvider(
+      parent,
+      new Map([['settings.ini', new Uint8Array([3, 4])]]),
+      'session',
+      true,
+      false,
+      parentFirst,
+    );
+    const written = new Uint8Array([7, 8, 9]);
+    await overlay.write('C:\\SETTINGS.INI', written);
+    written.fill(0);
+    await overlay.flush();
+    overlay.invalidateCache();
+    const read = (await overlay.read('settings.ini'))!;
+    expect(read).toEqual(new Uint8Array([7, 8, 9]));
+    read.fill(0);
+    expect(await overlay.readPrefix('settings.ini', 2)).toEqual({ bytes: new Uint8Array([7, 8]), totalSize: 3 });
+    expect(await overlay.readRange('settings.ini', 1, 2)).toEqual(new Uint8Array([8, 9]));
+    expect(overlay.overlays.get('settings.ini')).toEqual(new Uint8Array([7, 8, 9]));
+    expect(await parent.read('settings.ini')).toEqual(original);
+    await overlay.write('settings.ini', new Uint8Array());
+    expect(await overlay.read('settings.ini')).toEqual(new Uint8Array());
+    expect(await overlay.readPrefix('settings.ini', 1)).toEqual({ bytes: new Uint8Array(), totalSize: 0 });
+    expect(await overlay.readRange('settings.ini', 0, 1)).toEqual(new Uint8Array());
+    expect(overlay.hasKnownFile('settings.ini')).toBe(true);
+    expect(await overlay.list('')).toContain('settings.ini');
+    await overlay.write('slot.sav', new Uint8Array([5]));
+    expect(await parent.read('slot.sav')).toEqual(new Uint8Array([5]));
+  });
+
   // Simulate a trimmed multiplayer base package: movies01.mix is a zero-byte placeholder and maps02.mix is absent; overlay the campaign package.
   // Skirmish-only users keep base-package behavior without the campaign package. With it mounted, movies use sparse paged streaming;
   // readPrefix must return the actual totalSize (>= prefix length) before markFileRangeBacked can run.

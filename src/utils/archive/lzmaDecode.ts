@@ -9,6 +9,7 @@ export interface LzmaDecodeOptions {
   stream: Uint8Array;
   /** Expected output length, strictly checked when supplied. */
   outputSize?: number;
+  /** Progress fraction, or -1 when unavailable; unknown-size streams may report consumed-input progress. */
   onProgress?: (percent: number) => void;
   /**
    * Whether the Worker transfers the input buffer; default true. Use false when decoding multiple views of one large buffer, as with NSIS per-file streams, to avoid detaching it.
@@ -109,6 +110,20 @@ async function decodeInline(options: LzmaDecodeOptions, reportConsumed: boolean)
   (globalThis as Record<string, unknown>).window ??= globalThis;
   const { LZMA: lzma } = await import('./vendor/lzma-worker.js');
   const input = buildLzmaAloneInput(options.stream, options.outputSize);
+  // The SDK's consumed offset includes the synthetic 13-byte LZMA-Alone header.
+  const compressedBytesTotal = input.length - 13;
+  const getLastInputConsumed = (lzma as { getLastInputConsumed?: () => number }).getLastInputConsumed;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
+  let lastProgressAt = Date.now();
+  heartbeat = setInterval(() => {
+    if (Date.now() - lastProgressAt < 2000) return;
+    if (options.outputSize === undefined && compressedBytesTotal > 0 && getLastInputConsumed) {
+      const compressedBytesConsumed = getLastInputConsumed() - 13;
+      options.onProgress?.(Math.min(0.99, Math.max(0, compressedBytesConsumed / compressedBytesTotal)));
+    } else {
+      options.onProgress?.(-1);
+    }
+  }, 3000);
   return new Promise<LzmaDecodedStream>((resolve, reject) => {
     lzma.decompress(
       input,
@@ -138,8 +153,13 @@ async function decodeInline(options: LzmaDecodeOptions, reportConsumed: boolean)
             : 0,
         });
       },
-      (percent) => options.onProgress?.(percent),
+      (percent) => {
+        lastProgressAt = Date.now();
+        options.onProgress?.(percent);
+      },
     );
+  }).finally(() => {
+    if (heartbeat !== undefined) clearInterval(heartbeat);
   });
 }
 

@@ -7,6 +7,7 @@ export const RA2_SHIM_PROFILE: GameShimProfile = Object.freeze({
     defaultSourceColorKey: Object.freeze([0, 0] as const),
     titleControlId: 1684,
     initializeComboDropWindow: true,
+    topLevelCreateClassNames: Object.freeze(['red alert 2'] as const),
     siblingScrollbarOwner: true,
     globalModifierKeys: true,
     retargetDialogChrome: true,
@@ -29,23 +30,8 @@ export const RA2_SHIM_PROFILE: GameShimProfile = Object.freeze({
     // and 0x4c4350, the session count (reject if >=0xa). Used only for DPLAY_VERBOSE_LOG diagnostics.
     enumSessionsProbeAddresses: Object.freeze([0x004c_4358, 0x004c_4350] as const),
   }),
-  // Do not pass sparse MOVIES*.MIX indexes to the native decoder; complete files such as LANGUAGE.MIX
-  // may repeatedly use native Bink. Deferred unlocking in BinkClose prevents thread switches until the preceding instance has fully exited,
-  // so reopening it on return to the main menu cannot corrupt guest context.
-  skipIncompleteBinkPlayback: true,
   // Persist native objects through bounded, scheduler-aware COM callback slots.
   skipGuestOleSaveToStream: false,
-  guestDllPatches: Object.freeze({
-    'binkw32.dll': Object.freeze([
-      // Bink 1.0p sometimes has an uninitialized first-frame time base, making the instruction at 0x10009d30
-      // divide by zero. Set it to 67ms, about 15fps; subsequent frames still use full native decoding.
-      Object.freeze({
-        rva: 0x0000_9d2d,
-        expected: Object.freeze([0x8b, 0x4d, 0x08, 0xf7, 0xf1]),
-        replacement: Object.freeze([0xb8, 0x43, 0x00, 0x00, 0x00]),
-      }),
-    ]),
-  }),
   virtualWinsockLan: true,
   launcher: Object.freeze({
     handle: 0x0001_0020,

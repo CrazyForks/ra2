@@ -19,7 +19,7 @@ import type { MainToWorkerMessage, VmInitConfig, WorkerToMainMessage } from './v
 import type { GuestMemRecordResult } from './memRecord';
 import type { VmPointerState } from './vmShell';
 import type { GameVmCallbacks } from '../app/session/runtimeEvents';
-import type { PcmPlayOptions, PcmWaveFormat } from '../vm86/audio';
+import { ProxyAudioSink } from './audioProxy';
 import type { VmFrame } from '../vm86/win32';
 import { withGameResolutionOverride } from '../games/resolution';
 import { SerialTaskQueue } from '../utils/serialTaskQueue';
@@ -56,81 +56,6 @@ export interface VmWorkerControllerDependencies {
 interface WorkerScope {
   postMessage(message: WorkerToMainMessage, transfer?: Transferable[]): void;
   onmessage: ((event: MessageEvent<MainToWorkerMessage>) => void) | null;
-}
-
-class ProxyAudioSink implements VmAudioSink {
-  constructor(private readonly post: VmWorkerControllerDependencies['postMessage']) {}
-
-  createBuffer(id: number, byteLength: number, format: PcmWaveFormat): void {
-    this.post({ type: 'audio', op: { op: 'createBuffer', id, byteLength, format } });
-  }
-
-  duplicateBuffer(sourceId: number, destinationId: number): boolean {
-    this.post({ type: 'audio', op: { op: 'duplicateBuffer', sourceId, destinationId } });
-    return true;
-  }
-
-  setFormat(id: number, format: PcmWaveFormat): boolean {
-    this.post({ type: 'audio', op: { op: 'setFormat', id, format } });
-    return true;
-  }
-
-  writeBuffer(id: number, offset: number, bytes: Uint8Array): number {
-    const snapshot = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength ? bytes : bytes.slice();
-    this.post({ type: 'audio', op: { op: 'writeBuffer', id, offset, bytes: snapshot } }, [snapshot.buffer]);
-    return snapshot.byteLength;
-  }
-
-  play(id: number, options: PcmPlayOptions = {}): boolean {
-    this.post({ type: 'audio', op: { op: 'play', id, options } });
-    return true;
-  }
-
-  stop(id: number): boolean {
-    this.post({ type: 'audio', op: { op: 'stop', id } });
-    return true;
-  }
-
-  setCurrentPosition(id: number, byteOffset: number): boolean {
-    this.post({ type: 'audio', op: { op: 'setCurrentPosition', id, byteOffset } });
-    return true;
-  }
-
-  setVolume(id: number, volume: number): boolean {
-    this.post({ type: 'audio', op: { op: 'setVolume', id, volume } });
-    return true;
-  }
-
-  setPan(id: number, pan: number): boolean {
-    this.post({ type: 'audio', op: { op: 'setPan', id, pan } });
-    return true;
-  }
-
-  setFrequency(id: number, frequency: number): boolean {
-    this.post({ type: 'audio', op: { op: 'setFrequency', id, frequency } });
-    return true;
-  }
-
-  getState(_id: number): { positionBytes: number; playing: boolean } | null {
-    return null;
-  }
-
-  releaseBuffer(id: number): boolean {
-    this.post({ type: 'audio', op: { op: 'releaseBuffer', id } });
-    return true;
-  }
-
-  setMasterVolume(linear: number): void {
-    this.post({ type: 'audio-control', action: 'master-volume', linear });
-  }
-
-  stopAll(): void {
-    this.post({ type: 'audio-control', action: 'stop-all' });
-  }
-
-  async destroy(): Promise<void> {
-    this.post({ type: 'audio-control', action: 'destroy' });
-  }
 }
 
 async function fetchBytes(url: string): Promise<Uint8Array> {
@@ -184,6 +109,7 @@ export class VmWorkerController {
   private pendingFrameEmit: (() => void) | null = null;
   private readonly frameBuffers = new FrameBufferPool();
   private frameScheduleGeneration = 0;
+  private proxyAudio: ProxyAudioSink | undefined;
   private readonly dependencies: Required<
     Pick<VmWorkerControllerDependencies, 'discoverSources' | 'applyResolution' | 'createCore' | 'fetchBytes'>
   > &
@@ -206,6 +132,9 @@ export class VmWorkerController {
   async handleMessage(message: MainToWorkerMessage): Promise<void> {
     try {
       switch (message.type) {
+        case 'audio-state':
+          this.proxyAudio?.acceptState(message.states);
+          break;
         case 'init':
           this.initReady = this.handleInit(message.config);
           await this.initReady;
@@ -434,7 +363,7 @@ export class VmWorkerController {
       deferFrameSnapshot: true,
       packedRgb565Frames: true,
       takeFrameBuffer: (size) => this.frameBuffers.take(size),
-      audio: this.dependencies.audio ?? new ProxyAudioSink(this.post),
+      audio: this.dependencies.audio ?? (this.proxyAudio = new ProxyAudioSink(this.post)),
       fastFileRead: config.fastFileRead,
     };
     this.core = this.dependencies.createCore(callbacks, source, platform);

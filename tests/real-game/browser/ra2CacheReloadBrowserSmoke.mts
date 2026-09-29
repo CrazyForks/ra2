@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 /** After the first local ZIP import, reload must boot normally from persisted resources; testing only development mode is insufficient. */
 import assert from 'node:assert/strict';
 import { chromium, expect } from '@playwright/test';
@@ -5,9 +8,14 @@ const archive = process.env.RA2_BROWSER_ZIP;
 if (!archive) throw new Error('请通过 RA2_BROWSER_ZIP 指定合法的 RA2 ZIP 测试资源');
 const origin = process.env.RA2_BROWSER_ORIGIN ?? 'https://127.0.0.1:15174';
 const game = process.env.RA2_BROWSER_GAME === 'yr' ? 'yr' : 'ra2';
-const browser = await chromium.launch({ args: ['--no-sandbox', '--enable-unsafe-swiftshader'] });
+// Large installation caches need disk-backed storage, matching normal browser use rather than incognito memory quotas.
+const profile = await mkdtemp(join(tmpdir(), 'ra2-bundle-profile-'));
+const context = await chromium.launchPersistentContext(profile, {
+  args: ['--no-sandbox', '--enable-unsafe-swiftshader'],
+  locale: 'zh-CN',
+  ignoreHTTPSErrors: true,
+});
 try {
-  const context = await browser.newContext({ locale: 'zh-CN', ignoreHTTPSErrors: true });
   // Diagnostic comparison: remove only the layered plan and retain full extraction; never replace resource or EXE bytes.
   if (process.env.RA2_BROWSER_FULL_ARCHIVE === '1')
     await context.addInitScript(() => {
@@ -32,6 +40,11 @@ try {
     void context.close();
   });
   const errors: string[] = [];
+  const downloads: string[] = [];
+  page.on('request', (request) => {
+    if (request.url().includes('/__third-party/') || /\.exe(?:$|\?)/i.test(request.url()))
+      downloads.push(request.url());
+  });
   page.on('console', (m) => {
     if (m.type() === 'error' || m.type() === 'warning') console.log(m.text());
   });
@@ -88,7 +101,11 @@ try {
     if (!launch) {
       const indicator = page.locator('#vm-resource-status');
       if (await indicator.count()) {
-        await page.waitForFunction(() => document.getElementById('vm-resource-status')?.dataset.phase !== 'loading');
+        await page.waitForFunction(
+          () => document.getElementById('vm-resource-status')?.dataset.phase !== 'loading',
+          null,
+          { timeout: 120000 },
+        );
         assert.equal(await indicator.getAttribute('data-phase'), 'complete');
       }
     }
@@ -119,10 +136,33 @@ try {
         message: '本次启动必须提交可恢复缓存',
       })
       .toBeGreaterThan(0);
-    console.log('cache', cached);
+    const executable = game === 'ra2' ? 'game.exe' : 'gamemd.exe';
+    assert.ok(cached.includes(`${game}/${executable}`), '缓存必须包含资源包主程序');
+    const digest = await page.evaluate(async (key) => {
+      const bytes = await new Promise<ArrayBuffer>((resolve, reject) => {
+        const open = indexedDB.open('ra2-vm-game-files', 1);
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const db = open.result;
+          const tx = db.transaction('files');
+          const request = tx.objectStore('files').get(key);
+          request.onsuccess = () => {
+            void (request.result as Blob).arrayBuffer().then(resolve, reject);
+          };
+          request.onerror = () => reject(request.error);
+          tx.oncomplete = () => db.close();
+        };
+      });
+      return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+    }, `${game}/${executable}`);
+    if (process.env.RA2_BROWSER_EXE_SHA256) assert.equal(digest, process.env.RA2_BROWSER_EXE_SHA256);
+    console.log('cache', { files: cached.length, executable, sha256: digest });
   }
   assert.deepEqual(errors, []);
-  await context.close();
+  assert.deepEqual(downloads, [], '导入与恢复不能请求外部 EXE');
 } finally {
-  await browser.close();
+  await context.close();
+  await rm(profile, { recursive: true, force: true });
 }

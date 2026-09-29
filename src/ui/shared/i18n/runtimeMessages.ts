@@ -8,15 +8,6 @@ export const runtimeEnglishMessages = {
   简体中文: 'Simplified Chinese',
   繁体中文: 'Traditional Chinese',
   全部: 'All',
-  '红警2（1.006）': 'Red Alert 2 (1.006)',
-  '红警之家 红色警戒2标准版(1.006可联机)': 'UC129 Red Alert 2 Standard (1.006, multiplayer)',
-  '红警之家 红色警戒2共和国之辉联机版（纯净版）': 'UC129 Red Alert 2 Gonghui multiplayer edition (clean package)',
-  '脚本之家 红色警戒2标准版 v1.006(原版RA2纯游戏包可联机)':
-    'JB51 Red Alert 2 Standard v1.006 (original game package, multiplayer)',
-  'Archive.org（XWIS 联机版安装包）': 'Archive.org (XWIS multiplayer installer)',
-  '尤里的复仇（1.001）': "Yuri's Revenge (1.001)",
-  '红警之家 红色警戒2尤里的复仇Yuri_s_v1.001': "UC129 Red Alert 2 Yuri's Revenge v1.001",
-  '脚本之家 红色警戒2 尤里的复仇 安装包 v1.001最新版': "JB51 Red Alert 2 Yuri's Revenge v1.001 installer",
   '整帧实验未启动：请先启动游戏并设置不超过 800×600 的分辨率':
     'Full-frame experiment inactive: start the game at a resolution no larger than 800x600',
   '整帧实验失败：{0}': 'Full-frame experiment failed: {0}',
@@ -39,18 +30,10 @@ export const runtimeEnglishMessages = {
   '{0}（写入 {1} 字节，读回 {2}）': '{0} (wrote {1} bytes, read back {2})',
   无: 'none',
   '存档写回校验失败：{0}': 'Save writeback verification failed: {0}',
-  '根目录存档 {0} 个：{1}': '{0} saves in the root directory: {1}',
-  'Save 目录 {0} 个：{1}': '{0} files in the Save directory: {1}',
+  '根目录 .sav 文件 {0} 个：{1}': 'Root .sav files ({0}): {1}',
+  'Save 目录文件 {0} 个：{1}': '{0} files in the Save directory: {1}',
   '存档包包含无效的 Base64 数据': 'Save package contains invalid Base64 data',
   '[VM] 启动失败后的清理失败': '[VM] Cleanup after startup failure also failed',
-  '本地主程序缓存 {0} 读取失败（HTTP {1}）': 'Could not read local executable cache {0} (HTTP {1})',
-  '本地主程序端点 {0} 返回了 HTML 页面，请重启开发服务（pnpm run dev）后刷新页面':
-    'Local executable endpoint {0} returned HTML. Restart the development server (pnpm run dev), then refresh',
-  '本地主程序缓存 {0} SHA-256 校验失败（期望 {1}，实际 {2}），请运行 pnpm run prepare:third-party 后重试':
-    'Local executable cache {0} SHA-256 mismatch (expected {1}, got {2}). Run pnpm run prepare:third-party and retry',
-  '主程序文件 {0} 下载失败（HTTP {1}）': 'Executable download failed for {0} (HTTP {1})',
-  '主程序文件 {0} SHA-256 校验失败，请刷新后重试': 'Executable {0} SHA-256 mismatch. Refresh and retry',
-  '[主程序预加载] {0} 暂未就绪，启动时将重试': '[Executable preload] {0} is not ready; startup will retry',
   '正在加载 {0}…': 'Loading {0}…',
   '已加载 {0}': 'Loaded {0}',
   '红色警戒 2': 'Red Alert 2',
@@ -148,6 +131,8 @@ export const runtimeEnglishMessages = {
     '[Game files] Insufficient storage: new resources were not cached and the old cache was retained. You may need to select resources again after refresh.',
   '[游戏文件] 存储配额不足：仅持久化必需文件': '[Game files] Insufficient storage: persisting only required files',
   本地缓存: 'Local cache',
+  资源包中的游戏主程序: 'Game executable from your bundle',
+  资源包中的尤里的复仇主程序: 'Yuri’s Revenge executable from your bundle',
   '游戏主数据包（单位/建筑/界面等绝大多数资源）': 'Main game data (most unit, building, and interface resources)',
   '语言与界面字符串（CSF）': 'Language and interface strings (CSF)',
   'Bink 视频解码器（电影/过场）': 'Bink video decoder (movies/cutscenes)',
@@ -199,8 +184,8 @@ export const runtimeEnglishMessages = {
   '第 {0} 层解压（{1}）…': 'Extracting layer {0} ({1})…',
   '附加包无法确认解压大小，请先转换为 ZIP 或 7z':
     'Cannot determine extracted package size. Convert it to ZIP or 7z first',
-  '第 {0} 层：7z 无法列出载荷尺寸，改走 NSIS 整流解码（大包约 1-2 分钟）…':
-    'Layer {0}: 7z cannot list payload sizes; decoding the complete NSIS stream (about 1–2 minutes for large packages)…',
+  '第 {0} 层：7z 无法列出载荷尺寸，改走 NSIS 整流解码…':
+    'Layer {0}: 7z cannot list payload sizes; switching to full NSIS stream decoding…',
   '正在解码 NSIS：{0}%': 'Decoding NSIS: {0}%',
   'NSIS 跳过 {0} 条损坏流：{1}{2}': 'NSIS skipped {0} corrupt streams: {1}{2}',
   ' 等': ' and others',

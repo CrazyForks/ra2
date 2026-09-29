@@ -1,10 +1,10 @@
+import { resolveYrMovies } from './adaptivePatches';
+import { createAdaptiveRuntimeHooks } from '../shared/adaptiveRuntimeHooks';
 import type { GuestMemory } from '../../vm86/win32';
 import type { GameRuntimeHooks } from '../runtimeHooks';
 import { writeGameSpeedFlag } from '../shared/gameSpeedFlag';
 import { skipStartupMovieBlock } from '../shared/startupMovieSkip';
-import { createYrFrameReader } from './performance';
-import { installYrBattleStartup } from './battleStartup';
-import { installYrLanStartup, installYrSkirmishStartup } from './startupPage';
+import { createYrFrameReader, YR_SETTINGS_SIGNATURE } from './performance';
 
 const YR_STARTUP_MOVIE_BLOCK = 0x0052_c5e0;
 const YR_STARTUP_MOVIE_CONTINUATION = 0x0052_c5f3;
@@ -30,19 +30,16 @@ export function skipYrStartupMovies(memory: GuestMemory): boolean {
 }
 
 export const YR_RUNTIME_HOOKS: GameRuntimeHooks = Object.freeze({
-  createFrameReader: createYrFrameReader,
-  prepareStartupPage(memory: GuestMemory, page: string, hash: string, reserve: (size: number) => number): void {
-    if (page === 'battle') {
-      installYrBattleStartup(memory, reserve, hash);
-      return;
-    }
-    if (page === 'lan') {
-      installYrLanStartup(memory, reserve, hash);
-      return;
-    }
-    if (page !== 'skirmish') throw new Error(`YR 尚不支持直达页面：${page}`);
-    installYrSkirmishStartup(memory, reserve, hash);
+  resolve(memory: GuestMemory, exe: Uint8Array): GameRuntimeHooks {
+    return createAdaptiveRuntimeHooks(memory, exe, {
+      label: 'YR',
+      settingsSignature: YR_SETTINGS_SIGNATURE,
+      menuRegister: 0xbe,
+      initialSendRate: 2,
+      repairInvalidRate: false,
+      createFrameReader: createYrFrameReader,
+      patches: (layout) => [resolveYrMovies(layout.image)],
+    });
   },
-  prepareImage: skipYrStartupMovies,
-  writeGameSpeedFlag: writeYrGameSpeed,
+  createFrameReader: createYrFrameReader,
 });

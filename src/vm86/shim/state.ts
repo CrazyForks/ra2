@@ -188,9 +188,8 @@ export class ShimState {
   protected readonly warnedVirtual = new Set<number>();
   protected readonly tls = new Map<number, number>();
   protected nextTls = 0;
-  /** Cooperative guest-thread ID/handle counters. */
+  /** Reusable scheduler slots; stateSync allocates the separate guest-visible wait handles. */
   protected nextThreadId = 1;
-  protected nextThreadHandle = 0x0001_1000;
   protected readonly guestThreads = new Map<number, GuestThreadState>();
   protected readonly guestThreadHandles = new Map<number, number>();
   /** Ids of exited threads whose handles are closed; reused so long sessions do not exhaust GUEST_THREAD_LIMIT. */
@@ -298,19 +297,6 @@ export class ShimState {
    */
   protected presentedWidth = 800;
   protected presentedHeight = 600;
-  /** Synthetic BINK video: guest-heap BINK-structure handle to closed state. The game directly reads structure fields. */
-  protected readonly binkVideos = new Set<number>();
-  /** Synthetic BINK pacing: handle to next-frame deadline in guest milliseconds; BinkWait returns 0/1 accordingly. */
-  protected readonly binkNextFrameAt = new Map<number, number>();
-  /** Native Bink is decoding a complete file; subsequent methods must return through the same guest DLL. */
-  protected nativeBinkPlaybackActive = false;
-  protected nativeBinkPlaybackOpens = 0;
-  /** Bink 1.0p's DirectSound backend uses DLL-global state; repeated initialization corrupts callbacks. */
-  protected nativeBinkSoundSystemReady = false;
-  /** Pin the initiating thread during native Bink playback to prevent inter-call PIT switches corrupting old runtime state. */
-  protected nativeBinkPinnedThread: number | null = null;
-  /** BinkClose redirection is installed; release the cross-call lock only once guest cleanup safely enters the atomic bridge. */
-  protected nativeBinkThreadReleasePending = false;
   protected primarySurface = 0;
   /**
    * Active 800x600 RA2 shell surface. The game draws main menus to primary, subpages to OFFSCREENPLAIN, and in-game menus to caps=0 surfaces, while primary emitFrame triggers presentation. The latest Unlock/Blt target holds current screen content.

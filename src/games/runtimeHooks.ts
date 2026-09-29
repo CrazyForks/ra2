@@ -6,8 +6,12 @@ import type { GuestMemory } from '../vm86/win32';
  * Keep fixed addresses and game semantics in each game's directory; the adapter sees only these optional capabilities.
  */
 export interface GameRuntimeHooks {
-  /** Create a read-only native frame counter for explicit performance sampling; null for unsupported versions. */
-  createFrameReader?(memory: GuestMemory, hash: string): GameFrameReader | null;
+  /** Resolve executable-local capabilities once after PE loading, before any compatibility writes. */
+  resolve?(memory: GuestMemory, executableBytes: Uint8Array): GameRuntimeHooks;
+  /** Install game networking code after the shim owns its allocator; false retains native timing. */
+  prepareNetwork?(memory: GuestMemory, allocateCode: (code: number[]) => number): boolean;
+  /** Detect a read-only native frame counter in the loaded executable; null when structural evidence is insufficient. */
+  createFrameReader?(memory: GuestMemory, executableBytes: Uint8Array): GameFrameReader | null;
   /** Apply narrow version-specific compatibility patches after copying the PE image into guest memory and before executing its entry point. */
   prepareImage?(memory: GuestMemory): void;
   /** Explicit startup navigation; the game verifies the target/EXE, and the allocator exclusively owns the static-import-stub tail. */

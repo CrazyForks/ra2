@@ -81,6 +81,8 @@ export interface VmAudioSink extends Win32AudioSink {
   destroy(): Promise<void>;
 }
 
+type ResolvedRuntimeHooks = NonNullable<GameSource['game']['runtimeHooks']>;
+
 /** Platform injection boundary: supply main-thread or Worker host facilities here; VmCore contains no DOM/window references. */
 export interface VmCorePlatform {
   executionProbe?: VmExecutionProbe;
@@ -100,7 +102,11 @@ export interface VmCorePlatform {
   fastFileRead: boolean;
   /** The host injects emulator construction and scheduling; the outer layer always assembles the shim. */
   createEmulator?: (options: ConstructorParameters<typeof V86>[0]) => V86;
-  createShim: (emulator: V86, options: ConstructorParameters<typeof Win32ShimBase>[1]) => Win32ShimBase;
+  createShim: (
+    emulator: V86,
+    options: ConstructorParameters<typeof Win32ShimBase>[1],
+    hooks?: ResolvedRuntimeHooks,
+  ) => Win32ShimBase;
 }
 
 /**
@@ -122,6 +128,7 @@ export class VmCore {
   private readonly pendingFileWrites = new Set<Promise<void>>();
   private pendingFileWriteError: Error | null = null;
   private gameClockRate = 1;
+  private runtimeHooks: ResolvedRuntimeHooks | undefined;
   private frameReader: Promise<GameFrameReader | null> | null = null;
   private readonly gamePerformance = new GamePerformanceMeter();
   private guestMemoryBytes = DEFAULT_GUEST_MEMORY_SIZE;
@@ -154,6 +161,7 @@ export class VmCore {
     private source: GameSource,
     private readonly platform: VmCorePlatform,
   ) {
+    this.runtimeHooks = source.game.runtimeHooks;
     this.hostYieldChannel?.port1.addEventListener('message', () => {
       this.hostYieldPending = false;
       this.nextHostYieldAt = performance.now() + HOST_SLICE_MS;
@@ -238,9 +246,10 @@ export class VmCore {
       // Write only the two used regions instead of copying an entire empty 64MB image into WASM.
       emulator.write_memory(staging.subarray(HYPERCALL_STACK, stubNext), HYPERCALL_STACK);
       emulator.write_memory(staging.subarray(image.imageBase, image.imageBase + image.sizeOfImage), image.imageBase);
-      game.runtimeHooks?.prepareImage?.(emulator);
+      this.runtimeHooks = game.runtimeHooks?.resolve?.(emulator, exe) ?? game.runtimeHooks;
+      this.runtimeHooks?.prepareImage?.(emulator);
       if (this.platform.startupPage) {
-        const prepare = game.runtimeHooks?.prepareStartupPage;
+        const prepare = this.runtimeHooks?.prepareStartupPage;
         if (!prepare) throw new Error(`${game.id} 尚不支持启动页面直达`);
         const { sha256Hex } = await import('../utils/sha256');
         prepare(emulator, this.platform.startupPage, await sha256Hex(exe), (size) => {
@@ -253,50 +262,54 @@ export class VmCore {
       this.writeU32(HYPERCALL_ENTRY, image.entry);
       this.writeU32(HYPERCALL_CALLBACK_DEPTH, 0);
       this.writeU32(HYPERCALL_STACK_TOP, game.stackTop ?? 0x0070_0000);
-      this.shim = this.platform.createShim(emulator, {
-        firstDynamicId: image.importList.length + 1,
-        staticImports: image.importList,
-        enableFastFileMirror: this.platform.fastFileRead,
-        virtualTop: game.arenaTop ?? guestMemoryBytes - GUEST_MEMORY_MARGIN,
-        virtualBase: game.heapBase,
-        heapTop: game.arenaTop ?? guestMemoryBytes - GUEST_MEMORY_MARGIN,
-        heapBase: game.heapBase ?? game.stackTop,
-        importArgBytes: game.argBytes,
-        dynamicImportStub: importStub,
-        // Use configured bounds for an explicit image region; otherwise fall back to half the guest memory.
-        fastFileMirrorLimit:
-          game.fastFileMirrorBase !== undefined && game.fastFileMirrorTop !== undefined
-            ? Math.max(0, Math.min(game.fastFileMirrorTop, guestMemoryBytes) - game.fastFileMirrorBase)
-            : game.guestMemoryBytes
-              ? Math.floor(game.guestMemoryBytes / 2)
-              : undefined,
-        fastFileMirrorBase: game.fastFileMirrorBase,
-        // Configuration comes from the game profile but must never exceed this v86 instance's actual RAM;
-        // otherwise large MIX mirrors trigger WASM unreachable in write_memory.
-        fastFileMirrorTop:
-          game.fastFileMirrorTop === undefined ? undefined : Math.min(game.fastFileMirrorTop, guestMemoryBytes),
-        fastFileMirrorFiles: game.fastFileMirrorFiles,
-        onFrame: (frame) => {
-          this.hasPresentedFrame = true;
-          this.callbacks.onFrame?.(frame);
+      this.shim = this.platform.createShim(
+        emulator,
+        {
+          firstDynamicId: image.importList.length + 1,
+          staticImports: image.importList,
+          enableFastFileMirror: this.platform.fastFileRead,
+          virtualTop: game.arenaTop ?? guestMemoryBytes - GUEST_MEMORY_MARGIN,
+          virtualBase: game.heapBase,
+          heapTop: game.arenaTop ?? guestMemoryBytes - GUEST_MEMORY_MARGIN,
+          heapBase: game.heapBase ?? game.stackTop,
+          importArgBytes: game.argBytes,
+          dynamicImportStub: importStub,
+          // Use configured bounds for an explicit image region; otherwise fall back to half the guest memory.
+          fastFileMirrorLimit:
+            game.fastFileMirrorBase !== undefined && game.fastFileMirrorTop !== undefined
+              ? Math.max(0, Math.min(game.fastFileMirrorTop, guestMemoryBytes) - game.fastFileMirrorBase)
+              : game.guestMemoryBytes
+                ? Math.floor(game.guestMemoryBytes / 2)
+                : undefined,
+          fastFileMirrorBase: game.fastFileMirrorBase,
+          // Configuration comes from the game profile but must never exceed this v86 instance's actual RAM;
+          // otherwise large MIX mirrors trigger WASM unreachable in write_memory.
+          fastFileMirrorTop:
+            game.fastFileMirrorTop === undefined ? undefined : Math.min(game.fastFileMirrorTop, guestMemoryBytes),
+          fastFileMirrorFiles: game.fastFileMirrorFiles,
+          onFrame: (frame) => {
+            this.hasPresentedFrame = true;
+            this.callbacks.onFrame?.(frame);
+          },
+          onLogicFrame: () => this.callbacks.onLogicFrame?.(1),
+          scheduleFrame: this.platform.scheduleFrame,
+          deferFrameSnapshot: this.platform.deferFrameSnapshot,
+          packedRgb565Frames: this.platform.packedRgb565Frames,
+          takeFrameBuffer: this.platform.takeFrameBuffer,
+          gameProfile: game.shimProfile,
+          files: preloadedFiles,
+          audio: this.platform.audio,
+          moduleName: game.executable,
+          // Shared by Workers and main-thread fallback; expose only the original campaign speed control without changing speed or the clock.
+          commandLineArguments: game.commandLineArguments,
+          onFileWrite: (path, bytes) => this.queueFileWrite(path, bytes),
+          driveTypes: game.driveTypes,
         },
-        onLogicFrame: () => this.callbacks.onLogicFrame?.(1),
-        scheduleFrame: this.platform.scheduleFrame,
-        deferFrameSnapshot: this.platform.deferFrameSnapshot,
-        packedRgb565Frames: this.platform.packedRgb565Frames,
-        takeFrameBuffer: this.platform.takeFrameBuffer,
-        gameProfile: game.shimProfile,
-        files: preloadedFiles,
-        audio: this.platform.audio,
-        moduleName: game.executable,
-        // Shared by Workers and main-thread fallback; expose only the original campaign speed control without changing speed or the clock.
-        commandLineArguments: game.commandLineArguments,
-        onFileWrite: (path, bytes) => this.queueFileWrite(path, bytes),
-        driveTypes: game.driveTypes,
-      });
+        this.runtimeHooks,
+      );
       let linkedEntry = image.entry;
       for (const file of preloadSpecs) {
-        if (!preloadedFiles.has(file.path)) continue;
+        if (!preloadedFiles.has(file.path) && !file.linkBeforeEntry) continue;
         if (file.linkBeforeEntry) {
           linkedEntry = this.shim.linkGuestDllBeforeEntry(file.path, linkedEntry, image.importList);
         } else if (file.initializeBeforeEntry) {
@@ -331,7 +344,7 @@ export class VmCore {
 
   postMessage(message: number, wParam = 0, lParam = 0): void {
     if (!this.emulator || !this.shim) return;
-    this.source.game.runtimeHooks?.beforeHostMessage?.(this.emulator, message);
+    this.runtimeHooks?.beforeHostMessage?.(this.emulator, message);
     this.shim.postMessage(message, wParam, lParam);
   }
 
@@ -361,13 +374,12 @@ export class VmCore {
 
   async getGamePerformance(): Promise<GamePerformanceSample | null> {
     const emulator = this.emulator;
-    const create = this.source.game.runtimeHooks?.createFrameReader;
+    const create = this.runtimeHooks?.createFrameReader;
     if (!emulator || !this.image || !create || this.currentPhase === 'loading') return null;
-    // Verify the EXE only on the first explicit sample; do not add per-frame hooks or timers to normal runs.
-    this.frameReader ??= import('../utils/sha256').then(async ({ sha256Hex }) => {
-      const hash = await sha256Hex(this.source.executableBytes);
-      return this.emulator === emulator ? create(emulator, hash) : null;
-    });
+    // Detect once per VM on explicit sampling; both execution modes use the same injected game policy.
+    this.frameReader ??= Promise.resolve().then(() =>
+      this.emulator === emulator ? create(emulator, this.source.executableBytes) : null,
+    );
     const reader = await this.frameReader;
     if (this.emulator !== emulator) return null;
     const counters = reader?.();
@@ -407,7 +419,7 @@ export class VmCore {
 
   /** Write the speed state explicitly supplied by the current game; return null if unavailable. */
   setGameSpeedFlag(value: number): number | null {
-    const hooks = this.source.game.runtimeHooks;
+    const hooks = this.runtimeHooks;
     if (!this.emulator || !hooks?.writeGameSpeedFlag) return null;
     return hooks.writeGameSpeedFlag(this.emulator, value);
   }
@@ -501,6 +513,7 @@ export class VmCore {
     const shim = this.shim;
     this.emulator = null;
     this.frameReader = null;
+    this.runtimeHooks = undefined;
     this.gamePerformance.reset();
     this.shim = null;
     this.image = null;
@@ -545,7 +558,7 @@ export class VmCore {
         .map(([name, address]) => `${name}=0x${this.readU32(address as number).toString(16)}`)
         .join(' ');
       const stack = [...this.emulator.read_memory(esp, 32)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-      const runtimeHooks = this.source.game.runtimeHooks;
+      const runtimeHooks = this.runtimeHooks;
       const heap = this.shim.inspectHeapState();
       const callback = this.shim.inspectCallbackState();
       const knownHint =
@@ -640,7 +653,9 @@ export class VmCore {
             range.length,
             range.totalSize,
           );
-          if (bytes) this.shim.mountFileRange(range.path, range.offset, bytes);
+          // A short page is inconsistent with the mounted logical size. Leave it unmounted so the shim returns
+          // a read failure without fabricating bytes, advancing the file position, or caching an incomplete response.
+          if (bytes?.length === range.length) this.shim.mountFileRange(range.path, range.offset, bytes);
         }
       }
 

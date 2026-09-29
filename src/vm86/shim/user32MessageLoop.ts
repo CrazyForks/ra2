@@ -413,7 +413,11 @@ export function withUser32MessageLoop<TBase extends Constructor<User32WindowingC
       for (const timer of this.timers.values()) guestDelay = Math.min(guestDelay, timer.next - now);
       for (const timer of this.multimediaTimers.values()) guestDelay = Math.min(guestDelay, timer.next - now);
       if (!Number.isFinite(guestDelay)) return 0;
-      return Math.max(1, Math.min(10, this.clock.toHostDelay(Math.max(0, guestDelay))));
+      const hostDelay = this.clock.toHostDelay(Math.max(0, guestDelay));
+      // PeekMessage is nonblocking. Yield only for imminent 10/34ms UI timers;
+      // a tooltip's 1s/10s timer must not sleep the battle loop on every empty peek.
+      if (hostDelay > 34) return 0;
+      return Math.max(1, Math.min(10, hostDelay));
     }
     protected getMessage(args: number[]): Win32Result {
       const messagePtr = args[0] ?? 0;

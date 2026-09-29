@@ -10,6 +10,12 @@
 - File providers are not cloned directly into the Worker. Session resources are accessed on demand through file ports. The executable must be an independent copy of the exact version selected by the page, with no fallback to a different local version.
 - `src/app/session/` owns sessions; `src/graphics/` owns presentation scheduling. Do not duplicate the session controller in the Worker layer.
 
+## Audio feedback
+
+`audioProxy.ts` owns Worker command state; `audioFeedback.ts` samples the main-thread sink every 10 ms and batches changed playback observations. The proxy holds the latest observed play/write cursors instead of advancing them from wall time. Command revisions reject feedback predating a seek, stop, or reused buffer ID. PCM transfers use exclusive copies and retain their accepted byte count before detachment.
+
+The client owns the feedback timer and clears it on sink destruction, fatal failure, or session shutdown. Audio commands arriving during shutdown cannot restart observation. Polling and message delivery can be delayed by browser scheduling; this is asynchronous feedback, not a synchronous hardware cursor or a zero-latency guarantee. Headless sinks without observations retain the explicit monotonic fallback.
+
 ## Maintenance and verification
 
 Protocol changes must update both endpoints, cancellation/destruction, and rejection of pending requests. Fallback must not leave an old Worker behind or run two VMs simultaneously. Transfer frames only through independent buffers; never transfer guest WASM memory.

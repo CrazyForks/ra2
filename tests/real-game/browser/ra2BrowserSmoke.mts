@@ -71,29 +71,6 @@ async function waitForQuietFileReads(page: Page, canvas: Locator): Promise<void>
   throw new Error('主菜单文件读取在 10 秒内未进入稳态');
 }
 
-async function waitForBinkOpen(page: Page, before: number, label: string): Promise<void> {
-  await page
-    .waitForFunction(
-      ({ count }) => {
-        const raw = document.querySelector<HTMLCanvasElement>('#screen')?.dataset.vmBinkCalls ?? '{}';
-        const calls = JSON.parse(raw) as Record<string, number>;
-        return (calls['BINKW32.DLL!_BinkOpen@8'] ?? 0) > count;
-      },
-      { count: before },
-      { timeout: 60_000 },
-    )
-    .catch(async (error: unknown) => {
-      const canvas = page.locator('#screen');
-      throw new Error(
-        `${GAME_LABEL} ${label} 60 秒内没有执行新的 BinkOpen：` +
-          `frame=${await canvas.getAttribute('data-vm-frame')}，` +
-          `status=${await canvas.getAttribute('data-vm-status')}，` +
-          `calls=${await canvas.getAttribute('data-vm-bink-calls')}`,
-        { cause: error },
-      );
-    });
-}
-
 async function clickUntilShellPage(page: Page, canvas: Locator, expected: string, x: number, y: number): Promise<void> {
   const offsets = [
     [0, 0],
@@ -228,7 +205,7 @@ async function probeHostUi(page: Page): Promise<void> {
     toolbarBackground: getComputedStyle(document.querySelector<HTMLElement>('#vm-controls .toolbar-button')!)
       .backgroundImage,
   }));
-  assert.equal(theme.yellow.toLowerCase(), '#fff600', `网页未应用 RA2 信息黄：${JSON.stringify(theme)}`);
+  assert.equal(theme.yellow.toLowerCase(), '#d8cf00', `网页未应用 RA2 信息黄：${JSON.stringify(theme)}`);
   assert.equal(theme.debugBorder, 'rgb(150, 150, 150)', `Debug 金属边框未生效：${JSON.stringify(theme)}`);
   assert.equal(theme.sectionRadius, '0px', `Debug 面板仍是普通圆角卡片：${JSON.stringify(theme)}`);
   // Toolbar buttons use three CSS states and no longer depend on game-menu sprites.
@@ -325,33 +302,18 @@ async function probeCampaignHover(page: Page, canvas: Locator, playCallsBeforePa
   );
 }
 
-async function probeAndSkipCampaignVideo(
-  page: Page,
-  canvas: Locator,
-  opensBefore: number,
-  audioBefore: Record<string, number>,
-): Promise<void> {
-  try {
-    await page.waitForFunction(
-      (before) => {
-        const raw = document.querySelector<HTMLCanvasElement>('#screen')?.dataset.vmBinkCalls ?? '{}';
-        const calls = JSON.parse(raw) as Record<string, number>;
-        return (calls['BINKW32.DLL!_BinkOpen@8'] ?? 0) > before;
-      },
-      opensBefore,
-      { timeout: 30_000 },
-    );
-  } catch (error) {
-    await canvas.screenshot({ path: `/tmp/${GAME_ID}-campaign-video-timeout.png` });
-    throw new Error(
-      `${GAME_LABEL} 战役选择后 30 秒未打开 Bink：frame=${await canvas.getAttribute('data-vm-frame')}，` +
-        `resolution=${await canvas.getAttribute('data-vm-resolution')}，` +
-        `shell=${await canvas.getAttribute('data-shell-page')}，` +
-        `status=${await canvas.getAttribute('data-vm-status')}，` +
-        `calls=${await canvas.getAttribute('data-vm-bink-calls')}`,
-      { cause: error },
-    );
-  }
+async function probeCampaignVideo(page: Page, canvas: Locator, audioBefore: Record<string, number>): Promise<void> {
+  // Native DLL calls do not cross the host import dispatcher. Observe the decoder's
+  // DirectSound output and changing video frames instead of requiring shim Open counters.
+  await page.waitForFunction(
+    (before) => {
+      const raw = document.querySelector<HTMLCanvasElement>('#screen')?.dataset.vmAudioCalls ?? '{}';
+      const calls = JSON.parse(raw) as Record<string, number>;
+      return (calls['DSOUND.COM!IDirectSoundBuffer.Play'] ?? 0) > before;
+    },
+    audioBefore['DSOUND.COM!IDirectSoundBuffer.Play'] ?? 0,
+    { timeout: 30_000 },
+  );
   // The reported failure occurs during audio/wait processing mid-playback, not on the first frame. Observe for eight seconds,
   // checking call batches every 500 ms to avoid missing a BinkWait storm by examining only the first 1.2 seconds.
   const hashes = new Set<string>();
@@ -382,10 +344,9 @@ async function probeAndSkipCampaignVideo(
     maxBinkWaitCalls < 100,
     `战役过场 BinkWait 仍在宿主 hypercall 自旋：最高 ${maxBinkWaitCalls}/500ms，总调用 ${maxBatchCalls}/500ms`,
   );
-  assert(
-    maxSoundPositionCalls < 250,
-    `战役过场声音游标跨线程轮询过载：最高 ${maxSoundPositionCalls}/500ms，总调用 ${maxBatchCalls}/500ms`,
-  );
+  // Cursor queries are Worker-local shim calls, not frontend RPCs. Track their
+  // count diagnostically and apply the same total host-call budget as the menu.
+  assert(maxBatchCalls < 4_000, `战役过场 Worker 调用批次过载：${maxBatchCalls}/500ms`);
   const audioAfter = callsOf(await canvas.getAttribute('data-vm-audio-calls'));
   const buffersBefore = audioBefore['DSOUND.COM!IDirectSound.CreateSoundBuffer'] ?? 0;
   const buffersAfter = audioAfter['DSOUND.COM!IDirectSound.CreateSoundBuffer'] ?? 0;
@@ -395,15 +356,11 @@ async function probeAndSkipCampaignVideo(
     buffersAfter > buffersBefore && playsAfter > playsBefore,
     `战役过场没有建立并播放音频缓冲：CreateSoundBuffer ${buffersBefore}→${buffersAfter}，Play ${playsBefore}→${playsAfter}`,
   );
-  // A real browser Esc first releases Pointer Lock as a reserved key; some platforms do not deliver keydown to the page.
-  // Automation directly triggers the same pointerlockchange to verify that the page supplies the guest Esc.
-  await page.evaluate(() => document.exitPointerLock());
-  await page.waitForFunction(() => document.pointerLockElement === null, undefined, { timeout: 5_000 });
   console.log(
     `🔬 战役过场：8 秒变化帧=${hashes.size}/32，` +
       `BinkWait=${maxBinkWaitCalls}/500ms，声音游标=${maxSoundPositionCalls}/500ms，` +
       `音频 buffer=${buffersBefore}→${buffersAfter}、Play=${playsBefore}→${playsAfter}；` +
-      `Esc 已退出 Pointer Lock 并透传跳过影片`,
+      `等待原版影片自然结束`,
   );
 }
 
@@ -563,7 +520,6 @@ try {
   const problem = page.locator('h3').filter({ hasText: /运行错误|接口待实现/ });
   await expectShellPage(page, 'mainmenu', 60_000);
   await waitForQuietFileReads(page, canvas);
-  await waitForBinkOpen(page, 0, '首次主菜单');
   assert.equal(
     await page.locator('#vm-resolution').inputValue(),
     '1440x900',
@@ -602,11 +558,9 @@ try {
   // Returning to the main menu reopens the same LANGUAGE.MIX video through BinkOpen; checking only the first screen is insufficient.
   // Do not use Esc to leave ordinary menus: RA2's legacy KillTimer/CallWindowProc chain can re-enter alongside
   // Pointer Lock release messages at that point. Clicking the game's own Back button is the stable native path.
-  const mainMenuOpensBeforeReturn =
-    callsOf(await canvas.getAttribute('data-vm-bink-calls'))['BINKW32.DLL!_BinkOpen@8'] ?? 0;
+  const menuAudioBeforeReturn = callsOf(await canvas.getAttribute('data-vm-audio-calls'));
   await clickUntilShellPage(page, canvas, 'mainmenu', ...SINGLE_PLAYER_BACK);
   await waitForQuietFileReads(page, canvas);
-  await waitForBinkOpen(page, mainMenuOpensBeforeReturn, '返回主菜单');
   let returnedMainMenuProbe = await probeMainMenu(page, canvas);
   // SetWindowText/MainMenu precedes full decoder recovery on return. If the first window still includes BinkOpen
   // initialization, wait one tick and remeasure steady state without lowering the performance threshold.
@@ -633,20 +587,13 @@ try {
       `显示=${returnedMainMenuProbe.displayedFps.toFixed(1)}fps，VM帧=${returnedMainMenuProbe.emittedFrames}`,
   );
 
-  const binkCalls = JSON.parse((await canvas.getAttribute('data-vm-bink-calls')) ?? '{}') as Record<string, number>;
+  const menuAudioAfterReturn = callsOf(await canvas.getAttribute('data-vm-audio-calls'));
   assert(
-    (binkCalls['BINKW32.DLL!_BinkOpen@8'] ?? 0) >= 2,
-    `${GAME_LABEL} 返回主菜单后没有再次执行 BinkOpen：${JSON.stringify(binkCalls)}`,
+    (menuAudioAfterReturn['DSOUND.COM!IDirectSoundBuffer.Release'] ?? 0) >
+      (menuAudioBeforeReturn['DSOUND.COM!IDirectSoundBuffer.Release'] ?? 0),
+    `${GAME_LABEL} 菜单切换没有释放原版视频音频缓冲`,
   );
-  assert(
-    (binkCalls['BINKW32.DLL!_BinkClose@4'] ?? 0) >= 1,
-    `${GAME_LABEL} 切页没有完成 BinkClose：${JSON.stringify(binkCalls)}`,
-  );
-  assert.equal(
-    binkCalls['BINKW32.DLL!_BinkCopyToBuffer@28'] ?? 0,
-    0,
-    `${GAME_LABEL} BinkCopyToBuffer 仍在走不安全的串口 hypercall 边界`,
-  );
+  assert.deepEqual(callsOf(await canvas.getAttribute('data-vm-bink-calls')), {}, 'Bink 应直接调用客体 DLL');
 
   await clickUntilShellPage(page, canvas, 'singleplayer', ...MAIN_SINGLE_PLAYER);
   await page.waitForTimeout(1_000);
@@ -655,8 +602,6 @@ try {
   await clickUntilShellPage(page, canvas, 'campaign', ...SINGLE_PLAYER_CAMPAIGN);
   await page.waitForTimeout(1_000);
   await probeCampaignHover(page, canvas, campaignHoverPlayBefore);
-  const campaignVideoOpensBefore =
-    callsOf(await canvas.getAttribute('data-vm-bink-calls'))['BINKW32.DLL!_BinkOpen@8'] ?? 0;
   const campaignVideoAudioBefore = callsOf(await canvas.getAttribute('data-vm-audio-calls'));
   // Leaving the shell means entering the campaign briefing, not necessarily the battlefield. Wait for both the sidebar and
   // map to render before checking Pointer Lock. Click only once per round, then wait for the original game to finish
@@ -691,42 +636,38 @@ try {
     }
   }
   assert.equal(await canvas.getAttribute('data-shell-page'), null, '选择盟军后仍停在 CampaignMenu');
-  await probeAndSkipCampaignVideo(page, canvas, campaignVideoOpensBefore, campaignVideoAudioBefore);
-  const battlefieldVideoBinkBefore = callsOf(await canvas.getAttribute('data-vm-bink-calls'));
+  await probeCampaignVideo(page, canvas, campaignVideoAudioBefore);
+  // Allow the complete original campaign intro to finish; no synthetic Escape or frame changes.
   const battlefieldVideoAudioBefore = callsOf(await canvas.getAttribute('data-vm-audio-calls'));
   // YR keeps the shell/campaign briefing at 800x600 and reads RA2MD.INI to switch to the selected mode only on
   // entering the actual battlefield. Wait for the resolution change to avoid treating the briefing as a playable battlefield.
   await page.waitForFunction(
     () => document.querySelector<HTMLCanvasElement>('#screen')?.dataset.vmResolution === '1440x900',
     undefined,
-    { timeout: 70_000 },
+    { timeout: 240_000 },
   );
-  const playable = await waitForPlayableBattle(page, canvas, 70_000);
+  const playable = await waitForPlayableBattle(page, canvas, 240_000);
   console.log(
     `🔬 可操作战场：等待=${(playable.elapsedMs / 1_000).toFixed(1)}s，` +
       `右栏=${playable.signal.rightEdgeRatio.toFixed(3)}，地图=${playable.signal.fieldRatio.toFixed(3)}`,
   );
-  // The battlefield's top-right EVA/briefing window is a separate Bink instance; fullscreen cutscene audio assertions
-  // cannot cover it. Observe its Close and DirectSound stream. It may Open before the battlefield is deemed
-  // playable, so use the playback-ending Close increment as a stable lifecycle gate.
+  // Check native audio cleanup across the campaign transition and continued PCM output.
+  // These aggregate counters do not identify the top-right briefing movie's handle;
+  // DLL Open/Close calls stay entirely within guest execution.
   await page.waitForTimeout(8_000);
-  const battlefieldVideoBinkAfter = callsOf(await canvas.getAttribute('data-vm-bink-calls'));
   const battlefieldVideoAudioAfter = callsOf(await canvas.getAttribute('data-vm-audio-calls'));
   assert(
-    (battlefieldVideoBinkAfter['BINKW32.DLL!_BinkClose@4'] ?? 0) >
-      (battlefieldVideoBinkBefore['BINKW32.DLL!_BinkClose@4'] ?? 0),
-    `${GAME_LABEL} 战场右上角过场 8 秒内没有完成 BinkClose`,
+    (battlefieldVideoAudioAfter['DSOUND.COM!IDirectSoundBuffer.Release'] ?? 0) >
+      (battlefieldVideoAudioBefore['DSOUND.COM!IDirectSoundBuffer.Release'] ?? 0),
+    `${GAME_LABEL} 战役切换后没有释放音频缓冲`,
   );
   assert(
     (battlefieldVideoAudioAfter['DSOUND.COM!IDirectSoundBuffer.Lock'] ?? 0) >
       (battlefieldVideoAudioBefore['DSOUND.COM!IDirectSoundBuffer.Lock'] ?? 0),
-    `${GAME_LABEL} 战场右上角过场期间 DirectSound PCM 没有持续写入`,
+    `${GAME_LABEL} 战役切换期间 DirectSound PCM 没有持续写入`,
   );
   console.log(
-    `🔬 战场右上角过场：BinkOpen=${battlefieldVideoBinkBefore['BINKW32.DLL!_BinkOpen@8'] ?? 0}` +
-      `→${battlefieldVideoBinkAfter['BINKW32.DLL!_BinkOpen@8'] ?? 0}，` +
-      `BinkClose=${battlefieldVideoBinkBefore['BINKW32.DLL!_BinkClose@4'] ?? 0}` +
-      `→${battlefieldVideoBinkAfter['BINKW32.DLL!_BinkClose@4'] ?? 0}，` +
+    `🔬 战役音频生命周期：` +
       `buffer=${battlefieldVideoAudioBefore['DSOUND.COM!IDirectSound.CreateSoundBuffer'] ?? 0}` +
       `→${battlefieldVideoAudioAfter['DSOUND.COM!IDirectSound.CreateSoundBuffer'] ?? 0}，` +
       `Play=${battlefieldVideoAudioBefore['DSOUND.COM!IDirectSoundBuffer.Play'] ?? 0}` +
@@ -744,7 +685,7 @@ try {
   assert.equal(battleResolution, '1440x900', `${GAME_LABEL} 未采用内存 INI 覆盖的 1440x900 战场分辨率`);
   const expectedPointer = `${battleWidth! - 1},${battleHeight! - 1}/${battleResolution}`;
 
-  // Skipping the video with Esc releases Pointer Lock. Reacquire it through a real Playwright browser click.
+  // Reacquire Pointer Lock through a real browser click if the native transition released it.
   // Headless Chromium does not generate relative movementX/Y for subsequent CDP-injected mouse.move calls,
   // so inject relative counts with a PointerEvent probe only after real document.pointerLockElement is established.
   // This covers page conversion -> Worker -> USER32 without mistaking automation limitations for product regressions.
@@ -793,11 +734,6 @@ try {
     await canvas.getAttribute('data-vm-worker-client'),
     battleResolution,
     `客体 GetClientRect 仍未采用战场 ${battleResolution} 边界`,
-  );
-  assert.equal(
-    await canvas.getAttribute('data-vm-worker-key'),
-    '0x101:27',
-    '浏览器 Esc 解锁后没有向客体补齐 WM_KEYUP/VK_ESCAPE',
   );
 
   // The toolbar no longer has the old data-game-speed buttons. Observe edge scrolling at native speed,

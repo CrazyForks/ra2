@@ -4,7 +4,7 @@
  * Usage:
  *   RA2_PACKAGE_URL="$RA2_DOWNLOAD_URL" pnpm run sync:game -- ra2
  *   YR_PACKAGE_URL="$YR_DOWNLOAD_URL" pnpm run sync:game -- yr
- * Download sources have been removed from the built-in catalog; specify ZIPs with these environment variables and optionally RA2_PACKAGE_SHA256 / YR_PACKAGE_SHA256. prepare:third-party prepares the executable cache.
+ * Download sources have been removed from the built-in catalog; specify ZIPs with these environment variables and optionally RA2_PACKAGE_SHA256 / YR_PACKAGE_SHA256. Packages must include their game executable.
  *
  * Note: RA2 e2e smoke tests (tests/real-game/ra2/) target the original installed executable (368 imports), whereas the online package's game.exe is a multiplayer repack (369 imports). After synchronization, the import-count assertion will differ; point VM_GAME_DIR to an original installation or use only the browser development flow.
  * This archival entry point supports ZIP only; import other original packages in the frontend. CI uses the shared extractor.
@@ -83,8 +83,8 @@ for (const game of games) {
 if (failed || !synced) {
   process.exitCode = 1;
   console.error(
-    `[同步] ${synced ? '部分包同步失败，请检查上述错误。' : '未同步任何游戏包。'} 主程序缓存请运行 pnpm run prepare:third-party。`,
+    `[同步] ${synced ? '部分包同步失败，请检查上述错误。' : '未同步任何游戏包。'} 资源包需包含原始游戏主程序。`,
   );
 } else {
-  console.info(`[同步] 已同步 ${synced} 个游戏本体。主程序缓存请运行 pnpm run prepare:third-party。`);
+  console.info(`[同步] 已同步 ${synced} 个游戏本体。资源包需包含原始游戏主程序。`);
 }

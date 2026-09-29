@@ -7,7 +7,6 @@ import { type SupportedGameId, SUPPORTED_GAMES } from '../../src/games/catalog';
 
 export interface ResourceRoots {
   game: string;
-  thirdParty: string;
 }
 export interface ResourceInventory {
   version: 1;
@@ -67,10 +66,6 @@ export function assertGameResources(inventory: ResourceInventory, gameId?: Suppo
     for (const file of [{ name: game.executable }, ...manifest.playerRequired]) {
       const name = `game/${game.folder}/${file.name}`.toLowerCase();
       if (!names.has(name)) throw new Error(`缺少真实游戏资源：${name}`);
-    }
-    for (const file of manifest.thirdParty) {
-      // thirdPartyCacheHandler reads exact registered filenames; passing a case-insensitive check is insufficient.
-      if (inventory.files[`thirdParty/${file.name}`] !== file.sha256) throw new Error(`主程序版本不符：${file.name}`);
     }
   }
 }

@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { loadCachedGameFiles, saveCachedGameFiles, restoreCachedFileProvider } from '../../src/adapter/cachedGameFiles';
+import {
+  clearCachedImportedGameFiles,
+  loadCachedGameFiles,
+  saveCachedGameFiles,
+  restoreCachedFileProvider,
+} from '../../src/adapter/cachedGameFiles';
 
 /** Mock only requests/cursors used by this module; browser reload regressions cover real IndexedDB transactions. */
-function cache(initial = new Map<string, unknown>(), writeError?: DOMException) {
+function cache(initial = new Map<string, unknown>(), writeError?: DOMException, abortOnly = false) {
   const rows = initial;
   type Range = { lower: string; upper: string };
   const matches = (key: string, range: Range) => key >= range.lower && key <= range.upper;
@@ -22,11 +27,12 @@ function cache(initial = new Map<string, unknown>(), writeError?: DOMException) 
                   const deletion: any = {};
                   queueMicrotask(() => {
                     for (const key of transactionRows.keys()) if (matches(key, range)) transactionRows.delete(key);
-                    deletion.onsuccess();
+                    deletion.onsuccess?.();
                     setTimeout(() => {
                       if (writeError) {
                         transaction.error = writeError;
-                        transaction.onerror?.();
+                        if (abortOnly) transaction.onabort?.();
+                        else transaction.onerror?.();
                         return;
                       }
                       rows.clear();
@@ -159,4 +165,23 @@ describe('导入资源缓存保持文件存在性', () => {
     expect(rows.has('ra2/old.mix')).toBe(false);
     expect(await loadCachedGameFiles('yr')).toEqual(new Map([['movmd03.mix', new Uint8Array()]]));
   });
+  it('reselecting resources removes imported packages while keeping custom maps', async () => {
+    const rows = cache(
+      new Map([
+        ['ra2/ra2.mix', new Blob([new Uint8Array([1])])],
+        ['yr/ra2md.mix', new Blob([new Uint8Array([2])])],
+        ['custom-ra2/map.mpr', new Blob([new Uint8Array([3])])],
+      ]),
+    );
+    await clearCachedImportedGameFiles(['ra2', 'yr']);
+    expect([...rows.keys()]).toEqual(['custom-ra2/map.mpr']);
+  });
+});
+
+it('reports transaction aborts and retains the previous executable with its resources', async () => {
+  const rows = cache(new Map([['ra2/game.exe', new Uint8Array([9])]]), new DOMException('aborted', 'AbortError'), true);
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  await saveCachedGameFiles('ra2', new Map([['game.exe', new Uint8Array([1])]]));
+  expect(rows.get('ra2/game.exe')).toEqual(new Uint8Array([9]));
+  expect(warn).toHaveBeenCalledWith('[游戏文件] 持久化导入文件失败', expect.any(DOMException));
 });

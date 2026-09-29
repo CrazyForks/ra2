@@ -879,6 +879,25 @@ describe('回调跳板（DispatchMessageA / SendMessageA）', () => {
 });
 
 describe('SetTimer / KillTimer', () => {
+  it('keeps empty PeekMessage nonblocking while a tooltip timer is far from expiry', () => {
+    const memory = createGuestMemory();
+    const shim = createTestShim(memory);
+    const hwnd = createWindow(shim, memory);
+    for (let i = 0; i < 3; i++) callShim(shim, 'USER32.DLL!PeekMessageA', [MSG, 0, 0, 0, 1]);
+
+    callShim(shim, 'USER32.DLL!SetTimer', [hwnd, 7, 1000, 0]);
+    const longTimerPeek = callShim(shim, 'USER32.DLL!PeekMessageA', [MSG, 0, 0, 0, 1]);
+    expect(longTimerPeek.eax).toBe(0);
+    expect(longTimerPeek.delayMs).toBeUndefined();
+
+    callShim(shim, 'USER32.DLL!KillTimer', [hwnd, 7]);
+    callShim(shim, 'USER32.DLL!SetTimer', [hwnd, 8, 10, 0]);
+    const imminentTimerPeek = callShim(shim, 'USER32.DLL!PeekMessageA', [MSG, 0, 0, 0, 1]);
+    expect(imminentTimerPeek.eax).toBe(0);
+    expect(imminentTimerPeek.delayMs).toBeGreaterThan(0);
+    expect(imminentTimerPeek.delayMs).toBeLessThanOrEqual(10);
+  });
+
   it('登记与注销', () => {
     const memory = createGuestMemory();
     const shim = createTestShim(memory);

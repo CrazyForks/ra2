@@ -24,11 +24,14 @@ describe('游戏归档启动层发布', () => {
   it('目录/单个文件不提前启动，startup-ready 才发布，后台失败不伪造完成', async () => {
     vi.stubGlobal('indexedDB', undefined);
     const ready = vi.fn();
-    const opening = openGameArchive(new Uint8Array(), 'ra2', () => {}).then((source) => {
+    const progress = vi.fn();
+    const opening = openGameArchive(new Uint8Array(), 'ra2', () => {}, progress).then((source) => {
       ready();
       return source;
     });
     const options = extraction.options!;
+    options.onProgress!({ completedFiles: 1, totalFiles: 2 });
+    expect(progress).toHaveBeenCalledWith({ completedFiles: 1, totalFiles: 2 });
     options.onCatalog!(['ra2.mix', 'movies01.mix']);
     options.onFile!('ra2.mix', new Uint8Array([1]));
     await Promise.resolve();

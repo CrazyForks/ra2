@@ -1,3 +1,6 @@
+import type { PeImageProbe, ByteSignature } from '../../vm86/peProbe';
+import { operand, relativeTarget } from '../shared/nativeLayout';
+import type { NativePatchPlan } from '../shared/nativePatches';
 import type { GuestMemory } from '../../vm86/win32';
 
 const ADDRESS = 0x004e_4a9c;
@@ -77,4 +80,21 @@ export function patchRa2ShortGame(memory: GuestMemory): boolean {
   if (!matches(ORIGINAL)) return false;
   memory.write_memory(PATCH, ADDRESS);
   return true;
+}
+
+/** Resolve the same two-entry bug only where the complete accessor/layout evidence is present. */
+export function resolveRa2ShortGame(image: PeImageProbe, rulesPointer: number): NativePatchPlan | null {
+  const pattern: (number | null)[] = [...ORIGINAL];
+  for (const offset of [2, 30, 49]) pattern.fill(null, offset, offset + 4);
+  const match = image.findCode(
+    pattern as ByteSignature,
+    (m) =>
+      operand(m, 2) === rulesPointer &&
+      relativeTarget(m, 29) === relativeTarget(m, 48) &&
+      image.contains(relativeTarget(m, 29), 1, 'code'),
+  );
+  if (!match) return null;
+  const bytes = [...PATCH];
+  bytes.splice(1, 4, ...[0, 8, 16, 24].map((shift) => (rulesPointer >>> shift) & 255));
+  return { evidence: [match], patches: [{ address: match.address, bytes }] };
 }
